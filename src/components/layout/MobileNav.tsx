@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, Hash, Bell, Mail, Bookmark, User as UserIcon, LogIn } from 'lucide-react';
+import { Home, Hash, Bell, Mail, Bookmark, User as UserIcon } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useTheme } from '../../context/ThemeContext.tsx';
 
@@ -9,7 +9,7 @@ interface MobileNavProps {
 }
 
 export const MobileNav: React.FC<MobileNavProps> = ({ currentTab, onSelectTab }) => {
-  const { unreadNotificationsCount, currentUser, setIsAuthModalOpen } = useAuth();
+  const { unreadNotificationsCount } = useAuth();
   const { theme, accentTextClass } = useTheme();
 
   const navItems = [
@@ -43,16 +43,6 @@ export const MobileNav: React.FC<MobileNavProps> = ({ currentTab, onSelectTab })
           </button>
         );
       })}
-
-      {!currentUser && (
-        <button
-          onClick={() => setIsAuthModalOpen(true)}
-          className="relative p-2 rounded-full cursor-pointer text-cyan-400"
-          title="Sign In"
-        >
-          <LogIn className="w-6 h-6 stroke-[2.2px]" />
-        </button>
-      )}
     </nav>
   );
 };

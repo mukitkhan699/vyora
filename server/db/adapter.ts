@@ -1,20 +1,13 @@
 import { Post, User, Notification, Message, TrendItem } from '../../src/types/index.ts';
 import { inMemoryStore, INITIAL_USERS } from './store.ts';
-import { postgresService } from './postgres.ts';
 
 export class DatabaseAdapter {
-  private pgInitialized = false;
-
-  constructor() {
-    this.checkPostgres();
-  }
-
-  private async checkPostgres() {
-    this.pgInitialized = await postgresService.connectAndMigrate();
-  }
-
   public getStatus() {
-    return postgresService.getStatus();
+    return {
+      connected: true,
+      type: 'SQLite (auth) + memory (social)',
+      details: 'Authentication is persisted in node:sqlite; social state lives in the dependency-free memory store.',
+    };
   }
 
   // --- POSTS ---
@@ -152,20 +145,6 @@ export class DatabaseAdapter {
     };
 
     inMemoryStore.posts.set(postId, newPost);
-
-    // If PostgreSQL pool is connected, write asynchronously to Postgres as well
-    if (this.pgInitialized && postgresService.getPool()) {
-      try {
-        await postgresService.getPool()?.query(
-          `INSERT INTO posts (id, author_id, content, media_urls, poll_data, reply_to_id, quote_post_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [postId, authorId, content, mediaUrls || null, poll ? JSON.stringify(poll) : null, replyToId || null, quotePostId || null]
-        );
-      } catch (e: any) {
-        console.warn('Async postgres write failed:', e.message);
-      }
-    }
-
     return newPost;
   }
 
@@ -272,121 +251,70 @@ export class DatabaseAdapter {
     return true;
   }
 
-  // --- AUTHENTICATION & SESSIONS ---
-  public async authenticate(username: string, password?: string): Promise<{ user: User; token: string }> {
-    const cleanHandle = username.trim().replace(/^@/, '').toLowerCase();
-    let targetUser: User | undefined;
-
-    for (const u of inMemoryStore.users.values()) {
-      if (u.username.toLowerCase() === cleanHandle || u.id.toLowerCase() === cleanHandle) {
-        targetUser = u;
-        break;
-      }
-    }
-
-    if (!targetUser) {
-      throw new Error(`Operator '@${cleanHandle}' not found in VYORA registry`);
-    }
-
-    // Verify password if provided
-    const storedPassword = inMemoryStore.userCredentials.get(targetUser.id) || 'vyora123';
-    if (password && password !== storedPassword && password !== 'vyora123') {
-      throw new Error('Invalid security key / password');
-    }
-
-    const token = `vyora_sess_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-    inMemoryStore.sessions.set(token, {
-      token,
-      userId: targetUser.id,
-      createdAt: new Date().toISOString(),
-    });
-
-    return { user: targetUser, token };
-  }
-
-  public async register(data: {
+  // --- AUTHENTICATION BRIDGE ---
+  // Credentials, sessions and CSRF live in server/auth.ts (node:sqlite + scrypt).
+  // This adapter only maps an authenticated account to its social profile.
+  public ensureUserFromAuth(authUser: {
+    id: number | string;
     username: string;
-    name: string;
-    password?: string;
-    avatarUrl?: string;
-    bio?: string;
-  }): Promise<{ user: User; token: string }> {
-    const cleanHandle = data.username.trim().replace(/^@/, '').toLowerCase();
-    if (!cleanHandle || cleanHandle.length < 2) {
-      throw new Error('Username must be at least 2 characters');
-    }
+    email?: string | null;
+    createdAt?: number;
+  }): User {
+    const username = String(authUser.username || '').trim().toLowerCase();
+    const existing = Array.from(inMemoryStore.users.values()).find(
+      (candidate) => candidate.username.toLowerCase() === username,
+    );
+    if (existing) return existing;
 
-    for (const u of inMemoryStore.users.values()) {
-      if (u.username.toLowerCase() === cleanHandle) {
-        throw new Error(`Username @${cleanHandle} is already registered`);
-      }
-    }
+    const id = `user_auth_${authUser.id}`;
+    const existingById = inMemoryStore.users.get(id);
+    if (existingById) return existingById;
 
-    const userId = `user_${cleanHandle}_${Math.random().toString(36).substring(2, 6)}`;
+    const joined = authUser.createdAt
+      ? new Date(authUser.createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+      : 'Joined Just Now';
+
     const newUser: User = {
-      id: userId,
-      name: data.name.trim() || `@${cleanHandle}`,
-      username: cleanHandle,
-      avatarUrl: data.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
+      id,
+      name: username ? username.charAt(0).toUpperCase() + username.slice(1) : 'VYORA Operator',
+      username,
+      avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
       bannerUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop&q=80',
-      bio: data.bio || 'New VYORA Network Operator · Initialized relay channel',
+      bio: 'New VYORA Network Operator · Initialized relay channel',
       verified: false,
       followersCount: 0,
       followingCount: 1,
-      joinedDate: 'Joined Just Now',
+      joinedDate: `Joined ${joined}`,
     };
 
-    inMemoryStore.users.set(userId, newUser);
-    inMemoryStore.userCredentials.set(userId, data.password || 'vyora123');
-
-    // Auto follow system account
-    inMemoryStore.follows.add(`${userId}:user_mukit`);
-
-    const token = `vyora_sess_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-    inMemoryStore.sessions.set(token, {
-      token,
-      userId,
-      createdAt: new Date().toISOString(),
-    });
-
-    return { user: newUser, token };
+    inMemoryStore.users.set(id, newUser);
+    inMemoryStore.follows.add(`${id}:user_mukit`);
+    return newUser;
   }
 
-  public async validateSession(tokenOrUserId: string): Promise<User | null> {
-    return this.validateSessionSync(tokenOrUserId);
-  }
-
-  public validateSessionSync(tokenOrUserId: string): User | null {
-    if (!tokenOrUserId) return null;
-
-    // Check if it's an active session token
-    const session = inMemoryStore.sessions.get(tokenOrUserId);
-    if (session) {
-      return inMemoryStore.users.get(session.userId) || null;
+  public syncAuthProfile(authUser: {
+    id: number | string;
+    username: string;
+    email?: string | null;
+    createdAt?: number;
+  }): User {
+    const user = this.ensureUserFromAuth(authUser);
+    const authKey = `user_auth_${authUser.id}`;
+    if (user.id === authKey && user.username !== authUser.username.toLowerCase()) {
+      const updated = { ...user, username: authUser.username.toLowerCase() };
+      inMemoryStore.users.set(user.id, updated);
+      return updated;
     }
-
-    // Direct user ID check fallback for backward-compatible relay
-    if (inMemoryStore.users.has(tokenOrUserId)) {
-      return inMemoryStore.users.get(tokenOrUserId) || null;
-    }
-
-    return null;
-  }
-
-
-  public async logout(token: string): Promise<boolean> {
-    if (inMemoryStore.sessions.has(token)) {
-      inMemoryStore.sessions.delete(token);
-      return true;
-    }
-    return true;
+    return user;
   }
 
   public getDemoAccounts(): Array<{ user: User; defaultPassword: string }> {
-    return Array.from(inMemoryStore.users.values()).map(u => ({
-      user: u,
-      defaultPassword: inMemoryStore.userCredentials.get(u.id) || 'vyora123',
-    }));
+    return Array.from(inMemoryStore.users.values())
+      .filter((user) => Boolean(inMemoryStore.userCredentials.get(user.id)))
+      .map((user) => ({
+        user,
+        defaultPassword: 'vyora123',
+      }));
   }
 
   // --- USERS & PROFILES ---

@@ -1,6 +1,6 @@
 {
-  "name": "X Social Platform",
-  "description": "A high-performance, modular X (Twitter) social media platform with multi-CDN asset failover, customizable themes, PostgreSQL integration, rich feeds, bookmarks, and notifications.",
+  "name": "VYORA",
+  "description": "A real-time social transmission platform with a dependency-free Node.js API, SQLite-backed authentication, multi-CDN media delivery, and a responsive React interface.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }

@@ -1,30 +1,57 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User, AppConfig } from '../types/index.ts';
-import { api } from '../services/api.ts';
+import { api, AuthUser } from '../services/api.ts';
 import { cdnManager } from '../utils/cdnManager.ts';
+
+export interface RegisterResult {
+  user: User | null;
+  emailVerificationRequired: boolean;
+  email?: string;
+  message?: string;
+}
 
 interface AuthContextType {
   currentUser: User | null;
   isAuthenticated: boolean;
   allUsers: User[];
   demoAccounts: Array<User & { defaultPassword?: string }>;
-  login: (username: string, password?: string) => Promise<User>;
-  register: (data: { username: string; name: string; password?: string; avatarUrl?: string; bio?: string }) => Promise<User>;
+  login: (username: string, password: string) => Promise<User>;
+  register: (data: { username: string; email: string; password: string; name?: string }) => Promise<RegisterResult>;
   logout: () => Promise<void>;
-  switchUser: (user: User) => Promise<void>;
   updateCurrentUser: (data: Partial<User>) => Promise<User>;
   unreadNotificationsCount: number;
   refreshNotificationsCount: () => Promise<void>;
   appConfig: AppConfig | null;
   refreshConfig: () => Promise<void>;
   isLoading: boolean;
-  isAuthModalOpen: boolean;
-  setIsAuthModalOpen: (open: boolean) => void;
   authError: string | null;
   setAuthError: (err: string | null) => void;
+  pendingVerificationEmail: string | null;
+  clearPendingVerification: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+function toUser(user: AuthUser | User | null | undefined): User | null {
+  if (!user) return null;
+  return {
+    id: String(user.id),
+    name: user.name || user.username || 'VYORA Operator',
+    username: user.username,
+    avatarUrl:
+      user.avatarUrl ||
+      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
+    bannerUrl: user.bannerUrl,
+    bio: user.bio,
+    location: user.location,
+    website: user.website,
+    verified: Boolean(user.verified),
+    isGold: Boolean(user.isGold),
+    followersCount: user.followersCount ?? 0,
+    followingCount: user.followingCount ?? 0,
+    joinedDate: user.joinedDate || 'Joined Just Now',
+  };
+}
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -33,8 +60,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [unreadNotificationsCount, setUnreadNotificationsCount] = useState<number>(0);
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [pendingVerificationEmail, setPendingVerificationEmail] = useState<string | null>(null);
 
   const refreshConfig = async () => {
     try {
@@ -55,7 +82,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const [users, demos] = await Promise.all([
         api.getUsers().catch(() => []),
-        api.getDemoAccounts().then(r => r.accounts).catch(() => []),
+        api.getDemoAccounts().then((result) => result.accounts).catch(() => []),
       ]);
       setAllUsers(users);
       setDemoAccounts(demos);
@@ -64,91 +91,111 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const checkBackendSession = async () => {
-    try {
-      const sessionRes = await api.getSession();
-      if (sessionRes.authenticated && sessionRes.user) {
-        setCurrentUser(sessionRes.user);
-        api.setCurrentUserId(sessionRes.user.id);
-        return sessionRes.user;
-      }
-    } catch (e) {
-      // If token expired or none stored, attempt default session login or prompt
-    }
-
-    // Check if there is an active user stored or fallback to primary operator
-    try {
-      const savedUserId = localStorage.getItem('x_active_user_id') || 'mukitk';
-      const loginRes = await api.login(savedUserId, 'vyora123');
-      if (loginRes.user) {
-        setCurrentUser(loginRes.user);
-        return loginRes.user;
-      }
-    } catch (err) {
-      // If auto-login fails, let currentUser be null so auth modal or sign-in is shown
-      setCurrentUser(null);
-    }
-    return null;
-  };
-
   const refreshNotificationsCount = async () => {
     try {
-      const notifs = await api.getNotifications();
-      const unread = notifs.filter(n => !n.read).length;
-      setUnreadNotificationsCount(unread);
-    } catch (e) {
-      // ignore
+      const notifications = await api.getNotifications();
+      setUnreadNotificationsCount(notifications.filter((notification) => !notification.read).length);
+    } catch {
+      setUnreadNotificationsCount(0);
     }
   };
 
   useEffect(() => {
     const init = async () => {
       setIsLoading(true);
-      // Artificial slight delay for smooth launcher branding display
-      const minSplashTime = new Promise(resolve => setTimeout(resolve, 800));
-      await Promise.all([refreshConfig(), refreshUsersAndDemos(), checkBackendSession(), minSplashTime]);
+      const minimumSplash = new Promise((resolve) => setTimeout(resolve, 650));
+      const sessionPromise = api
+        .getSession()
+        .then((session) => {
+          if (session.authenticated && session.user) {
+            const user = toUser(session.user);
+            setCurrentUser(user);
+            return user;
+          }
+          setCurrentUser(null);
+          return null;
+        })
+        .catch(() => {
+          setCurrentUser(null);
+          return null;
+        });
+
+      await Promise.all([refreshConfig(), sessionPromise, minimumSplash]);
+      await refreshUsersAndDemos();
       await refreshNotificationsCount();
       setIsLoading(false);
     };
     init();
   }, []);
 
-  const login = async (username: string, password?: string): Promise<User> => {
+  const login = async (username: string, password: string): Promise<User> => {
     setAuthError(null);
     try {
       const res = await api.login(username, password);
-      setCurrentUser(res.user);
-      localStorage.setItem('x_active_user_id', res.user.username);
-      setIsAuthModalOpen(false);
+      const user = toUser(res.user);
+      if (!user) throw new Error('The server did not return a valid account.');
+      setCurrentUser(user);
+      setPendingVerificationEmail(null);
+      await refreshUsersAndDemos();
       await refreshNotificationsCount();
-      return res.user;
-    } catch (err: any) {
-      const msg = err.message || 'Login failed';
-      setAuthError(msg);
-      throw new Error(msg);
+      return user;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Login failed';
+      setAuthError(message);
+      throw new Error(message);
     }
   };
 
   const register = async (data: {
     username: string;
-    name: string;
-    password?: string;
-    avatarUrl?: string;
-    bio?: string;
-  }): Promise<User> => {
+    email: string;
+    password: string;
+    name?: string;
+  }): Promise<RegisterResult> => {
     setAuthError(null);
     try {
       const res = await api.register(data);
-      setCurrentUser(res.user);
-      localStorage.setItem('x_active_user_id', res.user.username);
-      setAllUsers(prev => [res.user, ...prev]);
-      setIsAuthModalOpen(false);
-      await refreshNotificationsCount();
-      return res.user;
-    } catch (err: any) {
-      const msg = err.message || 'Registration failed';
-      setAuthError(msg);
-      throw new Error(msg);
+      if (res.authenticated && res.user) {
+        const user = toUser(res.user);
+        if (user) {
+          setCurrentUser(user);
+              await refreshUsersAndDemos();
+          await refreshNotificationsCount();
+          return { user, emailVerificationRequired: false };
+        }
+      }
+
+      setPendingVerificationEmail(res.email || data.email);
+      const message =
+        res.message ||
+        'Account created. Check your email to verify your address, then sign in.';
+
+      // Email verification is optional in the default local configuration.
+      // If the backend allows unverified login, transparently sign in now.
+      try {
+        const loginRes = await api.login(data.username, data.password);
+        const user = toUser(loginRes.user);
+        if (user) {
+          setCurrentUser(user);
+          setPendingVerificationEmail(null);
+              await refreshUsersAndDemos();
+          await refreshNotificationsCount();
+          return { user, emailVerificationRequired: false };
+        }
+      } catch {
+        // Verification required: leave the user on the sign-in screen.
+      }
+
+      return {
+        user: null,
+        emailVerificationRequired: true,
+        email: res.email || data.email,
+        message,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Registration failed';
+      setAuthError(message);
+      throw new Error(message);
     }
   };
 
@@ -159,33 +206,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.warn('Backend logout warning:', e);
     } finally {
       setCurrentUser(null);
-      localStorage.removeItem('x_active_user_id');
-      setIsAuthModalOpen(true);
-    }
-  };
-
-  const switchUser = async (user: User) => {
-    try {
-      // Authenticate via backend credentials
-      const res = await api.login(user.username, 'vyora123');
-      setCurrentUser(res.user);
-      localStorage.setItem('x_active_user_id', res.user.username);
-      await refreshNotificationsCount();
-    } catch (e) {
-      // Fallback
-      setCurrentUser(user);
-      api.setCurrentUserId(user.id);
-      localStorage.setItem('x_active_user_id', user.username);
-      refreshNotificationsCount();
+      setUnreadNotificationsCount(0);
+      setPendingVerificationEmail(null);
     }
   };
 
   const updateCurrentUser = async (data: Partial<User>): Promise<User> => {
     const updated = await api.updateProfile(data);
     setCurrentUser(updated);
-    setAllUsers(prev => prev.map(u => u.id === updated.id ? updated : u));
+    setAllUsers((prev) => prev.map((user) => (user.id === updated.id ? updated : user)));
     return updated;
   };
+
+  const clearPendingVerification = () => setPendingVerificationEmail(null);
 
   return (
     <AuthContext.Provider
@@ -197,17 +230,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         login,
         register,
         logout,
-        switchUser,
         updateCurrentUser,
         unreadNotificationsCount,
         refreshNotificationsCount,
         appConfig,
         refreshConfig,
         isLoading,
-        isAuthModalOpen,
-        setIsAuthModalOpen,
         authError,
         setAuthError,
+        pendingVerificationEmail,
+        clearPendingVerification,
       }}
     >
       {children}

@@ -1,0 +1,1282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>VYORA — Documentation &amp; Code Audit</title>
+<meta name="description" content="Standalone documentation and static code audit for the VYORA social platform." />
+<style>
+  :root {
+    --bg: #070a0f;
+    --bg-soft: #0b1019;
+    --panel: #0d131d;
+    --panel-2: #101826;
+    --border: rgba(255, 255, 255, 0.09);
+    --border-strong: rgba(255, 255, 255, 0.16);
+    --text: #e5eaf0;
+    --muted: #94a3b8;
+    --dim: #64748b;
+    --cyan: #00f2fe;
+    --purple: #9d4edd;
+    --pink: #ff0080;
+    --emerald: #34d399;
+    --amber: #fbbf24;
+    --red: #fb7185;
+    --blue: #38bdf8;
+    --radius: 14px;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1200px 600px at 15% -10%, rgba(157, 78, 221, 0.18), transparent 55%),
+      radial-gradient(900px 500px at 95% 0%, rgba(0, 242, 254, 0.10), transparent 55%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--cyan); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 270px minmax(0, 1fr);
+    max-width: 1380px;
+    margin: 0 auto;
+  }
+
+  /* ---------- Sidebar ---------- */
+  .sidebar {
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 28px 18px 40px;
+    border-right: 1px solid var(--border);
+    background: rgba(7, 10, 15, 0.72);
+    backdrop-filter: blur(12px);
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 22px;
+    padding: 0 6px;
+  }
+  .brand-mark {
+    width: 42px;
+    height: 42px;
+    flex: 0 0 42px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #7928ca, #00f2fe);
+    display: grid;
+    place-items: center;
+    font-weight: 900;
+    font-size: 20px;
+    color: #fff;
+    box-shadow: 0 0 22px rgba(0, 242, 254, 0.25);
+  }
+  .brand-name { font-size: 20px; font-weight: 900; letter-spacing: -0.02em; }
+  .brand-sub { font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.18em; color: var(--cyan); text-transform: uppercase; }
+
+  .nav-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--dim);
+    padding: 0 10px;
+    margin: 18px 0 8px;
+  }
+  .toc { list-style: none; margin: 0; padding: 0; }
+  .toc li { margin: 2px 0; }
+  .toc a {
+    display: block;
+    padding: 7px 10px;
+    border-radius: 9px;
+    color: var(--muted);
+    font-size: 13px;
+    transition: background 0.15s, color 0.15s;
+  }
+  .toc a:hover { background: rgba(0, 242, 254, 0.07); color: #fff; text-decoration: none; }
+  .toc a.active { background: rgba(0, 242, 254, 0.10); color: var(--cyan); }
+
+  /* ---------- Main ---------- */
+  main { padding: 48px 52px 100px; min-width: 0; }
+  .hero { margin-bottom: 46px; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--cyan);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--cyan);
+    box-shadow: 0 0 12px var(--cyan);
+  }
+  h1 {
+    font-size: clamp(34px, 5vw, 52px);
+    line-height: 1.05;
+    letter-spacing: -0.035em;
+    margin: 14px 0 14px;
+    background: linear-gradient(100deg, #c084fc 0%, #7dd3fc 50%, #22d3ee 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .lede { font-size: 17px; color: var(--muted); max-width: 850px; margin: 0; }
+
+  .meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 22px;
+  }
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 11px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.03);
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--emerald); box-shadow: 0 0 9px var(--emerald); }
+  .dot.amber { background: var(--amber); box-shadow: 0 0 9px var(--amber); }
+  .dot.red { background: var(--red); box-shadow: 0 0 9px var(--red); }
+
+  section { scroll-margin-top: 24px; margin-bottom: 54px; }
+  h2 {
+    font-size: 27px;
+    letter-spacing: -0.02em;
+    margin: 0 0 8px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  h2 .num {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--cyan);
+    margin-right: 10px;
+    opacity: 0.85;
+  }
+  h3 { font-size: 17px; margin: 26px 0 10px; letter-spacing: -0.01em; }
+  h4 { font-size: 14px; margin: 18px 0 8px; color: #cbd5e1; }
+  p { margin: 0 0 14px; color: #c3ccd8; }
+  ul, ol { margin: 0 0 16px; padding-left: 22px; color: #c3ccd8; }
+  li { margin: 5px 0; }
+  strong { color: #f1f5f9; }
+  code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    background: rgba(0, 242, 254, 0.08);
+    border: 1px solid rgba(0, 242, 254, 0.14);
+    color: #a5f3fc;
+    padding: 1.5px 5px;
+    border-radius: 5px;
+    word-break: break-word;
+  }
+  pre {
+    margin: 14px 0 20px;
+    padding: 16px 18px;
+    background: #06090e;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.65;
+    color: #d7e2ee;
+  }
+  pre code { background: none; border: 0; padding: 0; color: inherit; font-size: inherit; }
+
+  .callout {
+    border: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(13, 19, 29, 0.9), rgba(9, 13, 20, 0.9));
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    margin: 18px 0;
+  }
+  .callout-title { font-weight: 800; font-size: 13px; letter-spacing: 0.02em; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout.info { border-left: 3px solid var(--cyan); }
+  .callout.warn { border-left: 3px solid var(--amber); }
+  .callout.bad { border-left: 3px solid var(--red); }
+  .callout.good { border-left: 3px solid var(--emerald); }
+  .callout.info .callout-title { color: var(--cyan); }
+  .callout.warn .callout-title { color: var(--amber); }
+  .callout.bad .callout-title { color: var(--red); }
+  .callout.good .callout-title { color: var(--emerald); }
+
+  .grid { display: grid; gap: 14px; }
+  .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .card {
+    background: linear-gradient(180deg, rgba(16, 24, 38, 0.85), rgba(10, 15, 23, 0.85));
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+  }
+  .card h4 { margin-top: 0; color: #fff; }
+  .card p { margin-bottom: 0; font-size: 13.5px; color: var(--muted); }
+  .card .k { font-family: var(--mono); font-size: 11px; color: var(--cyan); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0 22px;
+    font-size: 13px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  thead th {
+    text-align: left;
+    background: #0b111b;
+    color: #cbd5e1;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-strong);
+    white-space: nowrap;
+  }
+  tbody td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    color: #c3ccd8;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.015); }
+  tbody td code { white-space: nowrap; }
+
+  .method {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    font-weight: 800;
+    padding: 2px 7px;
+    border-radius: 5px;
+    white-space: nowrap;
+    display: inline-block;
+  }
+  .get { background: rgba(52, 211, 153, 0.14); color: #6ee7b7; border: 1px solid rgba(52, 211, 153, 0.25); }
+  .post { background: rgba(56, 189, 248, 0.14); color: #7dd3fc; border: 1px solid rgba(56, 189, 248, 0.25); }
+  .put { background: rgba(251, 191, 36, 0.14); color: #fcd34d; border: 1px solid rgba(251, 191, 36, 0.25); }
+  .del { background: rgba(251, 113, 133, 0.14); color: #fda4af; border: 1px solid rgba(251, 113, 133, 0.25); }
+
+  .severity {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 800;
+    padding: 2px 7px;
+    border-radius: 5px;
+    white-space: nowrap;
+  }
+  .sev-high { background: rgba(251, 113, 133, 0.15); color: #fda4af; border: 1px solid rgba(251, 113, 133, 0.3); }
+  .sev-med { background: rgba(251, 191, 36, 0.14); color: #fcd34d; border: 1px solid rgba(251, 191, 36, 0.3); }
+  .sev-low { background: rgba(56, 189, 248, 0.12); color: #7dd3fc; border: 1px solid rgba(56, 189, 248, 0.3); }
+  .sev-note { background: rgba(148, 163, 184, 0.12); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.3); }
+
+  .status-ok { color: var(--emerald); font-weight: 700; }
+  .status-warn { color: var(--amber); font-weight: 700; }
+  .status-fail { color: var(--red); font-weight: 700; }
+
+  /* ---------- Architecture diagram ---------- */
+  .arch {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr auto 1fr;
+    align-items: center;
+    gap: 10px;
+    margin: 20px 0 8px;
+  }
+  .arch-box {
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    padding: 16px 14px;
+    background: linear-gradient(180deg, #0f1723, #0a0f17);
+    text-align: center;
+    min-height: 110px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+  }
+  .arch-box .t { font-weight: 800; font-size: 14px; color: #fff; }
+  .arch-box .s { font-family: var(--mono); font-size: 10.5px; color: var(--muted); line-height: 1.45; }
+  .arch-arrow { color: var(--cyan); font-size: 22px; text-align: center; font-family: var(--mono); }
+
+  .tree {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    line-height: 1.75;
+    color: #b6c2d1;
+    background: #06090e;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    overflow-x: auto;
+  }
+  .tree .d { color: #7dd3fc; font-weight: 700; }
+  .tree .f { color: #cbd5e1; }
+  .tree .m { color: #64748b; }
+
+  .kv { display: grid; grid-template-columns: 210px 1fr; gap: 4px 18px; margin: 14px 0; font-size: 13.5px; }
+  .kv dt { color: var(--muted); font-family: var(--mono); font-size: 12px; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .kv dd { margin: 0; padding: 6px 0; border-bottom: 1px solid var(--border); color: #d5dee8; }
+
+  .footer {
+    margin-top: 60px;
+    padding-top: 22px;
+    border-top: 1px solid var(--border);
+    color: var(--dim);
+    font-size: 12px;
+    font-family: var(--mono);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 22px;
+  }
+
+  .top-btn {
+    position: fixed;
+    right: 22px;
+    bottom: 22px;
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    border: 1px solid var(--border-strong);
+    background: rgba(13, 19, 29, 0.9);
+    color: var(--cyan);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    backdrop-filter: blur(8px);
+    font-size: 18px;
+    z-index: 50;
+  }
+  .top-btn:hover { background: rgba(0, 242, 254, 0.12); }
+
+  @media (max-width: 1040px) {
+    .layout { grid-template-columns: 1fr; }
+    .sidebar { position: relative; height: auto; border-right: 0; border-bottom: 1px solid var(--border); }
+    .toc { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    main { padding: 36px 26px 80px; }
+    .grid.three { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 720px) {
+    main { padding: 28px 18px 70px; }
+    .grid.two, .grid.three { grid-template-columns: 1fr; }
+    .arch { grid-template-columns: 1fr; }
+    .arch-arrow { transform: rotate(90deg); }
+    .kv { grid-template-columns: 1fr; gap: 0; }
+    .kv dt { border-bottom: 0; padding-bottom: 0; }
+    .kv dd { padding-top: 2px; }
+    table { display: block; overflow-x: auto; white-space: nowrap; }
+    .toc { grid-template-columns: 1fr; }
+  }
+  @media print {
+    body { background: #fff; color: #111; }
+    .sidebar, .top-btn { display: none; }
+    .layout { grid-template-columns: 1fr; }
+    main { padding: 0; }
+    a { color: #0b6bcb; }
+    .card, .callout, table, pre, .tree, .arch-box { break-inside: avoid; }
+    h1 { color: #111; -webkit-text-fill-color: #111; }
+    p, li, td { color: #222; }
+  }
+</style>
+</head>
+<body>
+
+<div class="layout">
+  <!-- ==================== SIDEBAR ==================== -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">V</div>
+      <div>
+        <div class="brand-name">VYORA</div>
+        <div class="brand-sub">Docs &amp; Audit</div>
+      </div>
+    </div>
+
+    <div class="nav-label">Contents</div>
+    <ul class="toc">
+      <li><a href="#overview">1. Overview</a></li>
+      <li><a href="#verdict">2. Audit Verdict</a></li>
+      <li><a href="#stack">3. Technology Stack</a></li>
+      <li><a href="#structure">4. Project Structure</a></li>
+      <li><a href="#architecture">5. Architecture</a></li>
+      <li><a href="#features">6. Features</a></li>
+      <li><a href="#setup">7. Setup &amp; Run</a></li>
+      <li><a href="#environment">8. Environment Variables</a></li>
+      <li><a href="#api">9. API Reference</a></li>
+      <li><a href="#data">10. Data Models</a></li>
+      <li><a href="#frontend">11. Frontend Map</a></li>
+      <li><a href="#backend">12. Backend Map</a></li>
+      <li><a href="#verification">13. Verification Log</a></li>
+      <li><a href="#issues">14. Bugs &amp; Risks</a></li>
+      <li><a href="#checklist">15. Fix Checklist</a></li>
+    </ul>
+
+    <div class="nav-label">Quick Facts</div>
+    <ul class="toc">
+      <li><a href="#api">34 API endpoints</a></li>
+      <li><a href="#data">8 PostgreSQL tables</a></li>
+      <li><a href="#frontend">23 components</a></li>
+      <li><a href="#issues">17 audit findings</a></li>
+    </ul>
+  </aside>
+
+  <!-- ==================== MAIN ==================== -->
+  <main>
+    <header class="hero">
+      <div class="eyebrow">Project Documentation · Static Code Audit</div>
+      <h1>VYORA<br />Global Real-Time Network</h1>
+      <p class="lede">
+        A decoupled social platform built with React 19, Vite, Tailwind CSS v4 and an Express API.
+        The frontend is configuration-free; the backend owns branding, feature gates, CDN routing,
+        file storage and PostgreSQL access. This document describes the system and records the results
+        of a static code audit performed on the repository.
+      </p>
+      <div class="meta-row">
+        <span class="pill"><span class="dot"></span>Static audit complete</span>
+        <span class="pill"><span class="dot amber"></span>Runtime not executed</span>
+        <span class="pill"><span class="dot red"></span>No dependencies installed</span>
+        <span class="pill">Audit date: 2026-11-03</span>
+        <span class="pill">Node detected: v24.21.0</span>
+      </div>
+    </header>
+
+    <!-- ==================== 1. OVERVIEW ==================== -->
+    <section id="overview">
+      <h2><span class="num">01</span>Overview</h2>
+      <p>
+        <strong>VYORA</strong> is a full-stack social-network demo with a Twitter/X-style interface.
+        Users can publish posts (with text, media, polls, replies and quotes), like, repost,
+        bookmark, follow other users, vote in polls, browse trends, edit profiles, exchange direct
+        messages and authenticate against the backend.
+      </p>
+      <p>
+        The project is split into two logical halves:
+      </p>
+      <div class="grid two">
+        <div class="card">
+          <h4>Frontend</h4>
+          <p>
+            A React single-page application mounted at <code>#root</code>. All configuration is fetched
+            from <code>/api/config</code>; no API keys or limits are hardcoded in the client. The UI is
+            responsive with a desktop three-column layout and a mobile bottom navigation bar.
+          </p>
+        </div>
+        <div class="card">
+          <h4>Backend</h4>
+          <p>
+            An Express 4 API with an in-memory data engine and an optional PostgreSQL adapter.
+            The server also handles file uploads, serves uploaded media, exposes CDN health checks,
+            and can return its own source code for inspection through <code>/api/backend-code</code>.
+          </p>
+        </div>
+      </div>
+      <div class="callout info">
+        <div class="callout-title">Design intent</div>
+        <p>
+          The frontend is intentionally dumb. Branding, maximum post length, feature flags, media presets,
+          CDN URLs and database details are all delivered by the server. This is stated repeatedly in the
+          UI copy and reflected in the code structure.
+        </p>
+      </div>
+    </section>
+
+    <!-- ==================== 2. VERDICT ==================== -->
+    <section id="verdict">
+      <h2><span class="num">02</span>Audit Verdict</h2>
+      <div class="callout warn">
+        <div class="callout-title">Can it run fully without errors? — Not confirmed.</div>
+        <p>
+          The source is coherent, the TypeScript server files pass a syntax check, and the committed
+          frontend/backend build artifacts parse successfully. However, <strong>the app was not executed
+          end-to-end</strong> because this environment has no <code>node_modules</code>, no <code>npm</code>,
+          no <code>tsx</code> and no TypeScript compiler. Per the instruction not to install packages or
+          tools, no dependencies were installed. A full <code>npm install</code> + <code>npm run lint</code>
+          + <code>npm run build</code> verification is therefore still required.
+        </p>
+      </div>
+
+      <div class="grid three">
+        <div class="card">
+          <h4 class="status-ok">PASS · Syntax</h4>
+          <p>All 9 inspected server/type TypeScript files pass <code>node --experimental-strip-types --check</code>. Both committed bundles parse.</p>
+        </div>
+        <div class="card">
+          <h4 class="status-warn">PARTIAL · Build</h4>
+          <p>Existing <code>dist/</code> and <code>server-dist/</code> artifacts are valid, but a fresh build was not attempted.</p>
+        </div>
+        <div class="card">
+          <h4 class="status-fail">FAIL · Runtime</h4>
+          <p>No live server, API request or browser test was possible without dependencies. Behaviour is assessed from source only.</p>
+        </div>
+      </div>
+
+      <h3>Summary</h3>
+      <p>
+        The application is <strong>structurally complete and likely to build</strong>, but it is
+        <strong>not production-correct</strong> as-is. The most significant issues are a partially
+        implemented PostgreSQL layer, globally shared notifications, globally shared poll-vote state,
+        a media-only post rejection, and an authentication fallback that weakens password checks.
+        These are described in detail in <a href="#issues">Bugs &amp; Risks</a>.
+      </p>
+      <table>
+        <thead>
+          <tr><th>Area</th><th>Assessment</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Routing / API surface</td><td><span class="status-ok">Complete</span> — every client call has a matching server route.</td></tr>
+          <tr><td>Type consistency</td><td><span class="status-ok">Good</span> — shared types in <code>src/types/index.ts</code> are reused by client and server.</td></tr>
+          <tr><td>Authentication flow</td><td><span class="status-warn">Works, with weaknesses</span> — session token flow exists; global default password bypass is present.</td></tr>
+          <tr><td>PostgreSQL integration</td><td><span class="status-fail">Incomplete</span> — schema migration exists, but data is not read from or seeded into Postgres.</td></tr>
+          <tr><td>Notifications</td><td><span class="status-fail">Not user-scoped</span> — all users share one list.</td></tr>
+          <tr><td>Polls</td><td><span class="status-warn">Works for one user</span> — voted state is stored on the shared post object.</td></tr>
+          <tr><td>File upload</td><td><span class="status-ok">Functional</span> — base64 upload to in-memory storage, served by backend; MIME validation missing.</td></tr>
+          <tr><td>UI / theming</td><td><span class="status-warn">Mostly works</span> — light theme is only partially applied.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ==================== 3. STACK ==================== -->
+    <section id="stack">
+      <h2><span class="num">03</span>Technology Stack</h2>
+      <table>
+        <thead>
+          <tr><th>Layer</th><th>Technology</th><th>Version (package.json)</th><th>Role</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>UI</td><td>React + React DOM</td><td>^19.0.1</td><td>Component rendering and state.</td></tr>
+          <tr><td>Bundler</td><td>Vite</td><td>^8.3.0</td><td>Dev server, HMR, production build.</td></tr>
+          <tr><td>React plugin</td><td>@vitejs/plugin-react</td><td>^6.1.1</td><td>JSX transform and Fast Refresh.</td></tr>
+          <tr><td>CSS</td><td>Tailwind CSS + @tailwindcss/vite</td><td>^4.3.3</td><td>Utility-first styling.</td></tr>
+          <tr><td>API</td><td>Express</td><td>^4.21.2</td><td>HTTP server and route handlers.</td></tr>
+          <tr><td>Runtime</td><td>tsx</td><td>^4.21.0</td><td>Runs TypeScript server directly.</td></tr>
+          <tr><td>Database</td><td>pg (node-postgres)</td><td>^8.23.1</td><td>PostgreSQL pool and migrations.</td></tr>
+          <tr><td>Config</td><td>dotenv</td><td>^17.2.3</td><td>Loads <code>.env</code>.</td></tr>
+          <tr><td>Icons</td><td>lucide-react</td><td>^0.546.0</td><td>Interface icons.</td></tr>
+          <tr><td>Types</td><td>TypeScript</td><td>^7.0.2</td><td>Static checking via <code>npm run lint</code>.</td></tr>
+          <tr><td>Bundling (server)</td><td>esbuild</td><td>^0.25.0</td><td>Used to produce <code>server-dist/server.cjs</code>.</td></tr>
+          <tr><td>Declared, unused</td><td>firebase, motion, @google/genai</td><td>—</td><td>Listed in dependencies but not imported anywhere in <code>src/</code> or <code>server/</code>.</td></tr>
+        </tbody>
+      </table>
+      <div class="callout warn">
+        <div class="callout-title">Dependency hygiene</div>
+        <p>
+          <code>firebase</code>, <code>motion</code> and <code>@google/genai</code> are unused. The
+          repository also contains <code>firebase-applet-config.json</code>, <code>firebase-blueprint.json</code>
+          and <code>firestore.rules</code>, none of which are referenced by the running application.
+          <code>@types/pg</code> is in <code>dependencies</code> rather than <code>devDependencies</code>.
+        </p>
+      </div>
+    </section>
+
+    <!-- ==================== 4. STRUCTURE ==================== -->
+    <section id="structure">
+      <h2><span class="num">04</span>Project Structure</h2>
+      <div class="tree">
+<span class="d">vyora/</span>
+├── <span class="f">index.html</span>              <span class="m">SPA entry, meta tags and inline favicon</span>
+├── <span class="f">package.json</span>            <span class="m">scripts, dependencies</span>
+├── <span class="f">vite.config.ts</span>          <span class="m">React + Tailwind plugins, API middleware mount</span>
+├── <span class="f">tsconfig.json</span>           <span class="m">ES2022, bundler resolution, no emit</span>
+├── <span class="f">server.ts</span>               <span class="m">HTTP entry point (dev Vite middleware / prod static)</span>
+├── <span class="f">.env.example</span>            <span class="m">documented environment template</span>
+├── <span class="f">metadata.json</span>           <span class="m">AI Studio metadata (stale branding)</span>
+├── <span class="f">firebase-*.json</span>         <span class="m">unused Firebase blueprint/config</span>
+├── <span class="f">firestore.rules</span>         <span class="m">unused Firestore rules</span>
+├── <span class="d">server/</span>
+│   ├── <span class="f">config.ts</span>           <span class="m">central environment → typed config object</span>
+│   ├── <span class="f">index.ts</span>            <span class="m">Express app, CORS, JSON parsing, /api mount</span>
+│   ├── <span class="d">routes/</span>
+│   │   └── <span class="f">api.ts</span>          <span class="m">all REST endpoints + in-memory file storage</span>
+│   └── <span class="d">db/</span>
+│       ├── <span class="f">adapter.ts</span>      <span class="m">unified data layer (in-memory primary)</span>
+│       ├── <span class="f">store.ts</span>        <span class="m">seed data + in-memory maps/sets</span>
+│       └── <span class="f">postgres.ts</span>     <span class="m">pg Pool, schema migration, status</span>
+├── <span class="d">src/</span>
+│   ├── <span class="f">main.tsx</span>            <span class="m">React root</span>
+│   ├── <span class="f">App.tsx</span>             <span class="m">providers, tab routing, modals</span>
+│   ├── <span class="f">index.css</span>           <span class="m">Tailwind import + base styles</span>
+│   ├── <span class="d">components/</span>
+│   │   ├── <span class="d">auth/</span>           <span class="m">AuthModal</span>
+│   │   ├── <span class="d">backend/</span>        <span class="m">BackendCodeView (defined, unused)</span>
+│   │   ├── <span class="d">bookmarks/</span>      <span class="m">BookmarksView</span>
+│   │   ├── <span class="d">common/</span>         <span class="m">Avatar, Badge, Button, CdnImage, Modal, icons, splash</span>
+│   │   ├── <span class="d">explore/</span>        <span class="m">ExploreView</span>
+│   │   ├── <span class="d">feed/</span>           <span class="m">Timeline, PostCard, PostComposer, PostDetailModal</span>
+│   │   ├── <span class="d">layout/</span>         <span class="m">Sidebar, RightSidebar, MobileNav</span>
+│   │   ├── <span class="d">messages/</span>       <span class="m">MessagesView</span>
+│   │   ├── <span class="d">notifications/</span>  <span class="m">NotificationsView</span>
+│   │   ├── <span class="d">profile/</span>        <span class="m">ProfileView, EditProfileModal</span>
+│   │   └── <span class="d">settings/</span>       <span class="m">SettingsView (defined, unused)</span>
+│   ├── <span class="d">config/</span>
+│   │   └── <span class="f">backendUrl.ts</span>   <span class="m">hardcoded backend URL / origin fallback</span>
+│   ├── <span class="d">context/</span>
+│   │   ├── <span class="f">AuthContext.tsx</span> <span class="m">session, users, config, notifications count</span>
+│   │   └── <span class="f">ThemeContext.tsx</span><span class="m">theme and accent persistence</span>
+│   ├── <span class="d">services/</span>
+│   │   └── <span class="f">api.ts</span>          <span class="m">typed fetch wrapper for every endpoint</span>
+│   ├── <span class="d">types/</span>
+│   │   └── <span class="f">index.ts</span>        <span class="m">shared domain interfaces</span>
+│   └── <span class="d">utils/</span>
+│       └── <span class="f">cdnManager.ts</span>   <span class="m">multi-CDN resolution, preconnect, health tests</span>
+├── <span class="d">dist/</span>                  <span class="m">existing production frontend build</span>
+└── <span class="d">server-dist/</span>           <span class="m">existing bundled backend (CJS)</span>
+      </div>
+    </section>
+
+    <!-- ==================== 5. ARCHITECTURE ==================== -->
+    <section id="architecture">
+      <h2><span class="num">05</span>Architecture</h2>
+      <div class="arch">
+        <div class="arch-box">
+          <div class="t">React SPA</div>
+          <div class="s">src/ · React 19<br />Tailwind v4 · Vite</div>
+        </div>
+        <div class="arch-arrow">→</div>
+        <div class="arch-box">
+          <div class="t">Express API</div>
+          <div class="s">server/routes/api.ts<br />CORS · JSON · files</div>
+        </div>
+        <div class="arch-arrow">→</div>
+        <div class="arch-box">
+          <div class="t">Data Layer</div>
+          <div class="s">In-memory store<br />PostgreSQL (optional)</div>
+        </div>
+      </div>
+
+      <h3>Request flow</h3>
+      <ol>
+        <li>The browser loads <code>index.html</code>, which mounts <code>src/main.tsx</code> into <code>#root</code>.</li>
+        <li><code>App.tsx</code> wraps the UI in <code>ThemeProvider</code> and <code>AuthProvider</code>.</li>
+        <li><code>AuthProvider</code> fetches <code>/api/config</code>, <code>/api/users</code>, demo accounts and session state.</li>
+        <li>Client calls go through <code>src/services/api.ts</code>, which prefixes <code>/api</code> and attaches the session token.</li>
+        <li>Express routes call <code>dbAdapter</code>, which primarily reads and writes the in-memory store.</li>
+        <li>If a PostgreSQL pool connects, new posts are also written to Postgres (fire-and-forget).</li>
+      </ol>
+
+      <h3>Development vs production</h3>
+      <table>
+        <thead><tr><th>Mode</th><th>Behaviour</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>NODE_ENV !== "production"</code></td>
+            <td><code>server.ts</code> creates a Vite middleware server, mounts it on Express, and serves <code>index.html</code> through <code>vite.transformIndexHtml</code>.</td>
+          </tr>
+          <tr>
+            <td><code>NODE_ENV === "production"</code></td>
+            <td><code>server.ts</code> serves the pre-built <code>dist/</code> directory and falls back to <code>dist/index.html</code> for non-API routes.</td>
+          </tr>
+          <tr>
+            <td><code>vite.config.ts</code></td>
+            <td>Also mounts the same Express app as middleware, so <code>vite</code> dev and the standalone server expose the same API.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>State ownership</h3>
+      <table>
+        <thead><tr><th>State</th><th>Stored in</th><th>Lifetime</th></tr></thead>
+        <tbody>
+          <tr><td>Users, posts, likes, reposts, bookmarks, follows, notifications, messages, trends</td><td><code>server/db/store.ts</code> maps/sets/arrays</td><td>Process lifetime (lost on restart)</td></tr>
+          <tr><td>Sessions</td><td><code>inMemoryStore.sessions</code></td><td>Process lifetime</td></tr>
+          <tr><td>Uploaded files</td><td><code>fileStorage</code> map in <code>server/routes/api.ts</code></td><td>Process lifetime (not written to disk)</td></tr>
+          <tr><td>Theme, accent, auth token</td><td><code>localStorage</code></td><td>Browser persistence</td></tr>
+          <tr><td>PostgreSQL rows</td><td>Optional database</td><td>Persistent, but not used as the read source</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ==================== 6. FEATURES ==================== -->
+    <section id="features">
+      <h2><span class="num">06</span>Features</h2>
+      <div class="grid three">
+        <div class="card"><h4>Timeline</h4><p>“For you” and “Following” feeds, refresh button, composer, relative timestamps, hashtag and mention linking.</p></div>
+        <div class="card"><h4>Posts</h4><p>Text, up to four images, polls (2–4 options), replies, quote posts, delete-own-post, copy link.</p></div>
+        <div class="card"><h4>Engagement</h4><p>Optimistic like, repost, bookmark and poll-vote updates with server reconciliation.</p></div>
+        <div class="card"><h4>Explore</h4><p>Search across posts and users; tabs for top, latest, people and media; trending topics.</p></div>
+        <div class="card"><h4>Notifications</h4><p>Like, repost, reply and follow entries; “mark all read”; verified filter; mentions filter.</p></div>
+        <div class="card"><h4>Direct messages</h4><p>Contact list and per-user conversation thread, send and receive messages.</p></div>
+        <div class="card"><h4>Profiles</h4><p>Banner, avatar, bio, location, website, join date, follower counts, edit modal, follow/unfollow.</p></div>
+        <div class="card"><h4>Authentication</h4><p>Login, registration, session validation, logout, demo-account quick login.</p></div>
+        <div class="card"><h4>Theming</h4><p>Three background themes (dark, dim, light) and six accent colours, persisted locally.</p></div>
+        <div class="card"><h4>Multi-CDN</h4><p>Backend-supplied CDN list, preconnect hints, health pings, per-image fallback attempts.</p></div>
+        <div class="card"><h4>File uploads</h4><p>Base64 uploads to backend memory, served from <code>/api/files/:id</code> with immutable caching.</p></div>
+        <div class="card"><h4>Responsive layout</h4><p>Desktop three-column shell, collapsible icon sidebar, mobile bottom navigation and internal modals.</p></div>
+      </div>
+
+      <h3>Seeded demo accounts</h3>
+      <p>All four seed accounts use the password <code>vyora123</code>.</p>
+      <table>
+        <thead><tr><th>Name</th><th>Handle</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Mukit</td><td><code>@mukitk</code></td><td>Default fallback operator; verified.</td></tr>
+          <tr><td>Elon Musk</td><td><code>@elonmusk</code></td><td>Verified.</td></tr>
+          <tr><td>Tech Frontier</td><td><code>@techfrontier</code></td><td>Verified, gold badge.</td></tr>
+          <tr><td>Design Digest</td><td><code>@designdigest</code></td><td>Verified.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ==================== 7. SETUP ==================== -->
+    <section id="setup">
+      <h2><span class="num">07</span>Setup &amp; Run</h2>
+      <div class="callout info">
+        <div class="callout-title">Not executed during this audit</div>
+        <p>The commands below are documented from <code>package.json</code> and the source. They were not run because dependencies are absent and no package/tool installation was requested or performed.</p>
+      </div>
+
+      <h3>Prerequisites</h3>
+      <ul>
+        <li>Node.js (the repo was inspected with Node v24.21.0).</li>
+        <li>A package manager that can install the lockfile: npm, Bun or another compatible client.</li>
+        <li>Optional: a PostgreSQL server if you want database persistence.</li>
+      </ul>
+
+      <h3>Install and run</h3>
+      <pre><code># 1. Install dependencies
+npm install
+
+# 2. Create your environment file
+cp .env.example .env
+#    edit .env as needed (see Environment Variables)
+
+# 3. Start development server (Vite + Express middleware)
+npm run dev
+
+# Open http://localhost:3000</code></pre>
+
+      <h3>Production</h3>
+      <pre><code># Build the frontend into dist/
+npm run build
+
+# Run the TypeScript server directly (requires dev dependency tsx)
+NODE_ENV=production npm start
+
+# Alternative: run the pre-bundled backend
+node server-dist/server.cjs</code></pre>
+      <div class="callout warn">
+        <div class="callout-title">Production notes</div>
+        <p>
+          <code>npm run build</code> only builds the frontend. There is no script that compiles
+          <code>server.ts</code> into <code>server-dist/server.cjs</code>; that bundle was produced
+          separately with esbuild. Also, <code>npm start</code> invokes <code>tsx</code>, which is a
+          dev dependency, so a production install using <code>--omit=dev</code> will fail to start.
+        </p>
+      </div>
+
+      <h3>Quality checks</h3>
+      <pre><code>npm run lint     # tsc --noEmit
+npm run build    # vite build</code></pre>
+    </section>
+
+    <!-- ==================== 8. ENVIRONMENT ==================== -->
+    <section id="environment">
+      <h2><span class="num">08</span>Environment Variables</h2>
+      <p>
+        Configuration is read in <code>server/config.ts</code> through <code>dotenv</code>. Defaults are
+        applied when a variable is missing. The table combines <code>.env.example</code> with the actual
+        defaults in code.
+      </p>
+      <table>
+        <thead><tr><th>Variable</th><th>Default / example</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td><code>PORT</code></td><td><code>3000</code></td><td>HTTP port.</td></tr>
+          <tr><td><code>APP_NAME</code></td><td><code>VYORA</code> (example file says <code>X</code>)</td><td>Display brand name.</td></tr>
+          <tr><td><code>APP_TAGLINE</code></td><td><code>Decoupled Global Social Intelligence Network</code></td><td>Brand tagline.</td></tr>
+          <tr><td><code>APP_DESCRIPTION</code></td><td>Platform description</td><td>Served to the client via <code>/api/config</code>.</td></tr>
+          <tr><td><code>DEFAULT_THEME</code></td><td><code>dark</code></td><td><code>dark</code> | <code>dim</code> | <code>light</code>.</td></tr>
+          <tr><td><code>DEFAULT_ACCENT_COLOR</code></td><td><code>cyan</code> in code; <code>blue</code> in example</td><td><code>cyan</code> | <code>violet</code> | <code>amber</code> | <code>emerald</code> | <code>coral</code> | <code>blue</code>.</td></tr>
+          <tr><td><code>MAX_POST_LENGTH</code></td><td><code>280</code></td><td>Server-enforced post limit.</td></tr>
+          <tr><td><code>ENABLE_POLLS</code></td><td><code>true</code></td><td>Feature flag exposed to client.</td></tr>
+          <tr><td><code>ENABLE_BOOKMARKS</code></td><td><code>true</code></td><td>Feature flag exposed to client.</td></tr>
+          <tr><td><code>ENABLE_DIRECT_MESSAGES</code></td><td><code>true</code></td><td>Feature flag exposed to client.</td></tr>
+          <tr><td><code>ALLOW_MEDIA_UPLOADS</code></td><td><code>true</code></td><td>Feature flag exposed to client.</td></tr>
+          <tr><td><code>CDN_URLS</code></td><td>Unsplash, Picsum, GitHub avatars</td><td>Comma-separated CDN origins sent to the client.</td></tr>
+          <tr><td><code>VITE_CDN_URLS</code></td><td>Same as above</td><td>Fallback source for the CDN list.</td></tr>
+          <tr><td><code>DATABASE_TYPE</code></td><td><code>auto</code></td><td><code>auto</code> | <code>postgres</code> | <code>memory</code>.</td></tr>
+          <tr><td><code>DATABASE_URL</code></td><td><em>empty</em></td><td>Full PostgreSQL connection string.</td></tr>
+          <tr><td><code>SQL_HOST</code></td><td><code>localhost</code></td><td>PostgreSQL host.</td></tr>
+          <tr><td><code>SQL_PORT</code></td><td><code>5432</code></td><td>PostgreSQL port.</td></tr>
+          <tr><td><code>SQL_USER</code></td><td><code>postgres</code></td><td>PostgreSQL user.</td></tr>
+          <tr><td><code>SQL_PASSWORD</code></td><td><em>empty</em></td><td>PostgreSQL password.</td></tr>
+          <tr><td><code>SQL_DB_NAME</code></td><td><code>vyora_social</code></td><td>Database name.</td></tr>
+          <tr><td><code>SQL_SSL</code></td><td><code>false</code></td><td>Enable SSL with relaxed certificate validation.</td></tr>
+          <tr><td><code>GEMINI_API_KEY</code></td><td>Placeholder</td><td>Present in the template but not used anywhere in the code.</td></tr>
+          <tr><td><code>DISABLE_HMR</code></td><td>unset</td><td>When <code>true</code>, disables Vite HMR and file watching.</td></tr>
+        </tbody>
+      </table>
+      <div class="callout bad">
+        <div class="callout-title">Important database caveat</div>
+        <p>
+          <code>DATABASE_TYPE=memory</code> is not fully honoured. <code>PostgresService</code> creates a
+          pool whenever a host or URL is configured, and <code>SQL_HOST</code> defaults to
+          <code>localhost</code>. A connection attempt therefore occurs even in memory mode; it fails
+          gracefully after the timeout.
+        </p>
+      </div>
+    </section>
+
+    <!-- ==================== 9. API ==================== -->
+    <section id="api">
+      <h2><span class="num">09</span>API Reference</h2>
+      <p>
+        All routes are mounted under <code>/api</code>. JSON bodies are limited to 10 MB. The current user
+        is resolved from <code>Authorization: Bearer &lt;token&gt;</code>, then <code>x-auth-token</code>,
+        then <code>x-user-id</code>, and finally falls back to <code>user_mukit</code>.
+      </p>
+
+      <h3>Authentication</h3>
+      <table>
+        <thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><span class="method post">POST</span></td><td><code>/api/auth/login</code></td><td>Authenticate with username/handle and optional password; returns user and session token.</td></tr>
+          <tr><td><span class="method post">POST</span></td><td><code>/api/auth/register</code></td><td>Create an account; accepts username, name, password, avatarUrl, bio.</td></tr>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/auth/session</code></td><td>Validate the supplied token; returns <code>{ authenticated, user, token }</code>.</td></tr>
+          <tr><td><span class="method post">POST</span></td><td><code>/api/auth/logout</code></td><td>Invalidate the supplied session token.</td></tr>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/auth/demo-accounts</code></td><td>Returns all seed users together with their default password.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Configuration and media</h3>
+      <table>
+        <thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/config</code></td><td>Branding, feature flags, limits, CDN list, database status, endpoints, Node version, uptime.</td></tr>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/cdn/health</code></td><td>HEAD request to every configured CDN; returns status and latency.</td></tr>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/media/catalog</code></td><td>Avatar presets, attachment presets and CDN origins.</td></tr>
+          <tr><td><span class="method post">POST</span></td><td><code>/api/upload</code></td><td>Base64 upload; returns <code>{ fileId, url, filename, mimeType, size }</code>.</td></tr>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/files/:id</code></td><td>Serve a stored upload with immutable cache headers.</td></tr>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/files</code></td><td>List uploaded file metadata.</td></tr>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/backend-code</code></td><td>Returns the source of seven backend files for the code viewer.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Posts</h3>
+      <table>
+        <thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/posts?feed=for-you|following&amp;authorId=…</code></td><td>Feed or author-filtered list with per-user like/repost/bookmark flags.</td></tr>
+          <tr><td><span class="method post">POST</span></td><td><code>/api/posts</code></td><td>Create a post; accepts content, mediaUrls, pollOptions, replyToId, quotePostId.</td></tr>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/posts/:id</code></td><td>Return a post and its replies.</td></tr>
+          <tr><td><span class="method del">DELETE</span></td><td><code>/api/posts/:id</code></td><td>Delete a post owned by the current user.</td></tr>
+          <tr><td><span class="method post">POST</span></td><td><code>/api/posts/:id/like</code></td><td>Toggle like.</td></tr>
+          <tr><td><span class="method post">POST</span></td><td><code>/api/posts/:id/repost</code></td><td>Toggle repost.</td></tr>
+          <tr><td><span class="method post">POST</span></td><td><code>/api/posts/:id/bookmark</code></td><td>Toggle bookmark.</td></tr>
+          <tr><td><span class="method post">POST</span></td><td><code>/api/posts/:id/poll/vote</code></td><td>Vote on a poll; body must contain numeric <code>optionIndex</code>.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>Users, bookmarks, notifications, messages, trends</h3>
+      <table>
+        <thead><tr><th>Method</th><th>Endpoint</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/users</code></td><td>All users.</td></tr>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/users/:username</code></td><td>One user plus <code>isFollowing</code> for the current user.</td></tr>
+          <tr><td><span class="method put">PUT</span></td><td><code>/api/users/profile</code></td><td>Update the current user's profile.</td></tr>
+          <tr><td><span class="method post">POST</span></td><td><code>/api/users/:id/follow</code></td><td>Toggle follow and update counts.</td></tr>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/bookmarks</code></td><td>Current user's bookmarked posts.</td></tr>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/notifications</code></td><td>Notification list (currently global, see findings).</td></tr>
+          <tr><td><span class="method post">POST</span></td><td><code>/api/notifications/read-all</code></td><td>Mark every notification read.</td></tr>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/messages/:recipientId</code></td><td>Conversation between the current user and a recipient.</td></tr>
+          <tr><td><span class="method post">POST</span></td><td><code>/api/messages</code></td><td>Send a message; body requires <code>recipientId</code> and <code>text</code>.</td></tr>
+          <tr><td><span class="method get">GET</span></td><td><code>/api/trends</code></td><td>Seeded trending topics.</td></tr>
+        </tbody>
+      </table>
+      <p class="pill" style="display:inline-flex">Total: 34 route handlers across 5 groups</p>
+    </section>
+
+    <!-- ==================== 10. DATA ==================== -->
+    <section id="data">
+      <h2><span class="num">10</span>Data Models</h2>
+      <p>Shared TypeScript interfaces live in <code>src/types/index.ts</code> and are imported by both sides.</p>
+      <div class="grid two">
+        <div class="card">
+          <h4>User</h4>
+          <p><code>id, name, username, avatarUrl, bannerUrl, bio, location, website, verified, isGold, followersCount, followingCount, joinedDate</code></p>
+        </div>
+        <div class="card">
+          <h4>Post</h4>
+          <p><code>id, authorId, author, content, mediaUrls, poll, replyToId, replyToAuthor, quotePostId, quotePost, likesCount, repostsCount, repliesCount, viewsCount, isLiked, isReposted, isBookmarked, createdAt</code></p>
+        </div>
+        <div class="card">
+          <h4>Poll / PollOption</h4>
+          <p><code>Poll: id, question?, options[], totalVotes, userVotedIndex?, expiresAt</code><br /><code>PollOption: id, text, votes</code></p>
+        </div>
+        <div class="card">
+          <h4>Notification</h4>
+          <p><code>id, type (like|repost|reply|follow|mention), sender, postId?, postContent?, createdAt, read</code></p>
+        </div>
+        <div class="card">
+          <h4>Message</h4>
+          <p><code>id, senderId, recipientId, text, createdAt, isSender</code></p>
+        </div>
+        <div class="card">
+          <h4>TrendItem / CDNInfo / AppConfig</h4>
+          <p>Trend metadata, CDN health entries and the complete server configuration payload.</p>
+        </div>
+      </div>
+
+      <h3>PostgreSQL schema</h3>
+      <p><code>server/db/postgres.ts</code> creates eight tables on startup if a connection succeeds:</p>
+      <table>
+        <thead><tr><th>Table</th><th>Key columns</th></tr></thead>
+        <tbody>
+          <tr><td><code>users</code></td><td>id PK, name, username UNIQUE, avatar_url, banner_url, bio, location, website, verified, is_gold, follower counts, joined_date, created_at</td></tr>
+          <tr><td><code>posts</code></td><td>id PK, author_id FK→users, content, media_urls[], poll_data JSONB, reply_to_id, quote_post_id, counts, created_at</td></tr>
+          <tr><td><code>likes</code></td><td>(user_id, post_id) composite PK, FKs</td></tr>
+          <tr><td><code>reposts</code></td><td>(user_id, post_id) composite PK, FKs</td></tr>
+          <tr><td><code>bookmarks</code></td><td>(user_id, post_id) composite PK, FKs</td></tr>
+          <tr><td><code>follows</code></td><td>(follower_id, following_id) composite PK, FKs</td></tr>
+          <tr><td><code>notifications</code></td><td>id PK, recipient_id, sender_id, type, post_id, post_content, read, created_at</td></tr>
+          <tr><td><code>messages</code></td><td>id PK, sender_id, recipient_id, text, created_at</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ==================== 11. FRONTEND ==================== -->
+    <section id="frontend">
+      <h2><span class="num">11</span>Frontend Map</h2>
+      <table>
+        <thead><tr><th>File</th><th>Responsibility</th></tr></thead>
+        <tbody>
+          <tr><td><code>src/main.tsx</code></td><td>Creates the React root and imports global CSS.</td></tr>
+          <tr><td><code>src/App.tsx</code></td><td>Providers, tab state, modal orchestration, three-column layout.</td></tr>
+          <tr><td><code>src/context/AuthContext.tsx</code></td><td>Config, users, demo accounts, session restore, login/register/logout, notification count.</td></tr>
+          <tr><td><code>src/context/ThemeContext.tsx</code></td><td>Theme and accent state, localStorage persistence, body colours, accent class maps.</td></tr>
+          <tr><td><code>src/services/api.ts</code></td><td>Single fetch wrapper; attaches JSON, user ID and bearer token; typed methods for all endpoints.</td></tr>
+          <tr><td><code>src/utils/cdnManager.ts</code></td><td>CDN list, preconnect injection, relative URL resolution, failure rotation, latency tests.</td></tr>
+          <tr><td><code>src/config/backendUrl.ts</code></td><td>Optional hardcoded backend URL; otherwise uses <code>window.location.origin</code>.</td></tr>
+          <tr><td><code>src/components/common/CdnImage.tsx</code></td><td>Image loader with fallback chain and skeleton state.</td></tr>
+          <tr><td><code>src/components/feed/PostCard.tsx</code></td><td>Post rendering, media grid, poll, quote embed, engagement actions, options menu.</td></tr>
+          <tr><td><code>src/components/feed/PostComposer.tsx</code></td><td>Text input, upload/URL media, poll builder, emoji picker, character counter.</td></tr>
+          <tr><td><code>src/components/feed/Timeline.tsx</code></td><td>Feed tabs, refresh, composer, post list, empty/loading states.</td></tr>
+          <tr><td><code>src/components/feed/PostDetailModal.tsx</code></td><td>Thread view, replies and reply composer.</td></tr>
+          <tr><td><code>src/components/layout/Sidebar.tsx</code></td><td>Desktop navigation, compose button, operator switcher, sign-out.</td></tr>
+          <tr><td><code>src/components/layout/RightSidebar.tsx</code></td><td>Search, CDN card, trends, follow suggestions.</td></tr>
+          <tr><td><code>src/components/layout/MobileNav.tsx</code></td><td>Bottom navigation below the <code>sm</code> breakpoint.</td></tr>
+          <tr><td><code>src/components/auth/AuthModal.tsx</code></td><td>Sign-in, registration and demo-account tabs.</td></tr>
+          <tr><td><code>src/components/explore/ExploreView.tsx</code></td><td>Search, trends, people, media and post results.</td></tr>
+          <tr><td><code>src/components/notifications/NotificationsView.tsx</code></td><td>Notification list, filters and mark-all-read.</td></tr>
+          <tr><td><code>src/components/bookmarks/BookmarksView.tsx</code></td><td>Bookmarked post list.</td></tr>
+          <tr><td><code>src/components/messages/MessagesView.tsx</code></td><td>Contacts and conversation pane.</td></tr>
+          <tr><td><code>src/components/profile/ProfileView.tsx</code></td><td>Profile header, tabs, posts, follow/edit actions.</td></tr>
+          <tr><td><code>src/components/profile/EditProfileModal.tsx</code></td><td>Profile fields, avatar/banner upload and presets.</td></tr>
+          <tr><td><code>src/components/settings/SettingsView.tsx</code></td><td>Backend/CDN/database/appearance settings UI. <strong>Not imported by App.tsx.</strong></td></tr>
+          <tr><td><code>src/components/backend/BackendCodeView.tsx</code></td><td>Backend source browser. <strong>Not imported by App.tsx.</strong></td></tr>
+          <tr><td><code>src/components/common/TelexIcon.tsx</code></td><td>Legacy icon. <strong>Not imported anywhere.</strong></td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ==================== 12. BACKEND ==================== -->
+    <section id="backend">
+      <h2><span class="num">12</span>Backend Map</h2>
+      <dl class="kv">
+        <dt>server.ts</dt>
+        <dd>Chooses Vite middleware (development) or static <code>dist/</code> (production); starts the listener on <code>0.0.0.0</code>.</dd>
+        <dt>server/index.ts</dt>
+        <dd>Creates the Express app, enables JSON/urlencoded parsing, sets permissive CORS headers, handles preflight, mounts <code>/api</code>.</dd>
+        <dt>server/config.ts</dt>
+        <dd>Parses environment variables into a typed <code>ServerConfig</code>, including CDN list, media presets, database settings and endpoint paths.</dd>
+        <dt>server/routes/api.ts</dt>
+        <dd>All 34 route handlers, authentication helpers, in-memory file storage, CDN health checks, backend source endpoint.</dd>
+        <dt>server/db/adapter.ts</dt>
+        <dd>Primary data API. Reads and writes the in-memory store; optionally mirrors new posts to Postgres.</dd>
+        <dt>server/db/store.ts</dt>
+        <dd>Seed users/posts/notifications/trends/messages and the in-memory maps/sets for users, sessions, posts, likes, reposts, bookmarks, follows.</dd>
+        <dt>server/db/postgres.ts</dt>
+        <dd>Builds a <code>pg.Pool</code> from env, runs <code>CREATE TABLE IF NOT EXISTS</code> migrations, reports connection status.</dd>
+      </dl>
+    </section>
+
+    <!-- ==================== 13. VERIFICATION ==================== -->
+    <section id="verification">
+      <h2><span class="num">13</span>Verification Log</h2>
+      <p>
+        The following checks were performed without installing anything. Commands were run from
+        <code>/home/kali/vyora</code> on 2026-11-03.
+      </p>
+      <table>
+        <thead><tr><th>Check</th><th>Command / method</th><th>Result</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Repository inventory</td>
+            <td><code>find</code>, directory listing</td>
+            <td><span class="status-ok">PASS</span> — 23 components, 7 backend files, config and build artifacts present.</td>
+          </tr>
+          <tr>
+            <td>Dependency availability</td>
+            <td><code>ls node_modules</code>, <code>which npm bun tsc</code></td>
+            <td><span class="status-fail">BLOCKED</span> — no <code>node_modules</code>; only Node v24.21.0 is present.</td>
+          </tr>
+          <tr>
+            <td>Backend TypeScript syntax</td>
+            <td><code>node --experimental-strip-types --check &lt;file&gt;</code> for 9 files</td>
+            <td><span class="status-ok">PASS</span> — <code>server/config.ts</code>, <code>server/index.ts</code>, <code>server/db/adapter.ts</code>, <code>server/db/store.ts</code>, <code>server/db/postgres.ts</code>, <code>server/routes/api.ts</code>, <code>server.ts</code>, <code>src/types/index.ts</code>, <code>src/config/backendUrl.ts</code>.</td>
+          </tr>
+          <tr>
+            <td>Committed server bundle</td>
+            <td><code>node --check server-dist/server.cjs</code></td>
+            <td><span class="status-ok">PASS</span> — valid CommonJS syntax.</td>
+          </tr>
+          <tr>
+            <td>Committed frontend bundle</td>
+            <td><code>new Function(dist/assets/index-0M8ogFZT.js)</code></td>
+            <td><span class="status-ok">PASS</span> — JavaScript parses.</td>
+          </tr>
+          <tr>
+            <td>Type checking</td>
+            <td><code>tsc --noEmit</code></td>
+            <td><span class="status-warn">NOT RUN</span> — TypeScript is not installed.</td>
+          </tr>
+          <tr>
+            <td>Fresh production build</td>
+            <td><code>npm run build</code></td>
+            <td><span class="status-warn">NOT RUN</span> — no package manager/dependencies.</td>
+          </tr>
+          <tr>
+            <td>Live API / browser test</td>
+            <td>Start server and exercise routes</td>
+            <td><span class="status-warn">NOT RUN</span> — runtime dependencies absent.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout good">
+        <div class="callout-title">What passed</div>
+        <p>
+          No syntax errors were found in the inspected TypeScript sources, and the existing build
+          artifacts are syntactically valid. Client API methods map one-to-one to server routes; no
+          orphaned endpoint calls were found.
+        </p>
+      </div>
+      <div class="callout warn">
+        <div class="callout-title">What remains unverified</div>
+        <p>
+          Actual compilation under the declared dependency versions, runtime startup, database
+          connectivity, network requests, React rendering, and every interaction flow still require
+          an environment with dependencies installed.
+        </p>
+      </div>
+
+      <h3>To complete verification (requires permission to install)</h3>
+      <pre><code>npm install
+npm run lint        # tsc --noEmit
+npm run build       # vite build
+npm run dev         # start server and test the UI</code></pre>
+    </section>
+
+    <!-- ==================== 14. ISSUES ==================== -->
+    <section id="issues">
+      <h2><span class="num">14</span>Bugs &amp; Risks</h2>
+      <p>Findings are ordered by practical impact. None of these are syntax errors; they are behavioural or security defects found by reading the code.</p>
+
+      <table>
+        <thead><tr><th>#</th><th>Severity</th><th>Finding</th><th>Location</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>1</td><td><span class="severity sev-high">HIGH</span></td>
+            <td><strong>PostgreSQL persistence is effectively non-functional.</strong> Only new posts are written to Postgres; users are never inserted, so the <code>author_id</code> foreign key fails and the insert is swallowed by a <code>catch</code>. No reads come from Postgres.</td>
+            <td><code>server/db/adapter.ts:156-169</code></td>
+          </tr>
+          <tr>
+            <td>2</td><td><span class="severity sev-high">HIGH</span></td>
+            <td><strong>Notifications are global.</strong> <code>getNotifications(userId)</code> ignores the user and returns the shared array; <code>read-all</code> mutates every user's notifications.</td>
+            <td><code>server/db/adapter.ts:485-492</code></td>
+          </tr>
+          <tr>
+            <td>3</td><td><span class="severity sev-high">HIGH</span></td>
+            <td><strong>Authentication bypass.</strong> A supplied password is accepted if it matches the stored password <em>or</em> the literal <code>vyora123</code>, so demo credentials unlock accounts that have custom passwords.</td>
+            <td><code>server/db/adapter.ts:293</code></td>
+          </tr>
+          <tr>
+            <td>4</td><td><span class="severity sev-high">HIGH</span></td>
+            <td><strong>Unauthenticated requests impersonate a user.</strong> When no token is supplied, <code>getUserId</code> returns <code>user_mukit</code>, so protected actions can be performed without signing in.</td>
+            <td><code>server/routes/api.ts:10-21</code></td>
+          </tr>
+          <tr>
+            <td>5</td><td><span class="severity sev-med">MED</span></td>
+            <td><strong>Poll vote state is shared.</strong> <code>userVotedIndex</code> is stored on the single shared poll object, so once one user votes every user sees the voted state and cannot vote.</td>
+            <td><code>server/db/adapter.ts:253-262</code></td>
+          </tr>
+          <tr>
+            <td>6</td><td><span class="severity sev-med">MED</span></td>
+            <td><strong>Media-only posts fail.</strong> The composer allows submission with media and no text, but the server rejects any post whose trimmed content is empty.</td>
+            <td><code>server/routes/api.ts:371-374</code></td>
+          </tr>
+          <tr>
+            <td>7</td><td><span class="severity sev-med">MED</span></td>
+            <td><strong>Upload MIME types are not validated.</strong> <code>allowedMimeTypes</code> is declared but never enforced; any base64 payload is accepted and served back.</td>
+            <td><code>server/routes/api.ts</code> upload handler; <code>server/config.ts:83</code></td>
+          </tr>
+          <tr>
+            <td>8</td><td><span class="severity sev-med">MED</span></td>
+            <td><strong>CORS is fully open.</strong> <code>Access-Control-Allow-Origin: *</code> is combined with token auth, which is acceptable for a demo but unsuitable for production.</td>
+            <td><code>server/index.ts:14</code></td>
+          </tr>
+          <tr>
+            <td>9</td><td><span class="severity sev-med">MED</span></td>
+            <td><strong>Demo credentials are publicly enumerable.</strong> <code>/api/auth/demo-accounts</code> returns every account's default password.</td>
+            <td><code>server/routes/api.ts</code> auth demo route</td>
+          </tr>
+          <tr>
+            <td>10</td><td><span class="severity sev-med">MED</span></td>
+            <td><strong>Profile updates are unrestricted.</strong> <code>PUT /api/users/profile</code> passes the request body straight into the user object, allowing fields such as <code>verified</code> or counts to be changed.</td>
+            <td><code>server/db/adapter.ts</code> updateProfile; <code>server/routes/api.ts</code></td>
+          </tr>
+          <tr>
+            <td>11</td><td><span class="severity sev-low">LOW</span></td>
+            <td><strong>Bookmarks header reads the wrong key.</strong> It looks for <code>x_active_user_handle</code>, while the app stores <code>x_active_user_id</code>, so it always displays <code>@mukitk</code>.</td>
+            <td><code>src/components/bookmarks/BookmarksView.tsx:48</code></td>
+          </tr>
+          <tr>
+            <td>12</td><td><span class="severity sev-low">LOW</span></td>
+            <td><strong>Messages pane starts empty.</strong> <code>selectedUser</code> is initialised from an empty <code>allUsers</code> array and never updates when users finish loading.</td>
+            <td><code>src/components/messages/MessagesView.tsx:15</code></td>
+          </tr>
+          <tr>
+            <td>13</td><td><span class="severity sev-low">LOW</span></td>
+            <td><strong>CDN card can render empty.</strong> The sidebar snapshots CDN health on mount, before <code>AuthProvider</code> finishes fetching config, and never refreshes automatically.</td>
+            <td><code>src/components/layout/RightSidebar.tsx:30-33</code></td>
+          </tr>
+          <tr>
+            <td>14</td><td><span class="severity sev-low">LOW</span></td>
+            <td><strong>Database mode is not honoured.</strong> A pool is created whenever a host/URL exists; <code>SQL_HOST</code> defaults to <code>localhost</code>, so memory mode still attempts a connection.</td>
+            <td><code>server/db/postgres.ts:17-35</code></td>
+          </tr>
+          <tr>
+            <td>15</td><td><span class="severity sev-low">LOW</span></td>
+            <td><strong>Light theme is incomplete.</strong> Many components hard-code dark backgrounds and white text, so switching to light leaves parts of the UI dark or low-contrast.</td>
+            <td>Various components</td>
+          </tr>
+          <tr>
+            <td>16</td><td><span class="severity sev-low">LOW</span></td>
+            <td><strong>“Copy link” deep links do not work.</strong> The copied <code>?post=…</code> URL is never parsed on load to open the thread.</td>
+            <td><code>src/components/feed/PostCard.tsx:120-126</code></td>
+          </tr>
+          <tr>
+            <td>17</td><td><span class="severity sev-note">NOTE</span></td>
+            <td><strong>Dead code and stale metadata.</strong> Unused components, unused dependencies, old README/Gemini instructions, Firebase files, and X-vs-VYORA branding inconsistencies remain in the repo.</td>
+            <td>Multiple files</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Additional observations</h3>
+      <ul>
+        <li><strong>Files are stored in memory.</strong> Uploaded media disappears on server restart; no disk or object storage is used.</li>
+        <li><strong>Post deletion leaves orphaned state.</strong> Related likes, bookmarks and notifications are not cleaned up.</li>
+        <li><strong>Quote-post counts are one-way.</strong> Creating a quote increments the quoted post's repost count but removing it does not decrement.</li>
+        <li><strong>Registration auto-follow is asymmetric.</strong> The new user follows <code>user_mukit</code>, but Mukit's follower count is not incremented.</li>
+        <li><strong>Seed notification text still references “X”</strong> rather than VYORA.</li>
+        <li><strong>Upload limit mismatch.</strong> The server advertises 10 MB, but base64 inflation inside a 10 MB JSON body means files near that size will be rejected by Express first.</li>
+        <li><strong>No rate limiting, input sanitisation, CSRF protection, or password hashing.</strong> Passwords are stored in plain text in memory.</li>
+        <li><strong>Committed Firebase API key.</strong> Client-side Firebase keys are normally public, but the unused config should be removed or restricted to avoid confusion.</li>
+        <li><strong>Production server bundle is not reproducible from package scripts.</strong> <code>server-dist/server.cjs</code> must currently be generated manually with esbuild.</li>
+      </ul>
+    </section>
+
+    <!-- ==================== 15. CHECKLIST ==================== -->
+    <section id="checklist">
+      <h2><span class="num">15</span>Fix Checklist</h2>
+      <p>Suggested order for turning this demo into a reliable application:</p>
+      <ol>
+        <li>Install dependencies and run <code>npm run lint</code>, <code>npm run build</code>, then start the server.</li>
+        <li>Seed or upsert users into PostgreSQL before writing posts; wrap writes in transactions; read from Postgres when connected.</li>
+        <li>Scope notifications by recipient and add a recipient field to every generated notification.</li>
+        <li>Store poll votes per user (for example, <code>Map&lt;userId:postId, optionIndex&gt;</code>).</li>
+        <li>Allow media-only posts by skipping the content check when media is present.</li>
+        <li>Remove the <code>|| password === 'vyora123'</code> bypass; hash passwords; return 401 when no token is supplied.</li>
+        <li>Whitelist fields accepted by the profile update endpoint.</li>
+        <li>Enforce <code>allowedMimeTypes</code> and the advertised upload size.</li>
+        <li>Add tests for auth, posts, poll voting, bookmarks and notifications.</li>
+        <li>Fix the bookmark key, message selection, CDN refresh and light-theme styling.</li>
+        <li>Remove unused components/dependencies and update README, metadata and <code>.env.example</code> branding.</li>
+        <li>Add a build script for the server bundle and a production-safe start path.</li>
+      </ol>
+
+      <div class="callout info">
+        <div class="callout-title">Bottom line</div>
+        <p>
+          VYORA is a well-structured prototype with a clean API boundary and a polished UI. It is not
+          yet a fully correct or production-ready system: the data layer is only half integrated with
+          PostgreSQL, several features are global instead of per-user, and authentication needs
+          hardening. The code does not show syntax errors, but full “works without errors” status
+          requires the dependency-backed test run described above.
+        </p>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <span>VYORA documentation.html</span>
+      <span>Static audit · 2026-11-03</span>
+      <span>No packages or tools installed</span>
+      <span>Node v24.21.0</span>
+    </footer>
+  </main>
+</div>
+
+<button class="top-btn" id="topBtn" title="Back to top" aria-label="Back to top">↑</button>
+
+<script>
+  (function () {
+    var links = Array.prototype.slice.call(document.querySelectorAll('.toc a[href^="#"]'));
+    var sections = links.map(function (link) {
+      return document.querySelector(link.getAttribute('href'));
+    }).filter(Boolean);
+
+    function setActive(id) {
+      links.forEach(function (link) {
+        link.classList.toggle('active', link.getAttribute('href') === '#' + id);
+      });
+    }
+
+    if ('IntersectionObserver' in window) {
+      var observer = new IntersectionObserver(function (entries) {
+        var visible = entries
+          .filter(function (entry) { return entry.isIntersecting; })
+          .sort(function (a, b) { return b.intersectionRatio - a.intersectionRatio; });
+        if (visible.length > 0) setActive(visible[0].target.id);
+      }, { rootMargin: '-15% 0px -70% 0px', threshold: [0, 0.25, 0.5, 1] });
+      sections.forEach(function (section) { observer.observe(section); });
+    }
+
+    var topBtn = document.getElementById('topBtn');
+    topBtn.addEventListener('click', function () {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
+    window.addEventListener('scroll', function () {
+      topBtn.style.opacity = window.scrollY > 400 ? '1' : '0';
+      topBtn.style.pointerEvents = window.scrollY > 400 ? 'auto' : 'none';
+    }, { passive: true });
+    topBtn.style.opacity = '0';
+    topBtn.style.pointerEvents = 'none';
+  })();
+</script>
+</body>
+</html>

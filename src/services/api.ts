@@ -1,99 +1,183 @@
 import { Post, User, Notification, Message, TrendItem, AppConfig, CDNInfo, BackendCodeFile } from '../types/index.ts';
 import { getBackendApiUrl } from '../config/backendUrl.ts';
 
+export interface AuthUser extends User {
+  email?: string | null;
+  emailVerified?: boolean;
+  createdAt?: number;
+}
+
+export interface AuthResponse {
+  authenticated: boolean;
+  user: AuthUser | null;
+  csrfToken?: string;
+  expiresAt?: number;
+  requireEmailVerification?: boolean;
+  emailVerificationRequired?: boolean;
+  email?: string;
+  message?: string;
+}
+
+class ApiError extends Error {
+  status: number;
+  code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
 class ApiService {
-  private currentUserId = 'user_mukit';
-  private authToken: string | null = typeof localStorage !== 'undefined' ? localStorage.getItem('vyora_auth_token') : null;
+  private csrfToken: string | null = null;
+  private refreshing: Promise<AuthResponse> | null = null;
 
-  public setCurrentUserId(id: string) {
-    this.currentUserId = id;
+  public setCsrfToken(token: string | null) {
+    this.csrfToken = token;
   }
 
-  public setAuthToken(token: string | null) {
-    this.authToken = token;
-    if (typeof localStorage !== 'undefined') {
-      if (token) {
-        localStorage.setItem('vyora_auth_token', token);
-      } else {
-        localStorage.removeItem('vyora_auth_token');
-      }
-    }
+  public getCsrfToken(): string | null {
+    return this.csrfToken;
   }
 
-  public getAuthToken(): string | null {
-    return this.authToken;
-  }
-
-  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  private async rawRequest<T>(endpoint: string, options: RequestInit = {}): Promise<{ data: T; response: Response }> {
     const backendUrl = getBackendApiUrl();
     const targetUrl = `${backendUrl}/api${endpoint}`;
-
+    const method = (options.method || 'GET').toUpperCase();
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'x-user-id': this.currentUserId,
+      Accept: 'application/json',
       ...((options.headers as Record<string, string>) || {}),
     };
 
-    if (this.authToken) {
-      headers['Authorization'] = `Bearer ${this.authToken}`;
-      headers['x-auth-token'] = this.authToken;
+    if (options.body !== undefined && !headers['Content-Type']) {
+      headers['Content-Type'] = 'application/json';
+    }
+    if (method !== 'GET' && method !== 'HEAD' && this.csrfToken) {
+      headers['X-CSRF-Token'] = this.csrfToken;
     }
 
-    const res = await fetch(targetUrl, {
+    const response = await fetch(targetUrl, {
       ...options,
+      method,
       headers,
+      credentials: 'same-origin',
+      cache: 'no-store',
     });
 
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.error || `Request failed with status ${res.status}`);
-    }
-
-    return res.json();
+    const data = await response.json().catch(() => ({} as T));
+    return { data: data as T, response };
   }
 
-  // --- Backend-Controlled Authentication APIs ---
-  public async login(username: string, password?: string): Promise<{ success: boolean; token: string; user: User }> {
-    const res = await this.request<{ success: boolean; token: string; user: User }>('/auth/login', {
+  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    let result = await this.rawRequest<T>(endpoint, options);
+    const errorCode = (result.data as { code?: string } | null)?.code;
+
+    if (
+      result.response.status === 403 &&
+      (errorCode === 'SESSION_REQUIRED' || errorCode === 'CSRF_INVALID')
+    ) {
+      await this.refreshSession();
+      result = await this.rawRequest<T>(endpoint, options);
+    }
+
+    if (!result.response.ok) {
+      const payload = result.data as { error?: string; code?: string } | null;
+      throw new ApiError(
+        payload?.error || `Request failed with status ${result.response.status}`,
+        result.response.status,
+        payload?.code,
+      );
+    }
+
+    return result.data;
+  }
+
+  private rememberSession(payload: AuthResponse): AuthResponse {
+    if (payload.csrfToken) this.csrfToken = payload.csrfToken;
+    return payload;
+  }
+
+  public async refreshSession(): Promise<AuthResponse> {
+    if (this.refreshing) return this.refreshing;
+    this.refreshing = this.rawRequest<AuthResponse>('/auth/session')
+      .then(({ data, response }) => {
+        if (!response.ok) {
+          throw new ApiError('Unable to start a secure session.', response.status);
+        }
+        return this.rememberSession(data);
+      })
+      .finally(() => {
+        this.refreshing = null;
+      });
+    return this.refreshing;
+  }
+
+  // --- Authentication ---
+  public async login(username: string, password: string): Promise<AuthResponse> {
+    const data = await this.request<AuthResponse>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ username, password }),
     });
-    if (res.token) {
-      this.setAuthToken(res.token);
-      this.setCurrentUserId(res.user.id);
-    }
-    return res;
+    return this.rememberSession(data);
   }
 
   public async register(data: {
     username: string;
-    name: string;
-    password?: string;
+    name?: string;
+    email: string;
+    password: string;
     avatarUrl?: string;
     bio?: string;
-  }): Promise<{ success: boolean; token: string; user: User }> {
-    const res = await this.request<{ success: boolean; token: string; user: User }>('/auth/register', {
+  }): Promise<AuthResponse> {
+    const res = await this.request<AuthResponse>('/auth/register', {
       method: 'POST',
-      body: JSON.stringify(data),
+      body: JSON.stringify({
+        username: data.username,
+        email: data.email,
+        password: data.password,
+      }),
     });
-    if (res.token) {
-      this.setAuthToken(res.token);
-      this.setCurrentUserId(res.user.id);
-    }
-    return res;
+    return this.rememberSession(res);
   }
 
-  public async getSession(): Promise<{ authenticated: boolean; user?: User; token?: string }> {
-    return this.request<{ authenticated: boolean; user?: User; token?: string }>('/auth/session');
+  public async getSession(): Promise<AuthResponse> {
+    const data = await this.request<AuthResponse>('/auth/session');
+    return this.rememberSession(data);
   }
 
-  public async logout(): Promise<{ success: boolean }> {
-    try {
-      await this.request<{ success: boolean }>('/auth/logout', { method: 'POST' });
-    } finally {
-      this.setAuthToken(null);
-    }
-    return { success: true };
+  public async logout(): Promise<AuthResponse> {
+    const data = await this.request<AuthResponse>('/auth/logout', { method: 'POST', body: '{}' });
+    return this.rememberSession(data);
+  }
+
+  public async forgotPassword(email: string): Promise<{ sent: boolean; message: string }> {
+    return this.request<{ sent: boolean; message: string }>('/auth/forgot-password', {
+      method: 'POST',
+      body: JSON.stringify({ email }),
+    });
+  }
+
+  public async resetPassword(token: string, password: string): Promise<{ reset: boolean; message: string }> {
+    return this.request<{ reset: boolean; message: string }>('/auth/reset-password', {
+      method: 'POST',
+      body: JSON.stringify({ token, password }),
+    });
+  }
+
+  public async changePassword(currentPassword: string, newPassword: string): Promise<{ changed: boolean; message: string }> {
+    return this.request<{ changed: boolean; message: string }>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
+  }
+
+  public async resendVerification(email?: string, username?: string): Promise<{ sent: boolean; message: string }> {
+    return this.request<{ sent: boolean; message: string }>('/auth/resend-verification', {
+      method: 'POST',
+      body: JSON.stringify({ email, username }),
+    });
   }
 
   public async getDemoAccounts(): Promise<{ accounts: Array<User & { defaultPassword?: string }> }> {
@@ -109,12 +193,11 @@ class ApiService {
     return this.request<{ cdns: CDNInfo[] }>('/cdn/health');
   }
 
-
   public getBackendCode(): Promise<{ files: BackendCodeFile[] }> {
     return this.request<{ files: BackendCodeFile[] }>('/backend-code');
   }
 
-  // Media & File Storage (Backend manages storage and provides file URLs)
+  // Media & File Storage
   public async uploadFile(file: File): Promise<{
     success: boolean;
     fileId: string;

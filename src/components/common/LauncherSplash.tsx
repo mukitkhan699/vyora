@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { ShieldCheck } from 'lucide-react';
 import { VyoraIcon } from './VyoraIcon.tsx';
 
 interface LauncherSplashProps {
@@ -6,106 +7,90 @@ interface LauncherSplashProps {
   appName?: string;
 }
 
+const BOOT_STEPS = [
+  { at: 0, progress: 18, label: 'Preparing secure workspace' },
+  { at: 260, progress: 48, label: 'Connecting to relay services' },
+  { at: 620, progress: 76, label: 'Restoring operator session' },
+  { at: 980, progress: 100, label: 'Ready to transmit' },
+];
+
 export const LauncherSplash: React.FC<LauncherSplashProps> = ({
   isLoading,
   appName = 'VYORA',
 }) => {
   const [visible, setVisible] = useState(true);
-  const [progress, setProgress] = useState(15);
-  const [statusText, setStatusText] = useState('Initiating quantum relay...');
+  const [progress, setProgress] = useState(BOOT_STEPS[0].progress);
+  const [statusText, setStatusText] = useState(BOOT_STEPS[0].label);
 
   useEffect(() => {
-    const timer1 = setTimeout(() => {
-      setProgress(45);
-      setStatusText('Connecting to Node.js backend cluster...');
-    }, 200);
-
-    const timer2 = setTimeout(() => {
-      setProgress(85);
-      setStatusText('Verifying operator session & multi-CDN pool...');
-    }, 500);
-
-    const timer3 = setTimeout(() => {
-      setProgress(100);
-      setStatusText('Relay ready. Entering VYORA Network.');
-    }, 800);
-
-    return () => {
-      clearTimeout(timer1);
-      clearTimeout(timer2);
-      clearTimeout(timer3);
-    };
+    const timers = BOOT_STEPS.slice(1).map((step) =>
+      setTimeout(() => {
+        setProgress(step.progress);
+        setStatusText(step.label);
+      }, step.at),
+    );
+    return () => timers.forEach(clearTimeout);
   }, []);
 
   useEffect(() => {
     if (!isLoading) {
       setProgress(100);
-      const exitTimer = setTimeout(() => {
-        setVisible(false);
-      }, 400);
+      setStatusText('Ready to transmit');
+      const exitTimer = setTimeout(() => setVisible(false), 420);
       return () => clearTimeout(exitTimer);
-    } else {
-      setVisible(true);
     }
+    setVisible(true);
   }, [isLoading]);
 
   if (!visible) return null;
 
   return (
     <div
-      className={`fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#070a0f] transition-all duration-500 select-none ${
-        !isLoading ? 'opacity-0 pointer-events-none scale-105' : 'opacity-100 scale-100'
+      role="status"
+      aria-live="polite"
+      className={`fixed inset-0 z-50 flex flex-col items-center justify-center bg-[#060910] select-none transition-all duration-500 ${
+        !isLoading ? 'pointer-events-none opacity-0' : 'opacity-100'
       }`}
     >
-      {/* Ambient background glow & grid accent */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(120,58,237,0.22),rgba(255,255,255,0))]" />
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(6,182,212,0.12)_0%,transparent_60%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_38%,rgba(0,242,254,0.1),transparent_32%),radial-gradient(circle_at_50%_62%,rgba(121,40,202,0.12),transparent_40%)]" />
+      <div className="pointer-events-none absolute inset-0 opacity-[0.07] [background-image:linear-gradient(rgba(255,255,255,0.18)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.18)_1px,transparent_1px)] [background-size:56px_56px]" />
 
-      {/* Futuristic Launcher Core */}
-      <div className="relative flex flex-col items-center z-10 px-6 max-w-sm w-full text-center">
-        {/* Pulsing Concentric Radar Rings */}
-        <div className="relative flex items-center justify-center mb-8">
-          <div className="absolute w-36 h-36 rounded-full border border-cyan-500/20 animate-ping opacity-30" />
-          <div className="absolute w-28 h-28 rounded-full border border-purple-500/30 animate-pulse" />
-          <div className="absolute w-20 h-20 rounded-full bg-gradient-to-tr from-purple-600/30 via-cyan-400/20 to-pink-500/20 blur-xl animate-pulse" />
-          
-          {/* Main App Launcher Icon */}
-          <div className="relative transform hover:scale-105 transition-transform duration-300 drop-shadow-[0_0_25px_rgba(0,242,254,0.5)]">
-            <VyoraIcon size="xl" glow={true} className="!w-20 !h-20" />
+      <div className="relative z-10 flex w-full max-w-xs flex-col items-center px-6 text-center">
+        <div className="relative mb-7 flex h-24 w-24 items-center justify-center">
+          <div className="absolute inset-0 rounded-[28px] border border-white/[0.08] bg-white/[0.025] backdrop-blur-sm" />
+          <div className="absolute inset-1 rounded-[24px] border border-cyan-400/10" />
+          <div className="absolute -inset-3 rounded-[34px] border border-cyan-400/10 animate-[spin_9s_linear_infinite]" />
+          <div className="absolute -inset-3 rounded-[34px] border-t border-cyan-300/50 animate-[spin_2.4s_linear_infinite]" />
+          <VyoraIcon size="xl" glow className="!h-12 !w-12" />
+        </div>
+
+        <h1 className="bg-gradient-to-r from-purple-300 via-sky-300 to-cyan-300 bg-clip-text text-3xl font-black tracking-tight text-transparent">
+          {appName}
+        </h1>
+        <p className="mt-1.5 text-[10px] font-mono uppercase tracking-[0.3em] text-cyan-300/70">
+          Global transmission network
+        </p>
+
+        <div className="mt-8 w-full">
+          <div className="h-1 w-full overflow-hidden rounded-full bg-white/[0.07]">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-purple-400 via-sky-400 to-cyan-300 transition-all duration-500 ease-out"
+              style={{ width: `${progress}%` }}
+            />
           </div>
-        </div>
-
-        {/* Brand Name & Tagline */}
-        <div className="space-y-1 mb-8">
-          <h1 className="text-4xl font-black tracking-tight bg-gradient-to-r from-purple-400 via-sky-300 to-cyan-300 bg-clip-text text-transparent drop-shadow-sm">
-            {appName}
-          </h1>
-          <p className="text-xs uppercase tracking-[0.25em] text-cyan-300/80 font-mono font-semibold">
-            Global Transmission Protocol
-          </p>
-        </div>
-
-        {/* Minimal Progress Bar */}
-        <div className="w-full bg-neutral-900/90 rounded-full h-1.5 p-0.5 border border-white/[0.08] overflow-hidden mb-3">
-          <div
-            className="h-full bg-gradient-to-r from-purple-500 via-sky-400 to-cyan-400 rounded-full transition-all duration-300 ease-out shadow-[0_0_10px_rgba(0,242,254,0.7)]"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-
-        {/* Status Telemetry */}
-        <div className="flex items-center justify-between w-full text-[11px] font-mono text-neutral-400 px-1">
-          <span className="flex items-center gap-1.5 truncate">
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-            {statusText}
-          </span>
-          <span className="text-cyan-400 font-bold ml-2">{progress}%</span>
+          <div className="mt-3 flex items-center justify-between gap-3 text-[10px] font-mono">
+            <span className="flex min-w-0 items-center gap-1.5 text-neutral-500">
+              <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-emerald-400" />
+              <span className="truncate">{statusText}</span>
+            </span>
+            <span className="shrink-0 tabular-nums text-neutral-400">{progress}%</span>
+          </div>
         </div>
       </div>
 
-      {/* Footer Branding Note */}
-      <div className="absolute bottom-6 text-[10px] font-mono tracking-widest text-neutral-600 uppercase">
-        Node.js Backend Relay · PostgreSQL Ready
+      <div className="absolute bottom-7 flex items-center gap-2 text-[10px] font-mono uppercase tracking-[0.22em] text-neutral-600">
+        <ShieldCheck className="h-3 w-3 text-neutral-500" />
+        Secure session · Local-first runtime
       </div>
     </div>
   );

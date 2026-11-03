@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ThemeProvider, useTheme } from './context/ThemeContext.tsx';
+import { ThemeProvider } from './context/ThemeContext.tsx';
 import { AuthProvider, useAuth } from './context/AuthContext.tsx';
 import { Sidebar } from './components/layout/Sidebar.tsx';
 import { RightSidebar } from './components/layout/RightSidebar.tsx';
@@ -14,12 +14,11 @@ import { BookmarksView } from './components/bookmarks/BookmarksView.tsx';
 import { MessagesView } from './components/messages/MessagesView.tsx';
 import { ProfileView } from './components/profile/ProfileView.tsx';
 import { LauncherSplash } from './components/common/LauncherSplash.tsx';
-import { AuthModal } from './components/auth/AuthModal.tsx';
+import { LoginScreen } from './components/auth/LoginScreen.tsx';
 import { Post } from './types/index.ts';
 
 function MainApp() {
-  const { theme } = useTheme();
-  const { isLoading, isAuthModalOpen, setIsAuthModalOpen, appConfig } = useAuth();
+  const { appConfig } = useAuth();
 
   const [currentTab, setCurrentTab] = useState<string>('home');
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
@@ -54,9 +53,6 @@ function MainApp() {
 
   return (
     <div className="min-h-screen flex justify-center selection:bg-sky-500 selection:text-white">
-      {/* App Launcher Loading Splash Screen */}
-      <LauncherSplash isLoading={isLoading} appName={appConfig?.appName} />
-
       {/* 3-Column Responsive Container */}
       <div className="flex w-full max-w-7xl justify-between">
         {/* Left Navigation Sidebar (Node.js engine & configuration tabs removed) */}
@@ -143,12 +139,6 @@ function MainApp() {
         }}
       />
 
-      {/* Backend-Controlled Authentication Modal */}
-      <AuthModal
-        isOpen={isAuthModalOpen}
-        onClose={() => setIsAuthModalOpen(false)}
-      />
-
       {/* Post Detail / Thread Modal */}
       <PostDetailModal
         postId={selectedPostId}
@@ -176,11 +166,25 @@ function MainApp() {
   );
 }
 
+function AppShell() {
+  const { isLoading, isAuthenticated, appConfig } = useAuth();
+
+  if (isLoading) {
+    return <LauncherSplash isLoading={true} appName={appConfig?.appName} />;
+  }
+
+  if (!isAuthenticated) {
+    return <LoginScreen />;
+  }
+
+  return <MainApp />;
+}
+
 export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <MainApp />
+        <AppShell />
       </AuthProvider>
     </ThemeProvider>
   );

@@ -1,5 +1,26 @@
-import dotenv from 'dotenv';
-dotenv.config();
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+function readEnvFile(): void {
+  const candidates = [path.join(rootDir, '.env'), path.join(process.cwd(), '.env')];
+  for (const candidate of candidates) {
+    try {
+      process.loadEnvFile(candidate);
+      return;
+    } catch {
+      // No .env file, or this Node version cannot load it: environment variables win.
+    }
+  }
+}
+
+readEnvFile();
+
+function bool(value: string | undefined, fallback: boolean): boolean {
+  if (value === undefined) return fallback;
+  return value !== 'false' && value !== '0';
+}
 
 export interface ServerConfig {
   port: number;
@@ -25,16 +46,6 @@ export interface ServerConfig {
     avatars: string[];
     attachments: string[];
   };
-  database: {
-    type: 'postgres' | 'memory' | 'auto';
-    url?: string;
-    host: string;
-    port: number;
-    user: string;
-    password?: string;
-    database: string;
-    ssl: boolean;
-  };
   endpoints: {
     config: string;
     cdnHealth: string;
@@ -51,34 +62,36 @@ export interface ServerConfig {
   };
 }
 
-// Parse comma-separated CDN links from environment
-const rawCdns = process.env.CDN_URLS || process.env.VITE_CDN_URLS || 'https://images.unsplash.com,https://picsum.photos,https://avatars.githubusercontent.com';
+const rawCdns =
+  process.env.CDN_URLS ||
+  process.env.VITE_CDN_URLS ||
+  'https://images.unsplash.com,https://picsum.photos,https://avatars.githubusercontent.com';
 const parsedCdns = rawCdns
   .split(',')
-  .map(s => s.trim())
+  .map((entry) => entry.trim())
   .filter(Boolean);
 
 export const config: ServerConfig = {
-  port: parseInt(process.env.PORT || '3000', 10),
+  port: Number.parseInt(process.env.PORT || '3000', 10),
   appName: process.env.APP_NAME || 'VYORA',
   appTagline: process.env.APP_TAGLINE || 'Decoupled Global Social Intelligence Network',
-  appDescription: process.env.APP_DESCRIPTION || 'High-frequency social transmission platform powered by an autonomous Node.js API, multi-CDN edge relay, and PostgreSQL.',
+  appDescription:
+    process.env.APP_DESCRIPTION ||
+    'High-frequency social transmission platform powered by an autonomous dependency-free Node.js API, multi-CDN edge relay, and SQLite-backed authentication.',
   brandIcon: 'VYORA',
-  defaultTheme: (process.env.DEFAULT_THEME as 'dark' | 'dim' | 'light') || 'dark',
-  defaultAccentColor: (process.env.DEFAULT_ACCENT_COLOR as any) || 'cyan',
-  maxPostLength: parseInt(process.env.MAX_POST_LENGTH || '280', 10),
-  enablePolls: process.env.ENABLE_POLLS !== 'false',
-  enableBookmarks: process.env.ENABLE_BOOKMARKS !== 'false',
-  enableDirectMessages: process.env.ENABLE_DIRECT_MESSAGES !== 'false',
-  allowMediaUploads: process.env.ALLOW_MEDIA_UPLOADS !== 'false',
+  defaultTheme: (process.env.DEFAULT_THEME as ServerConfig['defaultTheme']) || 'dark',
+  defaultAccentColor: (process.env.DEFAULT_ACCENT_COLOR as ServerConfig['defaultAccentColor']) || 'cyan',
+  maxPostLength: Number.parseInt(process.env.MAX_POST_LENGTH || '280', 10),
+  enablePolls: bool(process.env.ENABLE_POLLS, true),
+  enableBookmarks: bool(process.env.ENABLE_BOOKMARKS, true),
+  enableDirectMessages: bool(process.env.ENABLE_DIRECT_MESSAGES, true),
+  allowMediaUploads: bool(process.env.ALLOW_MEDIA_UPLOADS, true),
   enableTelemetryPulse: true,
-  cdnUrls: parsedCdns.length > 0 ? parsedCdns : [
-    'https://images.unsplash.com',
-    'https://picsum.photos',
-    'https://avatars.githubusercontent.com'
-  ],
+  cdnUrls: parsedCdns.length > 0
+    ? parsedCdns
+    : ['https://images.unsplash.com', 'https://picsum.photos', 'https://avatars.githubusercontent.com'],
   fileConfig: {
-    uploadLimitBytes: 10 * 1024 * 1024, // 10MB
+    uploadLimitBytes: 10 * 1024 * 1024,
     filesBaseUrl: '/api/files',
     allowedMimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml'],
   },
@@ -99,16 +112,6 @@ export const config: ServerConfig = {
       'https://images.unsplash.com/photo-1550751827-4bd374c3f58b?w=1000&auto=format&fit=crop&q=80',
     ],
   },
-  database: {
-    type: (process.env.DATABASE_TYPE as 'postgres' | 'memory' | 'auto') || 'auto',
-    url: process.env.DATABASE_URL,
-    host: process.env.SQL_HOST || 'localhost',
-    port: parseInt(process.env.SQL_PORT || '5432', 10),
-    user: process.env.SQL_USER || 'postgres',
-    password: process.env.SQL_PASSWORD || '',
-    database: process.env.SQL_DB_NAME || 'vyora_social',
-    ssl: process.env.SQL_SSL === 'true',
-  },
   endpoints: {
     config: '/api/config',
     cdnHealth: '/api/cdn/health',
@@ -124,4 +127,3 @@ export const config: ServerConfig = {
     mediaCatalog: '/api/media/catalog',
   },
 };
-

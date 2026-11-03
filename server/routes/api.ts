@@ -1,26 +1,10 @@
-import { Router, Request, Response } from 'express';
-import fs from 'fs';
-import path from 'path';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
 import { config } from '../config.ts';
 import { dbAdapter } from '../db/adapter.ts';
+import { getAuthUser, handleAuthRequest, setAuthError } from '../auth.ts';
 
-export const apiRouter = Router();
-
-// Middleware helper to get authenticated user ID from Bearer token, session header, or fallback
-function getUserId(req: Request): string {
-  const authHeader = req.headers['authorization'];
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    const token = authHeader.substring(7).trim();
-    // Validate session in store
-    const sessionUser = (dbAdapter as any).validateSessionSync ? (dbAdapter as any).validateSessionSync(token) : null;
-    if (sessionUser) return sessionUser.id;
-  }
-  const explicitToken = req.headers['x-auth-token'] as string;
-  const explicitUser = (req.headers['x-user-id'] as string);
-  return explicitUser || 'user_mukit';
-}
-
-// In-memory binary file store managed entirely by the Node.js backend
 interface StoredFile {
   id: string;
   filename: string;
@@ -32,546 +16,456 @@ interface StoredFile {
 }
 
 const fileStorage = new Map<string, StoredFile>();
+const MAX_JSON_BYTES = 12 * 1024 * 1024;
 
-// ==========================================
-// 0. BACKEND-CONTROLLED AUTHENTICATION ROUTES
-// ==========================================
+function sendJson(res: ServerResponse, status: number, payload: unknown): void {
+  const body = Buffer.from(JSON.stringify(payload));
+  res.statusCode = status;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.setHeader('Content-Length', body.length);
+  res.setHeader('Cache-Control', 'no-store');
+  res.end(body);
+}
 
-// Authenticate user credentials & issue backend session token
-apiRouter.post('/auth/login', async (req: Request, res: Response) => {
-  try {
-    const { username, password } = req.body;
-    if (!username || !username.trim()) {
-      return res.status(400).json({ error: 'Username or Operator handle is required' });
+function sendError(res: ServerResponse, status: number, message: string): void {
+  sendJson(res, status, { error: message });
+}
+
+async function readJson(req: IncomingMessage, maxBytes = 64 * 1024): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.length;
+    if (total > maxBytes) {
+      req.resume();
+      throw new Error('Request body is too large.');
     }
-
-    const { user, token } = await dbAdapter.authenticate(username, password);
-
-    res.json({
-      success: true,
-      token,
-      user,
-      message: `Welcome back, Operator @${user.username}`,
-    });
-  } catch (err: any) {
-    res.status(401).json({ error: err.message || 'Authentication failed' });
+    chunks.push(buffer);
   }
-});
-
-// Register new operator account on backend
-apiRouter.post('/auth/register', async (req: Request, res: Response) => {
-  try {
-    const { username, name, password, avatarUrl, bio } = req.body;
-    if (!username || !username.trim()) {
-      return res.status(400).json({ error: 'Username is required' });
-    }
-
-    const { user, token } = await dbAdapter.register({
-      username,
-      name,
-      password,
-      avatarUrl,
-      bio,
-    });
-
-    res.status(201).json({
-      success: true,
-      token,
-      user,
-      message: `Operator @${user.username} successfully registered on VYORA Network`,
-    });
-  } catch (err: any) {
-    res.status(400).json({ error: err.message || 'Registration failed' });
+  if (total === 0) return {};
+  const parsed = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Request body must be a JSON object.');
   }
-});
+  return parsed as Record<string, unknown>;
+}
 
-// Validate current session against backend
-apiRouter.get('/auth/session', async (req: Request, res: Response) => {
-  try {
-    const authHeader = req.headers['authorization'];
-    let token = '';
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      token = authHeader.substring(7).trim();
-    } else {
-      token = (req.headers['x-auth-token'] as string) || (req.headers['x-user-id'] as string) || '';
-    }
+function getCurrentUserId(req: IncomingMessage): string {
+  const authUser = getAuthUser(req);
+  if (authUser) return dbAdapter.syncAuthProfile(authUser).id;
+  return 'user_mukit';
+}
 
-    if (!token) {
-      return res.status(401).json({ authenticated: false, error: 'No active session token provided' });
-    }
-
-    const user = await dbAdapter.validateSession(token);
-    if (!user) {
-      return res.status(401).json({ authenticated: false, error: 'Session expired or invalid' });
-    }
-
-    res.json({
-      authenticated: true,
-      token,
-      user,
-    });
-  } catch (err: any) {
-    res.status(500).json({ authenticated: false, error: err.message });
+function requireUserId(req: IncomingMessage, res: ServerResponse): string | null {
+  const authUser = getAuthUser(req);
+  if (!authUser) {
+    sendError(res, 401, 'Authentication required.');
+    return null;
   }
-});
+  return dbAdapter.syncAuthProfile(authUser).id;
+}
 
-// Invalidate session on backend
-apiRouter.post('/auth/logout', async (req: Request, res: Response) => {
+function getPathSegments(pathname: string): string[] {
+  return pathname.split('/').filter(Boolean);
+}
+
+export async function handleApiRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+): Promise<boolean> {
+  const pathname = url.pathname;
+  const method = (req.method || 'GET').toUpperCase();
+
   try {
-    const authHeader = req.headers['authorization'];
-    let token = '';
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      token = authHeader.substring(7).trim();
-    } else {
-      token = (req.headers['x-auth-token'] as string) || '';
-    }
+    if (await handleAuthRequest(req, res, url)) return true;
 
-    if (token) {
-      await dbAdapter.logout(token);
-    }
-
-    res.json({ success: true, message: 'Operator session terminated' });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Get demo accounts for quick testing
-apiRouter.get('/auth/demo-accounts', (req: Request, res: Response) => {
-  try {
-    const accounts = dbAdapter.getDemoAccounts();
-    res.json({
-      accounts: accounts.map(a => ({
-        ...a.user,
-        defaultPassword: a.defaultPassword,
-      })),
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-
-// 1. App Configuration & Centralized Management
-apiRouter.get('/config', (req: Request, res: Response) => {
-  const dbStatus = dbAdapter.getStatus();
-  res.json({
-    appName: config.appName,
-    appTagline: config.appTagline,
-    appDescription: config.appDescription,
-    brandIcon: config.brandIcon,
-    defaultTheme: config.defaultTheme,
-    defaultAccentColor: config.defaultAccentColor,
-    maxPostLength: config.maxPostLength,
-    enablePolls: config.enablePolls,
-    enableBookmarks: config.enableBookmarks,
-    enableDirectMessages: config.enableDirectMessages,
-    allowMediaUploads: config.allowMediaUploads,
-    enableTelemetryPulse: config.enableTelemetryPulse,
-    cdnUrls: config.cdnUrls,
-    databaseType: config.database.type,
-    databaseStatus: dbStatus,
-    endpoints: config.endpoints,
-    fileEndpoints: {
-      upload: '/api/upload',
-      filesBase: '/api/files',
-      mediaCatalog: '/api/media/catalog',
-    },
-    nodeVersion: process.version,
-    serverUptime: Math.round(process.uptime()),
-    isConfigManagedByBackend: true,
-  });
-});
-
-// 2. Media Catalog & CDN Presets (Provided by Backend)
-apiRouter.get('/media/catalog', (req: Request, res: Response) => {
-  res.json({
-    avatars: config.mediaCatalog.avatars,
-    attachments: config.mediaCatalog.attachments,
-    cdns: config.cdnUrls,
-  });
-});
-
-// 3. File Upload Handler (Backend-Managed File Storage)
-apiRouter.post('/upload', (req: Request, res: Response) => {
-  try {
-    const currentUserId = getUserId(req);
-    const { data, filename, mimeType: providedMime } = req.body;
-
-    if (!data || typeof data !== 'string') {
-      return res.status(400).json({ error: 'Missing file payload or data' });
-    }
-
-    let mimeType = providedMime || 'application/octet-stream';
-    let base64Data = data;
-
-    // Parse Data URL scheme if present (e.g., data:image/png;base64,....)
-    if (data.startsWith('data:')) {
-      const match = data.match(/^data:([a-zA-Z0-9\/+-]+);base64,(.+)$/);
-      if (match) {
-        mimeType = match[1];
-        base64Data = match[2];
-      }
-    }
-
-    const fileBuffer = Buffer.from(base64Data, 'base64');
-    if (fileBuffer.length > config.fileConfig.uploadLimitBytes) {
-      return res.status(413).json({
-        error: `File exceeds maximum upload limit of ${Math.round(config.fileConfig.uploadLimitBytes / (1024 * 1024))}MB`,
+    if (pathname === '/api/auth/demo-accounts' && method === 'GET') {
+      const accounts = dbAdapter.getDemoAccounts();
+      sendJson(res, 200, {
+        accounts: accounts.map((entry) => ({
+          ...entry.user,
+          defaultPassword: entry.defaultPassword,
+        })),
       });
+      return true;
     }
 
-    const fileId = `file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-    const cleanFilename = filename || `${fileId}.${mimeType.split('/')[1] || 'bin'}`;
+    if (pathname === '/api/config' && method === 'GET') {
+      sendJson(res, 200, {
+        appName: config.appName,
+        appTagline: config.appTagline,
+        appDescription: config.appDescription,
+        brandIcon: config.brandIcon,
+        defaultTheme: config.defaultTheme,
+        defaultAccentColor: config.defaultAccentColor,
+        maxPostLength: config.maxPostLength,
+        enablePolls: config.enablePolls,
+        enableBookmarks: config.enableBookmarks,
+        enableDirectMessages: config.enableDirectMessages,
+        allowMediaUploads: config.allowMediaUploads,
+        enableTelemetryPulse: config.enableTelemetryPulse,
+        cdnUrls: config.cdnUrls,
+        databaseType: 'SQLite + memory',
+        databaseStatus: dbAdapter.getStatus(),
+        endpoints: config.endpoints,
+        fileEndpoints: {
+          upload: '/api/upload',
+          filesBase: '/api/files',
+          mediaCatalog: '/api/media/catalog',
+        },
+        nodeVersion: process.version,
+        serverUptime: Math.round(process.uptime()),
+        isConfigManagedByBackend: true,
+      });
+      return true;
+    }
 
-    const storedFile: StoredFile = {
-      id: fileId,
-      filename: cleanFilename,
-      mimeType,
-      data: fileBuffer,
-      size: fileBuffer.length,
-      uploadedBy: currentUserId,
-      createdAt: new Date().toISOString(),
-    };
+    if (pathname === '/api/media/catalog' && method === 'GET') {
+      sendJson(res, 200, {
+        avatars: config.mediaCatalog.avatars,
+        attachments: config.mediaCatalog.attachments,
+        cdns: config.cdnUrls,
+      });
+      return true;
+    }
 
-    fileStorage.set(fileId, storedFile);
-
-    // Provide the clean backend file URL and metadata to client
-    const fileUrl = `/api/files/${fileId}`;
-
-    res.status(201).json({
-      success: true,
-      fileId,
-      url: fileUrl,
-      filename: cleanFilename,
-      mimeType,
-      size: fileBuffer.length,
-      createdAt: storedFile.createdAt,
-    });
-  } catch (err: any) {
-    res.status(500).json({ error: `File upload failed: ${err.message}` });
-  }
-});
-
-// 4. File Serving Route (Serves backend-hosted media & user uploads)
-apiRouter.get('/files/:id', (req: Request, res: Response) => {
-  const fileId = req.params.id;
-  const file = fileStorage.get(fileId);
-
-  if (!file) {
-    return res.status(404).json({ error: 'File not found on backend server' });
-  }
-
-  res.setHeader('Content-Type', file.mimeType);
-  res.setHeader('Content-Length', file.size);
-  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-  res.setHeader('Content-Disposition', `inline; filename="${file.filename}"`);
-  res.send(file.data);
-});
-
-// List uploaded files
-apiRouter.get('/files', (req: Request, res: Response) => {
-  const list = Array.from(fileStorage.values()).map(f => ({
-    id: f.id,
-    url: `/api/files/${f.id}`,
-    filename: f.filename,
-    mimeType: f.mimeType,
-    size: f.size,
-    uploadedBy: f.uploadedBy,
-    createdAt: f.createdAt,
-  }));
-  res.json({ files: list });
-});
-
-// Provide transparent access to backend Node.js source code
-apiRouter.get('/backend-code', (req: Request, res: Response) => {
-  try {
-    const files = [
-      { name: 'server.ts', path: 'server.ts', description: 'Application entry point & static asset handler' },
-      { name: 'server/config.ts', path: 'server/config.ts', description: 'Centralized environment & platform configuration' },
-      { name: 'server/index.ts', path: 'server/index.ts', description: 'Express middleware, CORS & route registration' },
-      { name: 'server/routes/api.ts', path: 'server/routes/api.ts', description: 'RESTful API controllers & validation' },
-      { name: 'server/db/adapter.ts', path: 'server/db/adapter.ts', description: 'Unified data layer for PostgreSQL & resilient fallback' },
-      { name: 'server/db/postgres.ts', path: 'server/db/postgres.ts', description: 'PostgreSQL connection pool & relational migrations' },
-      { name: 'server/db/store.ts', path: 'server/db/store.ts', description: 'In-memory state engine & initial VYORA seed data' },
-    ];
-
-    const fileContents = files.map(f => {
-      let content = '';
+    if (pathname === '/api/upload' && method === 'POST') {
       try {
-        content = fs.readFileSync(path.join(process.cwd(), f.path), 'utf-8');
-      } catch (err: any) {
-        content = `// Error reading ${f.path}: ${err.message}`;
-      }
-      return {
-        ...f,
-        code: content,
-      };
-    });
+        const currentUserId = getCurrentUserId(req);
+        const body = await readJson(req, MAX_JSON_BYTES);
+        const { data, filename, mimeType: providedMime } = body;
 
-    res.json({ files: fileContents });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
+        if (!data || typeof data !== 'string') {
+          sendError(res, 400, 'Missing file payload or data.');
+          return true;
+        }
 
-// 2. CDN Health check endpoint
-apiRouter.get('/cdn/health', async (req: Request, res: Response) => {
-  const results = await Promise.all(
-    config.cdnUrls.map(async (url) => {
-      const startTime = Date.now();
-      try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 3500);
-        const response = await fetch(url, {
-          method: 'HEAD',
-          signal: controller.signal,
+        let mimeType = typeof providedMime === 'string' ? providedMime : 'application/octet-stream';
+        let base64Data = data;
+        if (data.startsWith('data:')) {
+          const match = data.match(/^data:([a-zA-Z0-9/+.-]+);base64,(.+)$/);
+          if (match) {
+            mimeType = match[1];
+            base64Data = match[2];
+          }
+        }
+
+        const fileBuffer = Buffer.from(base64Data, 'base64');
+        if (fileBuffer.length > config.fileConfig.uploadLimitBytes) {
+          sendError(
+            res,
+            413,
+            `File exceeds maximum upload limit of ${Math.round(config.fileConfig.uploadLimitBytes / (1024 * 1024))}MB.`,
+          );
+          return true;
+        }
+
+        const fileId = `file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+        const cleanFilename =
+          typeof filename === 'string' && filename
+            ? filename
+            : `${fileId}.${mimeType.split('/')[1] || 'bin'}`;
+
+        const storedFile: StoredFile = {
+          id: fileId,
+          filename: cleanFilename,
+          mimeType,
+          data: fileBuffer,
+          size: fileBuffer.length,
+          uploadedBy: currentUserId,
+          createdAt: new Date().toISOString(),
+        };
+        fileStorage.set(fileId, storedFile);
+
+        sendJson(res, 201, {
+          success: true,
+          fileId,
+          url: `/api/files/${fileId}`,
+          filename: cleanFilename,
+          mimeType,
+          size: fileBuffer.length,
+          createdAt: storedFile.createdAt,
         });
-        clearTimeout(timeout);
-        const latencyMs = Date.now() - startTime;
-        return {
-          url,
-          name: new URL(url).hostname,
-          status: response.ok || response.status < 500 ? 'active' : 'fallback',
-          latencyMs,
-          statusCode: response.status,
-        };
-      } catch (err: any) {
-        return {
-          url,
-          name: new URL(url).hostname,
-          status: 'offline',
-          latencyMs: Date.now() - startTime,
-          error: err.message,
-        };
+      } catch (error) {
+        sendError(res, 500, `File upload failed: ${(error as Error).message}`);
       }
-    })
-  );
-  res.json({ cdns: results });
-});
-
-// 3. Posts Feed
-apiRouter.get('/posts', async (req: Request, res: Response) => {
-  try {
-    const currentUserId = getUserId(req);
-    const feedType = (req.query.feed as 'for-you' | 'following') || 'for-you';
-    const authorId = req.query.authorId as string | undefined;
-
-    const posts = await dbAdapter.getPosts(currentUserId, feedType, authorId);
-    res.json(posts);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-apiRouter.post('/posts', async (req: Request, res: Response) => {
-  try {
-    const authorId = getUserId(req);
-    const { content, mediaUrls, pollOptions, replyToId, quotePostId } = req.body;
-
-    if (!content || !content.trim()) {
-      return res.status(400).json({ error: 'Post content cannot be empty' });
+      return true;
     }
 
-    if (content.length > config.maxPostLength) {
-      return res.status(400).json({ error: `Post exceeds maximum length of ${config.maxPostLength} characters` });
+    const fileMatch = /^\/api\/files\/([^/]+)$/.exec(pathname);
+    if (fileMatch && method === 'GET') {
+      const file = fileStorage.get(fileMatch[1]);
+      if (!file) {
+        sendError(res, 404, 'File not found on backend server.');
+        return true;
+      }
+      res.statusCode = 200;
+      res.setHeader('Content-Type', file.mimeType);
+      res.setHeader('Content-Length', file.size);
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      res.setHeader('Content-Disposition', `inline; filename="${file.filename.replace(/"/g, '')}"`);
+      res.end(file.data);
+      return true;
     }
 
-    const newPost = await dbAdapter.createPost(
-      authorId,
-      content.trim(),
-      mediaUrls,
-      pollOptions,
-      replyToId,
-      quotePostId
-    );
-
-    res.status(201).json(newPost);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-apiRouter.get('/posts/:id', async (req: Request, res: Response) => {
-  try {
-    const currentUserId = getUserId(req);
-    const result = await dbAdapter.getPostById(req.params.id, currentUserId);
-    if (!result.post) {
-      return res.status(404).json({ error: 'Post not found' });
+    if (pathname === '/api/files' && method === 'GET') {
+      sendJson(res, 200, {
+        files: Array.from(fileStorage.values()).map((file) => ({
+          id: file.id,
+          url: `/api/files/${file.id}`,
+          filename: file.filename,
+          mimeType: file.mimeType,
+          size: file.size,
+          uploadedBy: file.uploadedBy,
+          createdAt: file.createdAt,
+        })),
+      });
+      return true;
     }
-    res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
-apiRouter.delete('/posts/:id', async (req: Request, res: Response) => {
-  try {
-    const currentUserId = getUserId(req);
-    const success = await dbAdapter.deletePost(currentUserId, req.params.id);
-    if (!success) {
-      return res.status(404).json({ error: 'Post not found' });
+    if (pathname === '/api/backend-code' && method === 'GET') {
+      const files = [
+        { name: 'server.ts', path: 'server.ts', description: 'Development entry point (Vite middleware in dev)' },
+        { name: 'server/index.ts', path: 'server/index.ts', description: 'Dependency-free HTTP server and static asset handler' },
+        { name: 'server/config.ts', path: 'server/config.ts', description: 'Environment & platform configuration' },
+        { name: 'server/auth.ts', path: 'server/auth.ts', description: 'Scrypt authentication, sessions, CSRF & verification' },
+        { name: 'server/routes/api.ts', path: 'server/routes/api.ts', description: 'REST API handlers' },
+        { name: 'server/db/adapter.ts', path: 'server/db/adapter.ts', description: 'Social data adapter' },
+        { name: 'server/db/store.ts', path: 'server/db/store.ts', description: 'In-memory social state and seed data' },
+      ];
+      sendJson(res, 200, {
+        files: files.map((file) => {
+          let code = '';
+          try {
+            code = fs.readFileSync(path.join(process.cwd(), file.path), 'utf-8');
+          } catch (error) {
+            code = `// Error reading ${file.path}: ${(error as Error).message}`;
+          }
+          return { ...file, code };
+        }),
+      });
+      return true;
     }
-    res.json({ success: true });
-  } catch (err: any) {
-    res.status(403).json({ error: err.message });
-  }
-});
 
-// Like
-apiRouter.post('/posts/:id/like', async (req: Request, res: Response) => {
-  try {
-    const currentUserId = getUserId(req);
-    const result = await dbAdapter.toggleLike(currentUserId, req.params.id);
-    res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Repost
-apiRouter.post('/posts/:id/repost', async (req: Request, res: Response) => {
-  try {
-    const currentUserId = getUserId(req);
-    const result = await dbAdapter.toggleRepost(currentUserId, req.params.id);
-    res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Bookmark
-apiRouter.post('/posts/:id/bookmark', async (req: Request, res: Response) => {
-  try {
-    const currentUserId = getUserId(req);
-    const result = await dbAdapter.toggleBookmark(currentUserId, req.params.id);
-    res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Poll Vote
-apiRouter.post('/posts/:id/poll/vote', async (req: Request, res: Response) => {
-  try {
-    const currentUserId = getUserId(req);
-    const { optionIndex } = req.body;
-    if (typeof optionIndex !== 'number') {
-      return res.status(400).json({ error: 'optionIndex must be a number' });
+    if (pathname === '/api/cdn/health' && method === 'GET') {
+      const results = await Promise.all(
+        config.cdnUrls.map(async (cdnUrl) => {
+          const startTime = Date.now();
+          try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 3500);
+            const response = await fetch(cdnUrl, { method: 'HEAD', signal: controller.signal });
+            clearTimeout(timeout);
+            return {
+              url: cdnUrl,
+              name: new URL(cdnUrl).hostname,
+              status: response.ok || response.status < 500 ? 'active' : 'fallback',
+              latencyMs: Date.now() - startTime,
+              statusCode: response.status,
+            };
+          } catch (error) {
+            return {
+              url: cdnUrl,
+              name: new URL(cdnUrl).hostname,
+              status: 'offline',
+              latencyMs: Date.now() - startTime,
+              error: (error as Error).message,
+            };
+          }
+        }),
+      );
+      sendJson(res, 200, { cdns: results });
+      return true;
     }
-    const updatedPost = await dbAdapter.votePoll(currentUserId, req.params.id, optionIndex);
-    res.json(updatedPost);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
-// 4. Users
-apiRouter.get('/users', async (req: Request, res: Response) => {
-  try {
-    const users = await dbAdapter.getUsers();
-    res.json(users);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-apiRouter.get('/users/:username', async (req: Request, res: Response) => {
-  try {
-    const user = await dbAdapter.getUserByUsername(req.params.username);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
+    if (pathname === '/api/posts' && method === 'GET') {
+      const currentUserId = getCurrentUserId(req);
+      const feedType = (url.searchParams.get('feed') as 'for-you' | 'following') || 'for-you';
+      const authorId = url.searchParams.get('authorId') || undefined;
+      sendJson(res, 200, await dbAdapter.getPosts(currentUserId, feedType, authorId));
+      return true;
     }
-    const currentUserId = getUserId(req);
-    const isFollowing = await dbAdapter.isFollowing(currentUserId, user.id);
-    res.json({ ...user, isFollowing });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
-apiRouter.put('/users/profile', async (req: Request, res: Response) => {
-  try {
-    const currentUserId = getUserId(req);
-    const updated = await dbAdapter.updateProfile(currentUserId, req.body);
-    res.json(updated);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
+    if (pathname === '/api/posts' && method === 'POST') {
+      const authorId = requireUserId(req, res);
+      if (!authorId) return true;
+      const body = await readJson(req);
+      const content = typeof body.content === 'string' ? body.content : '';
+      const mediaUrls = Array.isArray(body.mediaUrls) ? body.mediaUrls.map(String) : undefined;
+      const pollOptions = Array.isArray(body.pollOptions) ? body.pollOptions.map(String) : undefined;
+      const replyToId = typeof body.replyToId === 'string' ? body.replyToId : undefined;
+      const quotePostId = typeof body.quotePostId === 'string' ? body.quotePostId : undefined;
 
-apiRouter.post('/users/:id/follow', async (req: Request, res: Response) => {
-  try {
-    const currentUserId = getUserId(req);
-    const result = await dbAdapter.toggleFollow(currentUserId, req.params.id);
-    res.json(result);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// 5. Bookmarks
-apiRouter.get('/bookmarks', async (req: Request, res: Response) => {
-  try {
-    const currentUserId = getUserId(req);
-    const bookmarks = await dbAdapter.getBookmarks(currentUserId);
-    res.json(bookmarks);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// 6. Notifications
-apiRouter.get('/notifications', async (req: Request, res: Response) => {
-  try {
-    const currentUserId = getUserId(req);
-    const notifications = await dbAdapter.getNotifications(currentUserId);
-    res.json(notifications);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-apiRouter.post('/notifications/read-all', async (req: Request, res: Response) => {
-  try {
-    await dbAdapter.markNotificationsRead();
-    res.json({ success: true });
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// 7. Direct Messages
-apiRouter.get('/messages/:recipientId', async (req: Request, res: Response) => {
-  try {
-    const currentUserId = getUserId(req);
-    const messages = await dbAdapter.getMessages(currentUserId, req.params.recipientId);
-    res.json(messages);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-apiRouter.post('/messages', async (req: Request, res: Response) => {
-  try {
-    const currentUserId = getUserId(req);
-    const { recipientId, text } = req.body;
-    if (!text || !text.trim() || !recipientId) {
-      return res.status(400).json({ error: 'recipientId and text are required' });
+      if (!content.trim()) {
+        sendError(res, 400, 'Post content cannot be empty.');
+        return true;
+      }
+      if (content.length > config.maxPostLength) {
+        sendError(res, 400, `Post exceeds maximum length of ${config.maxPostLength} characters.`);
+        return true;
+      }
+      const post = await dbAdapter.createPost(
+        authorId,
+        content.trim(),
+        mediaUrls,
+        pollOptions,
+        replyToId,
+        quotePostId,
+      );
+      sendJson(res, 201, post);
+      return true;
     }
-    const message = await dbAdapter.sendMessage(currentUserId, recipientId, text.trim());
-    res.status(201).json(message);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
-});
 
-// 8. Trends
-apiRouter.get('/trends', async (req: Request, res: Response) => {
-  try {
-    const trends = await dbAdapter.getTrends();
-    res.json(trends);
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    const postMatch = /^\/api\/posts\/([^/]+)$/.exec(pathname);
+    if (postMatch && method === 'GET') {
+      const result = await dbAdapter.getPostById(postMatch[1], getCurrentUserId(req));
+      if (!result.post) {
+        sendError(res, 404, 'Post not found.');
+        return true;
+      }
+      sendJson(res, 200, result);
+      return true;
+    }
+
+    if (postMatch && method === 'DELETE') {
+      const currentUserId = requireUserId(req, res);
+      if (!currentUserId) return true;
+      try {
+        const success = await dbAdapter.deletePost(currentUserId, postMatch[1]);
+        if (!success) {
+          sendError(res, 404, 'Post not found.');
+          return true;
+        }
+        sendJson(res, 200, { success: true });
+      } catch (error) {
+        sendError(res, 403, (error as Error).message);
+      }
+      return true;
+    }
+
+    const actionMatch = /^\/api\/posts\/([^/]+)\/(like|repost|bookmark)$/.exec(pathname);
+    if (actionMatch && method === 'POST') {
+      const currentUserId = requireUserId(req, res);
+      if (!currentUserId) return true;
+      const [, postId, action] = actionMatch;
+      if (action === 'like') {
+        sendJson(res, 200, await dbAdapter.toggleLike(currentUserId, postId));
+      } else if (action === 'repost') {
+        sendJson(res, 200, await dbAdapter.toggleRepost(currentUserId, postId));
+      } else {
+        sendJson(res, 200, await dbAdapter.toggleBookmark(currentUserId, postId));
+      }
+      return true;
+    }
+
+    const pollVoteMatch = /^\/api\/posts\/([^/]+)\/poll\/vote$/.exec(pathname);
+    if (pollVoteMatch && method === 'POST') {
+      const currentUserId = requireUserId(req, res);
+      if (!currentUserId) return true;
+      const body = await readJson(req);
+      if (typeof body.optionIndex !== 'number') {
+        sendError(res, 400, 'optionIndex must be a number.');
+        return true;
+      }
+      sendJson(res, 200, await dbAdapter.votePoll(currentUserId, pollVoteMatch[1], body.optionIndex));
+      return true;
+    }
+
+    if (pathname === '/api/users' && method === 'GET') {
+      sendJson(res, 200, await dbAdapter.getUsers());
+      return true;
+    }
+
+    const userMatch = /^\/api\/users\/([^/]+)$/.exec(pathname);
+    if (userMatch && method === 'GET') {
+      const user = await dbAdapter.getUserByUsername(decodeURIComponent(userMatch[1]));
+      if (!user) {
+        sendError(res, 404, 'User not found.');
+        return true;
+      }
+      sendJson(res, 200, {
+        ...user,
+        isFollowing: await dbAdapter.isFollowing(getCurrentUserId(req), user.id),
+      });
+      return true;
+    }
+
+    if (pathname === '/api/users/profile' && method === 'PUT') {
+      const currentUserId = requireUserId(req, res);
+      if (!currentUserId) return true;
+      sendJson(res, 200, await dbAdapter.updateProfile(currentUserId, await readJson(req)));
+      return true;
+    }
+
+    const followMatch = /^\/api\/users\/([^/]+)\/follow$/.exec(pathname);
+    if (followMatch && method === 'POST') {
+      const currentUserId = requireUserId(req, res);
+      if (!currentUserId) return true;
+      sendJson(res, 200, await dbAdapter.toggleFollow(currentUserId, followMatch[1]));
+      return true;
+    }
+
+    if (pathname === '/api/bookmarks' && method === 'GET') {
+      sendJson(res, 200, await dbAdapter.getBookmarks(getCurrentUserId(req)));
+      return true;
+    }
+
+    if (pathname === '/api/notifications' && method === 'GET') {
+      sendJson(res, 200, await dbAdapter.getNotifications(getCurrentUserId(req)));
+      return true;
+    }
+
+    if (pathname === '/api/notifications/read-all' && method === 'POST') {
+      sendJson(res, 200, { success: await dbAdapter.markNotificationsRead() });
+      return true;
+    }
+
+    const messagesMatch = /^\/api\/messages\/([^/]+)$/.exec(pathname);
+    if (messagesMatch && method === 'GET') {
+      const currentUserId = requireUserId(req, res);
+      if (!currentUserId) return true;
+      sendJson(res, 200, await dbAdapter.getMessages(currentUserId, messagesMatch[1]));
+      return true;
+    }
+
+    if (pathname === '/api/messages' && method === 'POST') {
+      const currentUserId = requireUserId(req, res);
+      if (!currentUserId) return true;
+      const body = await readJson(req);
+      const recipientId = typeof body.recipientId === 'string' ? body.recipientId : '';
+      const text = typeof body.text === 'string' ? body.text.trim() : '';
+      if (!recipientId || !text) {
+        sendError(res, 400, 'recipientId and text are required.');
+        return true;
+      }
+      sendJson(res, 201, await dbAdapter.sendMessage(currentUserId, recipientId, text));
+      return true;
+    }
+
+    if (pathname === '/api/trends' && method === 'GET') {
+      sendJson(res, 200, await dbAdapter.getTrends());
+      return true;
+    }
+
+    const segments = getPathSegments(pathname);
+    if (segments[0] === 'api') {
+      sendError(res, 404, 'Not found.');
+      return true;
+    }
+
+    return false;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      sendError(res, 400, 'Invalid JSON request body.');
+      return true;
+    }
+    if (error instanceof Error && error.message === 'Request body is too large.') {
+      sendError(res, 413, error.message);
+      return true;
+    }
+    setAuthError(res, error);
+    return true;
   }
-});
+}
