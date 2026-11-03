@@ -1,0 +1,6 @@
+{
+  "name": "X Social Platform",
+  "description": "A high-performance, modular X (Twitter) social media platform with multi-CDN asset failover, customizable themes, PostgreSQL integration, rich feeds, bookmarks, and notifications.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
