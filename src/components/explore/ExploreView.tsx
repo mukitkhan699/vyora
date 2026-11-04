@@ -73,7 +73,9 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
   });
 
   const headerBg = theme === 'dark' ? 'bg-black/85 border-neutral-800' : theme === 'dim' ? 'bg-[#15202b]/85 border-neutral-700' : 'bg-white/85 border-neutral-200';
-  const inputBg = theme === 'light' ? 'bg-neutral-100 focus:bg-white border-neutral-200' : 'bg-neutral-900 focus:bg-black border-neutral-800 focus:border-sky-500';
+  const activeTabClass = theme === 'light' ? 'text-slate-900 font-bold' : 'text-white font-bold';
+  const textInputClass = theme === 'light' ? 'text-slate-900' : 'text-white';
+  const inputBg = theme === 'light' ? 'bg-neutral-100 focus:bg-white border-neutral-200' : 'bg-neutral-900 focus:bg-black border-neutral-800 focus:border-cyan-500';
 
   return (
     <div className="flex flex-col min-h-screen">
@@ -86,12 +88,12 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
             placeholder="Search keywords, #hashtags, or @people"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className={`w-full rounded-full pl-11 pr-4 py-2 text-sm transition-all border outline-none text-white placeholder:text-neutral-500 ${inputBg}`}
+            className={`w-full rounded-full pl-11 pr-4 py-2 text-sm transition-all border outline-none placeholder:text-neutral-500 ${textInputClass} ${inputBg}`}
           />
           {query && (
             <button
               onClick={() => setQuery('')}
-              className="absolute right-4 text-xs text-neutral-400 hover:text-white cursor-pointer"
+              className="absolute right-4 text-xs text-neutral-400 hover:text-cyan-400 cursor-pointer"
             >
               Clear
             </button>
@@ -106,11 +108,11 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
               onClick={() => setActiveTab(tab)}
               className="py-2 px-3 text-xs sm:text-sm font-bold capitalize relative hover:bg-neutral-800/20 rounded-lg cursor-pointer"
             >
-              <span className={activeTab === tab ? 'text-white' : 'text-neutral-500'}>
+              <span className={activeTab === tab ? activeTabClass : 'text-neutral-500'}>
                 {tab}
               </span>
               {activeTab === tab && (
-                <span className={`absolute bottom-0 left-0 right-0 h-1 rounded-full ${accentBgClass}`} />
+                <span className={`absolute bottom-0 left-0 right-0 h-0.5 rounded-full ${accentBgClass}`} />
               )}
             </button>
           ))}

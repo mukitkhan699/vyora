@@ -33,9 +33,13 @@ export const Button: React.FC<ButtonProps> = ({
       ? 'bg-slate-900 text-white hover:bg-slate-800'
       : 'bg-white text-black hover:bg-slate-200';
   } else if (variant === 'outline') {
-    variantClasses = 'border border-white/20 text-white hover:bg-white/[0.08]';
+    variantClasses = theme === 'light'
+      ? 'border border-slate-300 text-slate-800 hover:bg-slate-100'
+      : 'border border-white/20 text-white hover:bg-white/[0.08]';
   } else if (variant === 'ghost') {
-    variantClasses = 'text-neutral-400 hover:text-white hover:bg-neutral-800/40';
+    variantClasses = theme === 'light'
+      ? 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+      : 'text-neutral-400 hover:text-white hover:bg-neutral-800/40';
   } else if (variant === 'danger') {
     variantClasses = 'bg-red-500 text-white hover:bg-red-600';
   }

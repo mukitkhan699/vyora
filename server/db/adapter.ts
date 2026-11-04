@@ -1,4 +1,4 @@
-import { Post, User, Notification, Message, TrendItem } from '../../src/types/index.ts';
+import type { Post, User, Notification, Message, TrendItem } from '../../src/types/index.ts';
 import { inMemoryStore, INITIAL_USERS } from './store.ts';
 
 export class DatabaseAdapter {

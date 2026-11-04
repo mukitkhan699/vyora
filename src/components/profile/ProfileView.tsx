@@ -216,11 +216,15 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         {/* Follower Counts */}
         <div className="flex items-center gap-4 text-xs">
           <div className="flex items-center gap-1">
-            <span className="font-bold text-white">{user.followingCount}</span>
+            <span className={`font-bold ${theme === 'light' ? 'text-slate-900' : 'text-white'}`}>
+              {user.followingCount}
+            </span>
             <span className="text-neutral-500">Following</span>
           </div>
           <div className="flex items-center gap-1">
-            <span className="font-bold text-white">{user.followersCount.toLocaleString()}</span>
+            <span className={`font-bold ${theme === 'light' ? 'text-slate-900' : 'text-white'}`}>
+              {user.followersCount.toLocaleString()}
+            </span>
             <span className="text-neutral-500">Followers</span>
           </div>
         </div>
@@ -234,7 +238,15 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             onClick={() => setActiveTab(tab)}
             className="flex-1 py-3 text-center text-xs sm:text-sm font-bold capitalize relative hover:bg-neutral-800/20 cursor-pointer"
           >
-            <span className={activeTab === tab ? 'text-white' : 'text-neutral-500'}>
+            <span
+              className={
+                activeTab === tab
+                  ? theme === 'light'
+                    ? 'text-slate-900 font-bold'
+                    : 'text-white font-bold'
+                  : 'text-neutral-500'
+              }
+            >
               {tab}
             </span>
             {activeTab === tab && (

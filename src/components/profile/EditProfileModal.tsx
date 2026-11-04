@@ -3,7 +3,7 @@ import { User } from '../../types/index.ts';
 import { Modal } from '../common/Modal.tsx';
 import { Button } from '../common/Button.tsx';
 import { api } from '../../services/api.ts';
-import { Upload, Image as ImageIcon } from 'lucide-react';
+import { Upload, AlertCircle } from 'lucide-react';
 import { Avatar } from '../common/Avatar.tsx';
 
 interface EditProfileModalProps {
@@ -28,28 +28,33 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
   const [saving, setSaving] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [uploadingBanner, setUploadingBanner] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [avatarPresets, setAvatarPresets] = useState<string[]>([]);
 
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const bannerInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    api.getMediaCatalog().then(catalog => {
-      if (catalog.avatars) {
-        setAvatarPresets(catalog.avatars);
-      }
-    }).catch(() => {});
+    api
+      .getMediaCatalog()
+      .then((catalog) => {
+        if (catalog.avatars) {
+          setAvatarPresets(catalog.avatars);
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const handleAvatarFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setErrorMsg(null);
     try {
       setUploadingAvatar(true);
       const res = await api.uploadFile(file);
       setAvatarUrl(res.url);
-    } catch (err: any) {
-      alert(err.message || 'Avatar upload failed');
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : 'Avatar upload failed');
     } finally {
       setUploadingAvatar(false);
     }
@@ -58,12 +63,13 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
   const handleBannerFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setErrorMsg(null);
     try {
       setUploadingBanner(true);
       const res = await api.uploadFile(file);
       setBannerUrl(res.url);
-    } catch (err: any) {
-      alert(err.message || 'Banner upload failed');
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : 'Banner upload failed');
     } finally {
       setUploadingBanner(false);
     }
@@ -72,6 +78,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
+    setErrorMsg(null);
 
     try {
       setSaving(true);
@@ -84,16 +91,23 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
         bannerUrl: bannerUrl.trim() || undefined,
       });
       onClose();
-    } catch (e: any) {
-      alert(e.message || 'Failed to update profile');
+    } catch (e: unknown) {
+      setErrorMsg(e instanceof Error ? e.message : 'Failed to update profile');
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Edit operator profile" maxWidth="max-w-lg">
+    <Modal isOpen={isOpen} onClose={onClose} title="Edit Profile" maxWidth="max-w-lg">
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        {errorMsg && (
+          <div className="flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-xs">
+            <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+
         <div>
           <label className="block text-xs font-semibold text-neutral-400 mb-1">Name</label>
           <input
@@ -141,7 +155,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
 
         {/* Avatar Upload / URL */}
         <div className="p-3 bg-neutral-900/60 rounded-xl border border-neutral-800">
-          <label className="block text-xs font-semibold text-neutral-300 mb-2">Avatar Image (Backend File / CDN)</label>
+          <label className="block text-xs font-semibold text-neutral-300 mb-2">Avatar Image</label>
           <div className="flex items-center gap-3 mb-2">
             <Avatar src={avatarUrl} name={name || 'Operator'} size="lg" />
             <div className="flex flex-col gap-1.5 flex-1">
@@ -159,19 +173,18 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
                 className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-cyan-950 border border-cyan-800/60 text-cyan-300 text-xs rounded-lg hover:bg-cyan-900 cursor-pointer disabled:opacity-50"
               >
                 <Upload className="w-3.5 h-3.5" />
-                {uploadingAvatar ? 'Uploading to backend...' : 'Upload Avatar to Backend'}
+                {uploadingAvatar ? 'Uploading...' : 'Upload Avatar'}
               </button>
               <input
                 type="url"
                 value={avatarUrl}
                 onChange={(e) => setAvatarUrl(e.target.value)}
-                placeholder="Or paste image / CDN URL..."
+                placeholder="Or paste image URL..."
                 className="w-full bg-black border border-neutral-800 rounded-lg px-2.5 py-1 text-xs text-white outline-none focus:border-cyan-500"
               />
             </div>
           </div>
 
-          {/* Quick backend presets */}
           {avatarPresets.length > 0 && (
             <div className="flex items-center gap-2 mt-2 pt-2 border-t border-neutral-800/60">
               <span className="text-[10px] text-neutral-500">Presets:</span>
@@ -193,7 +206,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
 
         {/* Banner Upload / URL */}
         <div className="p-3 bg-neutral-900/60 rounded-xl border border-neutral-800">
-          <label className="block text-xs font-semibold text-neutral-300 mb-2">Banner Image (Backend File / CDN)</label>
+          <label className="block text-xs font-semibold text-neutral-300 mb-2">Banner Image</label>
           <div className="flex flex-col gap-1.5">
             <input
               type="file"
@@ -223,13 +236,12 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
           </div>
         </div>
 
-
         <div className="flex justify-end gap-2 pt-3 border-t border-neutral-800">
           <Button variant="ghost" size="sm" type="button" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="secondary" size="sm" type="submit" isLoading={saving}>
-            Save
+            Save Changes
           </Button>
         </div>
       </form>

@@ -80,11 +80,19 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
               onClick={() => setActiveTab(tab)}
               className="flex-1 py-3 text-center text-sm font-bold capitalize relative hover:bg-neutral-800/20 cursor-pointer"
             >
-              <span className={activeTab === tab ? 'text-white' : 'text-neutral-500'}>
+              <span
+                className={
+                  activeTab === tab
+                    ? theme === 'light'
+                      ? 'text-slate-900 font-bold'
+                      : 'text-white font-bold'
+                    : 'text-neutral-500'
+                }
+              >
                 {tab}
               </span>
               {activeTab === tab && (
-                <span className={`absolute bottom-0 left-1/2 -translate-x-1/2 w-14 h-1 rounded-full ${accentBgClass}`} />
+                <span className={`absolute bottom-0 left-1/2 -translate-x-1/2 w-14 h-0.5 rounded-full ${accentBgClass}`} />
               )}
             </button>
           ))}

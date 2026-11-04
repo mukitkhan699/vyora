@@ -39,17 +39,12 @@ const CONTENT_TYPES: Record<string, string> = {
 function applySecurityHeaders(req: IncomingMessage, res: ServerResponse, nonce: string): void {
   res.setHeader(
     'Content-Security-Policy',
-    `default-src 'self'; script-src 'self' 'nonce-${nonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https:; media-src 'self' blob: https:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'`,
+    "default-src 'self' data: blob: https:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https: http: ws: wss:; media-src 'self' blob: https:; frame-ancestors *;",
   );
-  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
-  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=(), usb=()');
-  res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('X-DNS-Prefetch-Control', 'off');
-  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
-  if (req.socket.encrypted) {
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  const isEncrypted = Boolean((req.socket as { encrypted?: boolean }).encrypted);
+  if (isEncrypted) {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }
 }

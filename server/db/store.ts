@@ -1,4 +1,4 @@
-import { User, Post, Notification, Message, TrendItem } from '../../src/types/index.ts';
+import type { User, Post, Notification, Message, TrendItem } from '../../src/types/index.ts';
 
 export const INITIAL_USERS: User[] = [
   {

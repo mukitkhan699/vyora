@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Bookmark, Sparkles } from 'lucide-react';
 import { Post } from '../../types/index.ts';
 import { api } from '../../services/api.ts';
+import { useAuth } from '../../context/AuthContext.tsx';
 import { useTheme } from '../../context/ThemeContext.tsx';
 import { PostCard } from '../feed/PostCard.tsx';
 
@@ -18,6 +19,7 @@ export const BookmarksView: React.FC<BookmarksViewProps> = ({
   onUserClick,
   onTagClick,
 }) => {
+  const { currentUser } = useAuth();
   const { theme } = useTheme();
   const [bookmarks, setBookmarks] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,7 +47,7 @@ export const BookmarksView: React.FC<BookmarksViewProps> = ({
       {/* Header */}
       <div className={`sticky top-0 z-20 backdrop-blur-md border-b ${headerBg} px-4 py-3`}>
         <h1 className="text-xl font-bold">Bookmarks</h1>
-        <p className="text-xs text-neutral-500">@{localStorage.getItem('x_active_user_handle') || 'mukitk'}</p>
+        {currentUser && <p className="text-xs text-neutral-500">@{currentUser.username}</p>}
       </div>
 
       {/* Bookmarks List */}
