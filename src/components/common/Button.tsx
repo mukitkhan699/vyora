@@ -3,8 +3,9 @@ import { useTheme } from '../../context/ThemeContext.tsx';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'outline' | 'ghost' | 'danger';
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'xs' | 'sm' | 'md' | 'lg';
   isLoading?: boolean;
+  icon?: React.ReactNode;
 }
 
 export const Button: React.FC<ButtonProps> = ({
@@ -12,6 +13,7 @@ export const Button: React.FC<ButtonProps> = ({
   variant = 'primary',
   size = 'md',
   isLoading = false,
+  icon,
   className = '',
   disabled,
   ...props
@@ -19,9 +21,10 @@ export const Button: React.FC<ButtonProps> = ({
   const { accentBgClass, accentGlowClass, accent, theme } = useTheme();
 
   const sizeClasses = {
-    sm: 'px-3 py-1.5 text-xs font-semibold',
-    md: 'px-4 py-2 text-sm font-bold',
-    lg: 'px-6 py-3 text-base font-bold',
+    xs: 'px-2.5 py-1 text-xs font-semibold gap-1.5 rounded-lg',
+    sm: 'px-3.5 py-1.5 text-xs font-semibold gap-1.5 rounded-xl',
+    md: 'px-4 py-2 text-sm font-bold gap-2 rounded-xl',
+    lg: 'px-6 py-3 text-base font-bold gap-2.5 rounded-2xl',
   }[size];
 
   let variantClasses = '';
@@ -30,33 +33,40 @@ export const Button: React.FC<ButtonProps> = ({
     variantClasses = `${accentBgClass} ${isBright ? 'text-black font-extrabold' : 'text-white font-bold'} ${accentGlowClass} hover:brightness-110 active:scale-[0.98]`;
   } else if (variant === 'secondary') {
     variantClasses = theme === 'light'
-      ? 'bg-slate-900 text-white hover:bg-slate-800'
-      : 'bg-white text-black hover:bg-slate-200';
+      ? 'bg-slate-900 text-white hover:bg-slate-800 active:scale-[0.98]'
+      : 'bg-white/10 text-white hover:bg-white/15 border border-white/10 active:scale-[0.98]';
   } else if (variant === 'outline') {
     variantClasses = theme === 'light'
-      ? 'border border-slate-300 text-slate-800 hover:bg-slate-100'
-      : 'border border-white/20 text-white hover:bg-white/[0.08]';
+      ? 'border border-slate-300 text-slate-800 hover:bg-slate-100 active:scale-[0.98]'
+      : 'border border-white/15 text-neutral-200 hover:bg-white/[0.08] hover:border-white/25 active:scale-[0.98]';
   } else if (variant === 'ghost') {
     variantClasses = theme === 'light'
-      ? 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-      : 'text-neutral-400 hover:text-white hover:bg-neutral-800/40';
+      ? 'text-slate-700 hover:bg-slate-100 active:scale-[0.98]'
+      : 'text-neutral-300 hover:bg-white/[0.08] hover:text-white active:scale-[0.98]';
   } else if (variant === 'danger') {
-    variantClasses = 'bg-red-500 text-white hover:bg-red-600';
+    variantClasses = 'bg-rose-500/15 text-rose-400 border border-rose-500/30 hover:bg-rose-500/25 active:scale-[0.98]';
   }
 
   return (
     <button
       disabled={disabled || isLoading}
-      className={`rounded-full transition-all flex items-center justify-center gap-2 cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed ${sizeClasses} ${variantClasses} ${className}`}
+      className={`inline-flex items-center justify-center transition-all duration-150 cursor-pointer select-none disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50 ${sizeClasses} ${variantClasses} ${className}`}
       {...props}
     >
-      {isLoading && (
-        <svg className="animate-spin h-4 w-4 text-current" viewBox="0 0 24 24" fill="none">
-          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-        </svg>
+      {isLoading ? (
+        <>
+          <svg className="animate-spin -ml-1 mr-2 h-4 w-4" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+          <span>Loading...</span>
+        </>
+      ) : (
+        <>
+          {icon && <span className="shrink-0">{icon}</span>}
+          {children}
+        </>
       )}
-      {children}
     </button>
   );
 };

@@ -13,6 +13,7 @@ import { NotificationsView } from './components/notifications/NotificationsView.
 import { BookmarksView } from './components/bookmarks/BookmarksView.tsx';
 import { MessagesView } from './components/messages/MessagesView.tsx';
 import { ProfileView } from './components/profile/ProfileView.tsx';
+import { SettingsView } from './components/settings/SettingsView.tsx';
 import { LauncherSplash } from './components/common/LauncherSplash.tsx';
 import { LoginScreen } from './components/auth/LoginScreen.tsx';
 import { Post } from './types/index.ts';
@@ -49,13 +50,14 @@ function MainApp() {
   const handleSearch = (query: string) => {
     setExploreQuery(query);
     setCurrentTab('explore');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   return (
-    <div className="min-h-screen flex justify-center selection:bg-sky-500 selection:text-white">
+    <div className="min-h-screen flex justify-center selection:bg-cyan-500/30 selection:text-white">
       {/* 3-Column Responsive Container */}
       <div className="flex w-full max-w-7xl justify-between">
-        {/* Left Navigation Sidebar (Node.js engine & configuration tabs removed) */}
+        {/* Left Navigation Sidebar */}
         <Sidebar
           currentTab={currentTab}
           onSelectTab={(tab) => {
@@ -67,7 +69,7 @@ function MainApp() {
         />
 
         {/* Center Main Social Feed View */}
-        <main className="flex-1 min-h-screen border-r border-neutral-800/80 max-w-2xl pb-16 sm:pb-0">
+        <main className="flex-1 min-h-screen border-r border-white/[0.08] max-w-2xl pb-20 sm:pb-4 w-full">
           {currentTab === 'home' && (
             <Timeline
               onPostClick={handlePostClick}
@@ -120,12 +122,17 @@ function MainApp() {
               onTagClick={handleTagClick}
             />
           )}
+
+          {currentTab === 'settings' && (
+            <SettingsView />
+          )}
         </main>
 
         {/* Right Sidebar Widgets */}
         <RightSidebar
           onSearch={handleSearch}
           onSelectTag={handleTagClick}
+          onUserClick={handleUserClick}
         />
       </div>
 
@@ -152,7 +159,7 @@ function MainApp() {
         <Modal
           isOpen={isComposeOpen}
           onClose={() => setIsComposeOpen(false)}
-          title="Compose Transmission"
+          title="New Post"
           maxWidth="max-w-xl"
         >
           <PostComposer

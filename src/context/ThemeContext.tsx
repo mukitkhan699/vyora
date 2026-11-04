@@ -13,50 +13,51 @@ interface ThemeContextType {
   accentTextClass: string;
   accentBorderClass: string;
   accentGlowClass: string;
+  isDark: boolean;
 }
 
 const ACCENT_MAP: Record<AccentColor, { hex: string; bg: string; text: string; border: string; glow: string }> = {
   cyan: { 
-    hex: '#00f2fe', 
-    bg: 'bg-[#00f2fe]', 
-    text: 'text-[#00f2fe]', 
-    border: 'border-[#00f2fe]',
-    glow: 'shadow-[0_0_15px_rgba(0,242,254,0.4)]'
+    hex: '#48D8E8',
+    bg: 'bg-[#48D8E8]',
+    text: 'text-[#48D8E8]',
+    border: 'border-[#48D8E8]',
+    glow: 'shadow-[0_0_16px_rgba(72,216,232,0.35)]'
   },
   violet: { 
-    hex: '#8b5cf6', 
-    bg: 'bg-[#8b5cf6]', 
-    text: 'text-[#8b5cf6]', 
-    border: 'border-[#8b5cf6]',
-    glow: 'shadow-[0_0_15px_rgba(139,92,246,0.4)]'
+    hex: '#8B75FF',
+    bg: 'bg-[#8B75FF]',
+    text: 'text-[#8B75FF]',
+    border: 'border-[#8B75FF]',
+    glow: 'shadow-[0_0_16px_rgba(139,117,255,0.35)]'
   },
   emerald: { 
-    hex: '#00ff88', 
-    bg: 'bg-[#00ff88]', 
-    text: 'text-[#00ff88]', 
-    border: 'border-[#00ff88]',
-    glow: 'shadow-[0_0_15px_rgba(0,255,136,0.4)]'
+    hex: '#10B981',
+    bg: 'bg-[#10B981]',
+    text: 'text-[#10B981]',
+    border: 'border-[#10B981]',
+    glow: 'shadow-[0_0_16px_rgba(16,185,129,0.35)]'
   },
   amber: { 
-    hex: '#ffb300', 
-    bg: 'bg-[#ffb300]', 
-    text: 'text-[#ffb300]', 
-    border: 'border-[#ffb300]',
-    glow: 'shadow-[0_0_15px_rgba(255,179,0,0.4)]'
+    hex: '#F59E0B',
+    bg: 'bg-[#F59E0B]',
+    text: 'text-[#F59E0B]',
+    border: 'border-[#F59E0B]',
+    glow: 'shadow-[0_0_16px_rgba(245,158,11,0.35)]'
   },
   coral: { 
-    hex: '#ff3366', 
-    bg: 'bg-[#ff3366]', 
-    text: 'text-[#ff3366]', 
-    border: 'border-[#ff3366]',
-    glow: 'shadow-[0_0_15px_rgba(255,51,102,0.4)]'
+    hex: '#F43F5E',
+    bg: 'bg-[#F43F5E]',
+    text: 'text-[#F43F5E]',
+    border: 'border-[#F43F5E]',
+    glow: 'shadow-[0_0_16px_rgba(244,63,94,0.35)]'
   },
   blue: { 
-    hex: '#1d9bf0', 
-    bg: 'bg-[#1d9bf0]', 
-    text: 'text-[#1d9bf0]', 
-    border: 'border-[#1d9bf0]',
-    glow: 'shadow-[0_0_15px_rgba(29,155,240,0.4)]'
+    hex: '#3B82F6',
+    bg: 'bg-[#3B82F6]',
+    text: 'text-[#3B82F6]',
+    border: 'border-[#3B82F6]',
+    glow: 'shadow-[0_0_16px_rgba(59,130,246,0.35)]'
   },
 };
 
@@ -64,14 +65,18 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [theme, setTheme] = useState<ThemeMode>(() => {
-    return (localStorage.getItem('telex_theme') as ThemeMode) || 'dark';
+    return (localStorage.getItem('vyora_theme') as ThemeMode) ||
+           (localStorage.getItem('telex_theme') as ThemeMode) ||
+           'dark';
   });
   const [accent, setAccent] = useState<AccentColor>(() => {
-    return (localStorage.getItem('telex_accent') as AccentColor) || 'cyan';
+    return (localStorage.getItem('vyora_accent') as AccentColor) ||
+           (localStorage.getItem('telex_accent') as AccentColor) ||
+           'cyan';
   });
 
   useEffect(() => {
-    localStorage.setItem('telex_theme', theme);
+    localStorage.setItem('vyora_theme', theme);
     const root = document.documentElement;
     const body = document.body;
 
@@ -79,22 +84,23 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     root.classList.add(`theme-${theme}`);
 
     if (theme === 'dark') {
-      body.style.backgroundColor = '#080b11';
-      body.style.color = '#e1e7ec';
+      body.style.backgroundColor = '#090B10';
+      body.style.color = '#F4F6FA';
     } else if (theme === 'dim') {
-      body.style.backgroundColor = '#0f172a';
-      body.style.color = '#f1f5f9';
+      body.style.backgroundColor = '#0F172A';
+      body.style.color = '#F8FAFC';
     } else {
-      body.style.backgroundColor = '#f8fafc';
-      body.style.color = '#0f172a';
+      body.style.backgroundColor = '#F8FAFC';
+      body.style.color = '#0F172A';
     }
   }, [theme]);
 
   useEffect(() => {
-    localStorage.setItem('telex_accent', accent);
+    localStorage.setItem('vyora_accent', accent);
   }, [accent]);
 
   const accentInfo = ACCENT_MAP[accent] || ACCENT_MAP.cyan;
+  const isDark = theme === 'dark' || theme === 'dim';
 
   return (
     <ThemeContext.Provider
@@ -108,6 +114,7 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         accentTextClass: accentInfo.text,
         accentBorderClass: accentInfo.border,
         accentGlowClass: accentInfo.glow,
+        isDark,
       }}
     >
       {children}
