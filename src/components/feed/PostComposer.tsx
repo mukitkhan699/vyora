@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  Image, 
+  Image as ImageIcon,
   BarChart2, 
   Smile, 
   Globe, 
@@ -8,7 +8,7 @@ import {
   Plus, 
   Trash2, 
   Sparkles,
-  Link as LinkIcon 
+  UploadCloud
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useTheme } from '../../context/ThemeContext.tsx';
@@ -28,7 +28,7 @@ interface PostComposerProps {
 }
 
 export const PostComposer: React.FC<PostComposerProps> = ({
-  placeholder = "Broadcast a transmission to VYORA...",
+  placeholder = "What is happening?",
   replyToId,
   quotePostId,
   onPostCreated,
@@ -52,7 +52,6 @@ export const PostComposer: React.FC<PostComposerProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const maxLength = appConfig?.maxPostLength || 280;
 
-  // Load backend-provided media presets dynamically on mount
   useEffect(() => {
     api.getMediaCatalog().then(catalog => {
       if (catalog.attachments && catalog.attachments.length > 0) {
@@ -67,7 +66,6 @@ export const PostComposer: React.FC<PostComposerProps> = ({
   const isOverLimit = charactersLeft < 0;
   const isCloseToLimit = charactersLeft <= 20 && !isOverLimit;
 
-  // Progress circle metrics
   const progressPercent = Math.min(100, Math.max(0, (content.length / maxLength) * 100));
   const strokeDashoffset = 100 - progressPercent;
 
@@ -79,7 +77,6 @@ export const PostComposer: React.FC<PostComposerProps> = ({
     }
   };
 
-  // Upload file directly to backend file storage & receive backend-generated file URL
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -87,17 +84,15 @@ export const PostComposer: React.FC<PostComposerProps> = ({
     try {
       setIsUploading(true);
       const res = await api.uploadFile(file);
-      // The backend provides the file URL (/api/files/...)
       setMediaUrls(prev => [...prev, res.url]);
       setShowMediaPrompt(false);
     } catch (err: any) {
-      alert(err.message || 'File upload failed to backend');
+      alert(err.message || 'File upload failed');
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
-
 
   const handleAddPollOption = () => {
     if (pollOptions.length < 4) {
@@ -153,38 +148,39 @@ export const PostComposer: React.FC<PostComposerProps> = ({
   if (!currentUser) return null;
 
   return (
-    <div className={`p-4 flex gap-3.5 ${!isModal ? 'border-b border-neutral-800/80' : ''}`}>
+    <div className={`p-4 flex gap-3.5 ${!isModal ? 'border-b border-white/[0.08]' : ''}`}>
       <Avatar src={currentUser.avatarUrl} name={currentUser.name} size="md" />
 
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col min-w-0">
         {/* Reply indicator */}
         {replyToId && (
-          <div className="text-xs text-neutral-500 mb-2">
+          <div className="text-xs text-neutral-400 mb-2 font-mono">
             Replying to <span className={accentTextClass}>thread</span>
           </div>
         )}
 
-        {/* Text Input */}
+        {/* Text Area */}
         <textarea
           value={content}
           onChange={(e) => setContent(e.target.value)}
           placeholder={placeholder}
           rows={isModal ? 4 : 3}
-          className="w-full bg-transparent resize-none border-none outline-none text-base sm:text-lg placeholder:text-neutral-500 text-neutral-100 focus:ring-0 leading-relaxed"
+          className="w-full bg-transparent resize-none border-none outline-none text-base sm:text-lg placeholder:text-neutral-500 text-neutral-100 focus:ring-0 leading-relaxed font-normal"
         />
 
         {/* Media Attachments Preview */}
         {mediaUrls.length > 0 && (
-          <div className={`grid gap-2 my-2 rounded-2xl overflow-hidden ${
+          <div className={`grid gap-2 my-2.5 rounded-2xl overflow-hidden ${
             mediaUrls.length === 1 ? 'grid-cols-1' : 'grid-cols-2'
           }`}>
             {mediaUrls.map((url, index) => (
-              <div key={index} className="relative group max-h-60 rounded-xl overflow-hidden bg-neutral-900 border border-neutral-800">
+              <div key={index} className="relative group max-h-64 rounded-xl overflow-hidden bg-neutral-900 border border-white/10">
                 {url && <CdnImage src={url} alt="Attached media" className="w-full h-full object-cover" />}
                 <button
                   type="button"
                   onClick={() => setMediaUrls(prev => prev.filter((_, i) => i !== index))}
                   className="absolute top-2 right-2 bg-black/70 hover:bg-black text-white p-1.5 rounded-full transition-colors cursor-pointer"
+                  title="Remove attachment"
                 >
                   <X className="w-4 h-4" />
                 </button>
@@ -195,53 +191,46 @@ export const PostComposer: React.FC<PostComposerProps> = ({
 
         {/* Media Upload & URL Drawer */}
         {showMediaPrompt && (
-          <div className="p-3.5 my-2 bg-neutral-900/90 border border-neutral-800 rounded-xl flex flex-col gap-2.5">
+          <div className="p-3.5 my-2 bg-[#121722] border border-white/10 rounded-2xl flex flex-col gap-2.5 animate-in fade-in duration-150">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-neutral-300 font-semibold">Backend File Upload & Media:</span>
+              <span className="text-xs text-neutral-200 font-semibold">Attach media</span>
               <button
                 type="button"
                 onClick={() => setShowMediaPrompt(false)}
-                className="text-neutral-500 hover:text-white text-xs cursor-pointer"
+                className="text-neutral-400 hover:text-white text-xs cursor-pointer"
               >
                 Cancel
               </button>
             </div>
 
-            {/* Direct Upload to Backend */}
             <div className="flex items-center gap-2">
-              <button
+              <Button
                 type="button"
+                size="sm"
+                variant="outline"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={isUploading}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-cyan-950/80 border border-cyan-800/60 text-cyan-300 text-xs font-medium hover:bg-cyan-900/80 cursor-pointer disabled:opacity-50"
+                icon={<UploadCloud className="w-3.5 h-3.5 text-cyan-400" />}
               >
-                <Image className="w-3.5 h-3.5" />
-                {isUploading ? 'Uploading to backend...' : 'Upload Image to Backend'}
-              </button>
-              <span className="text-[11px] text-neutral-500">Stored & served by backend</span>
+                {isUploading ? 'Uploading...' : 'Upload Image'}
+              </Button>
+              <span className="text-[11px] text-neutral-400">Direct upload or paste a link below</span>
             </div>
 
-            <div className="flex items-center gap-2 text-xs text-neutral-500 my-0.5">
-              <span className="h-[1px] flex-1 bg-neutral-800" />
-              <span>or enter image URL</span>
-              <span className="h-[1px] flex-1 bg-neutral-800" />
-            </div>
-
-            <div className="flex gap-2">
+            <div className="flex gap-2 mt-1">
               <input
                 type="url"
                 value={mediaUrlInput}
                 onChange={(e) => setMediaUrlInput(e.target.value)}
-                placeholder="https://..."
-                className="flex-1 bg-black border border-neutral-700 rounded-lg px-3 py-1.5 text-xs text-white outline-none focus:border-cyan-500"
+                placeholder="https://images.unsplash.com/..."
+                className="flex-1 bg-black/50 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white outline-none focus:border-cyan-400"
               />
-              <Button size="sm" onClick={handleAddMediaUrl}>Add</Button>
+              <Button size="sm" onClick={handleAddMediaUrl}>Add Link</Button>
             </div>
 
-            {/* Quick Sample Media Presets from Backend */}
             {backendMediaPresets.length > 0 && (
               <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[11px] text-neutral-400">
-                <span className="text-neutral-500">Backend CDN Presets:</span>
+                <span className="text-neutral-500 font-mono text-[10px] uppercase">Presets:</span>
                 {backendMediaPresets.map((presetUrl, i) => (
                   <button
                     key={i}
@@ -252,7 +241,7 @@ export const PostComposer: React.FC<PostComposerProps> = ({
                     }}
                     className="text-cyan-400 hover:underline cursor-pointer"
                   >
-                    Image {i + 1}
+                    Preset {i + 1}
                   </button>
                 ))}
               </div>
@@ -260,16 +249,15 @@ export const PostComposer: React.FC<PostComposerProps> = ({
           </div>
         )}
 
-
         {/* Poll Builder Drawer */}
         {showPoll && (
-          <div className="my-3 p-3 bg-neutral-900/60 border border-neutral-800 rounded-2xl flex flex-col gap-2">
-            <div className="flex items-center justify-between text-xs text-neutral-400 font-semibold">
-              <span>Poll Options (2-4)</span>
+          <div className="my-2.5 p-3.5 bg-[#121722] border border-white/10 rounded-2xl flex flex-col gap-2.5 animate-in fade-in duration-150">
+            <div className="flex items-center justify-between text-xs text-neutral-400 font-medium">
+              <span>Poll Options (2-4 choices)</span>
               <button
                 type="button"
                 onClick={() => setShowPoll(false)}
-                className="hover:text-white cursor-pointer"
+                className="hover:text-white text-xs cursor-pointer text-rose-400"
               >
                 Remove poll
               </button>
@@ -278,17 +266,18 @@ export const PostComposer: React.FC<PostComposerProps> = ({
               <div key={idx} className="flex items-center gap-2">
                 <input
                   type="text"
-                  placeholder={`Option ${idx + 1}`}
+                  placeholder={`Choice ${idx + 1}`}
                   value={opt}
                   maxLength={25}
                   onChange={(e) => handlePollOptionChange(idx, e.target.value)}
-                  className="flex-1 bg-black border border-neutral-800 rounded-xl px-3 py-2 text-sm text-white outline-none focus:border-sky-500"
+                  className="flex-1 bg-black/50 border border-white/10 rounded-xl px-3 py-2 text-xs sm:text-sm text-white outline-none focus:border-cyan-400"
                 />
                 {pollOptions.length > 2 && (
                   <button
                     type="button"
                     onClick={() => handleRemovePollOption(idx)}
-                    className="p-2 text-neutral-500 hover:text-red-400 cursor-pointer"
+                    className="p-1.5 text-neutral-500 hover:text-rose-400 cursor-pointer"
+                    title="Remove choice"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -299,9 +288,9 @@ export const PostComposer: React.FC<PostComposerProps> = ({
               <button
                 type="button"
                 onClick={handleAddPollOption}
-                className={`flex items-center gap-1.5 text-xs font-semibold py-1.5 px-3 rounded-lg hover:bg-neutral-800/80 w-fit cursor-pointer ${accentTextClass}`}
+                className={`flex items-center gap-1.5 text-xs font-semibold py-1.5 px-3 rounded-xl hover:bg-white/[0.06] w-fit cursor-pointer ${accentTextClass}`}
               >
-                <Plus className="w-3.5 h-3.5" /> Add option
+                <Plus className="w-3.5 h-3.5" /> Add choice
               </button>
             )}
           </div>
@@ -309,8 +298,8 @@ export const PostComposer: React.FC<PostComposerProps> = ({
 
         {/* Emoji Quick Drawer */}
         {showEmojiPicker && (
-          <div className="flex flex-wrap gap-2 p-2 my-2 bg-neutral-900/90 border border-neutral-800 rounded-xl">
-            {['🚀', '⚡️', '🔥', '💻', '✨', '❤️', '🙌', '💯', '🦾', '🌍', '📈', '🎯', '💡', '🎉'].map((emoji) => (
+          <div className="flex flex-wrap gap-2 p-2.5 my-2 bg-[#121722] border border-white/10 rounded-2xl animate-in fade-in duration-150">
+            {['🚀', '⚡️', '🔥', '✨', '❤️', '🙌', '💯', '🦾', '🌍', '📈', '🎯', '💡', '🎉', '👏'].map((emoji) => (
               <button
                 key={emoji}
                 type="button"
@@ -327,15 +316,14 @@ export const PostComposer: React.FC<PostComposerProps> = ({
         )}
 
         {/* Audience Indicator */}
-        <div className="flex items-center gap-1.5 text-xs text-sky-400 font-semibold mb-3 border-b border-neutral-800/60 pb-3 cursor-pointer hover:opacity-90">
+        <div className="flex items-center gap-1.5 text-xs text-cyan-400 font-medium mb-3 border-b border-white/[0.06] pb-3">
           <Globe className="w-3.5 h-3.5" />
           <span>Everyone can reply</span>
         </div>
 
-        {/* Toolbar & Submit Bar */}
+        {/* Toolbar & Submit Action */}
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-0.5 text-sky-400">
-            {/* File Upload / CDN URL button */}
+          <div className="flex items-center gap-1 text-cyan-400">
             <input
               type="file"
               ref={fileInputRef}
@@ -346,35 +334,32 @@ export const PostComposer: React.FC<PostComposerProps> = ({
             <button
               type="button"
               onClick={() => setShowMediaPrompt(!showMediaPrompt)}
-              className="p-2 rounded-full hover:bg-sky-500/10 transition-colors cursor-pointer"
-              title="Add image via CDN link or upload"
+              className="p-2 rounded-xl hover:bg-cyan-400/10 transition-colors cursor-pointer"
+              title="Add image"
             >
-              <Image className="w-5 h-5" />
+              <ImageIcon className="w-5 h-5" />
             </button>
 
-            {/* Poll Toggle */}
             <button
               type="button"
               onClick={() => setShowPoll(!showPoll)}
-              className="p-2 rounded-full hover:bg-sky-500/10 transition-colors cursor-pointer"
+              className="p-2 rounded-xl hover:bg-cyan-400/10 transition-colors cursor-pointer"
               title="Add poll"
             >
               <BarChart2 className="w-5 h-5" />
             </button>
 
-            {/* Emoji Quick Selector */}
             <button
               type="button"
               onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-              className="p-2 rounded-full hover:bg-sky-500/10 transition-colors cursor-pointer"
-              title="Insert emoji"
+              className="p-2 rounded-xl hover:bg-cyan-400/10 transition-colors cursor-pointer"
+              title="Add emoji"
             >
               <Smile className="w-5 h-5" />
             </button>
           </div>
 
           <div className="flex items-center gap-3">
-            {/* Circular character count indicator */}
             {content.length > 0 && (
               <div className="flex items-center gap-2">
                 <div className="relative w-6 h-6 flex items-center justify-center">
@@ -397,31 +382,30 @@ export const PostComposer: React.FC<PostComposerProps> = ({
                       strokeDashoffset={strokeDashoffset}
                       className={`transition-all duration-150 ${
                         isOverLimit
-                          ? 'stroke-red-500'
+                          ? 'stroke-rose-500'
                           : isCloseToLimit
                           ? 'stroke-amber-400'
-                          : 'stroke-sky-500'
+                          : 'stroke-cyan-400'
                       }`}
                     />
                   </svg>
                 </div>
                 {charactersLeft <= 20 && (
-                  <span className={`text-xs font-semibold ${isOverLimit ? 'text-red-500' : 'text-amber-400'}`}>
+                  <span className={`text-xs font-mono font-semibold ${isOverLimit ? 'text-rose-500' : 'text-amber-400'}`}>
                     {charactersLeft}
                   </span>
                 )}
               </div>
             )}
 
-            {/* Transmit button */}
             <Button
               size="sm"
               disabled={(!content.trim() && mediaUrls.length === 0) || isOverLimit || isSubmitting}
               isLoading={isSubmitting}
               onClick={handleSubmit}
-              className="px-5 font-bold tracking-wide"
+              className="px-5 font-bold"
             >
-              Transmit
+              Post
             </Button>
           </div>
         </div>

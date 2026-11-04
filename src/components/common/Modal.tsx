@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { X } from 'lucide-react';
 import { useTheme } from '../../context/ThemeContext.tsx';
 
@@ -18,6 +18,7 @@ export const Modal: React.FC<ModalProps> = ({
   maxWidth = 'max-w-xl',
 }) => {
   const { theme } = useTheme();
+  const modalRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -35,33 +36,44 @@ export const Modal: React.FC<ModalProps> = ({
 
   if (!isOpen) return null;
 
-  const bgModal = theme === 'dark' ? 'bg-black border-neutral-800' : theme === 'dim' ? 'bg-[#15202b] border-neutral-700' : 'bg-white border-neutral-200';
+  const bgModal = theme === 'light'
+    ? 'bg-white border-slate-200 text-slate-900 shadow-2xl'
+    : 'bg-[#0F131A] border-white/10 text-white shadow-[0_25px_60px_-15px_rgba(0,0,0,0.85)]';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
+    >
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black/60 backdrop-blur-xs transition-opacity"
+        className="fixed inset-0 bg-black/70 backdrop-blur-md transition-opacity duration-200"
         onClick={onClose}
       />
 
       {/* Modal Dialog */}
-      <div className={`relative w-full ${maxWidth} ${bgModal} border rounded-2xl shadow-2xl overflow-hidden z-10 flex flex-col max-h-[90vh]`}>
+      <div
+        ref={modalRef}
+        className={`relative w-full ${maxWidth} ${bgModal} border rounded-3xl overflow-hidden z-10 animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col`}
+      >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-neutral-800/80">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={onClose}
-              className="p-2 rounded-full hover:bg-neutral-800/50 text-neutral-400 hover:text-white transition-colors cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            {title && <h2 className="text-lg font-bold">{title}</h2>}
-          </div>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.08] shrink-0">
+          <h2 className="text-base sm:text-lg font-bold tracking-tight">
+            {title || ''}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close modal"
+            className="p-1.5 rounded-full text-neutral-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+          >
+            <X className="w-5 h-5" />
+          </button>
         </div>
 
-        {/* Content */}
-        <div className="overflow-y-auto p-4 flex-1">
+        {/* Scrollable Content */}
+        <div className="p-5 overflow-y-auto flex-1">
           {children}
         </div>
       </div>

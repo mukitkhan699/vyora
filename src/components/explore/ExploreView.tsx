@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, TrendingUp, Filter, Sparkles } from 'lucide-react';
+import { Search, TrendingUp, X } from 'lucide-react';
 import { Post, User, TrendItem } from '../../types/index.ts';
 import { api } from '../../services/api.ts';
 import { useTheme } from '../../context/ThemeContext.tsx';
@@ -7,6 +7,8 @@ import { PostCard } from '../feed/PostCard.tsx';
 import { Avatar } from '../common/Avatar.tsx';
 import { Badge } from '../common/Badge.tsx';
 import { Button } from '../common/Button.tsx';
+import { PostSkeleton } from '../common/LoadingSkeleton.tsx';
+import { EmptyState } from '../common/EmptyState.tsx';
 
 interface ExploreViewProps {
   initialQuery?: string;
@@ -23,7 +25,7 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
   onUserClick,
   onTagClick,
 }) => {
-  const { theme, accentBgClass, accentTextClass } = useTheme();
+  const { theme, accentBgClass } = useTheme();
 
   const [query, setQuery] = useState(initialQuery);
   const [activeTab, setActiveTab] = useState<'top' | 'latest' | 'people' | 'media'>('top');
@@ -56,63 +58,79 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
     }
   };
 
-  // Filter posts based on search query
-  const filteredPosts = posts.filter(p => {
+  const filteredPosts = posts.filter((p) => {
     if (!query.trim()) return true;
     const q = query.toLowerCase();
     const matchesContent = p.content.toLowerCase().includes(q);
-    const matchesAuthor = p.author.name.toLowerCase().includes(q) || p.author.username.toLowerCase().includes(q);
+    const matchesAuthor =
+      p.author.name.toLowerCase().includes(q) ||
+      p.author.username.toLowerCase().includes(q);
     return matchesContent || matchesAuthor;
   });
 
-  const mediaPosts = filteredPosts.filter(p => p.mediaUrls && p.mediaUrls.length > 0);
-  const filteredUsers = users.filter(u => {
+  const mediaPosts = filteredPosts.filter((p) => p.mediaUrls && p.mediaUrls.length > 0);
+  const filteredUsers = users.filter((u) => {
     if (!query.trim()) return true;
     const q = query.toLowerCase();
-    return u.name.toLowerCase().includes(q) || u.username.toLowerCase().includes(q) || u.bio?.toLowerCase().includes(q);
+    return (
+      u.name.toLowerCase().includes(q) ||
+      u.username.toLowerCase().includes(q) ||
+      u.bio?.toLowerCase().includes(q)
+    );
   });
 
-  const headerBg = theme === 'dark' ? 'bg-black/85 border-neutral-800' : theme === 'dim' ? 'bg-[#15202b]/85 border-neutral-700' : 'bg-white/85 border-neutral-200';
-  const activeTabClass = theme === 'light' ? 'text-slate-900 font-bold' : 'text-white font-bold';
-  const textInputClass = theme === 'light' ? 'text-slate-900' : 'text-white';
-  const inputBg = theme === 'light' ? 'bg-neutral-100 focus:bg-white border-neutral-200' : 'bg-neutral-900 focus:bg-black border-neutral-800 focus:border-cyan-500';
+  const headerBg =
+    theme === 'dark'
+      ? 'bg-[#090B10]/85 border-white/[0.08]'
+      : theme === 'dim'
+        ? 'bg-[#0F172A]/85 border-neutral-700'
+        : 'bg-white/85 border-slate-200';
+  const inputBg =
+    theme === 'light'
+      ? 'bg-slate-100 focus:bg-white border-slate-200 text-slate-900'
+      : 'bg-[#10141D] focus:bg-[#070A0F] border-white/10 focus:border-cyan-400 text-white';
 
   return (
     <div className="flex flex-col min-h-screen">
-      {/* Sticky Search Header */}
-      <div className={`sticky top-0 z-20 backdrop-blur-md border-b ${headerBg} p-3`}>
-        <div className="relative flex items-center mb-2">
-          <Search className="absolute left-4 w-4 h-4 text-neutral-500 pointer-events-none" />
+      {/* Sticky Search & Filter Header */}
+      <div className={`sticky top-0 z-20 backdrop-blur-xl border-b ${headerBg} p-3.5`}>
+        <div className="relative flex items-center mb-2.5">
+          <Search className="absolute left-3.5 w-4 h-4 text-neutral-500 pointer-events-none" />
           <input
             type="text"
             placeholder="Search keywords, #hashtags, or @people"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            className={`w-full rounded-full pl-11 pr-4 py-2 text-sm transition-all border outline-none placeholder:text-neutral-500 ${textInputClass} ${inputBg}`}
+            className={`w-full rounded-2xl pl-10 pr-9 py-2 text-sm transition-all border outline-none placeholder:text-neutral-500 ${inputBg}`}
           />
           {query && (
             <button
+              type="button"
               onClick={() => setQuery('')}
-              className="absolute right-4 text-xs text-neutral-400 hover:text-cyan-400 cursor-pointer"
+              className="absolute right-3 text-neutral-400 hover:text-white p-0.5 cursor-pointer"
+              title="Clear search"
             >
-              Clear
+              <X className="w-4 h-4" />
             </button>
           )}
         </div>
 
         {/* Explore Tabs */}
-        <div className="flex justify-around border-t border-neutral-800/40 pt-1 -mb-1">
+        <div className="flex justify-around border-t border-white/[0.06] pt-1">
           {(['top', 'latest', 'people', 'media'] as const).map((tab) => (
             <button
               key={tab}
+              type="button"
               onClick={() => setActiveTab(tab)}
-              className="py-2 px-3 text-xs sm:text-sm font-bold capitalize relative hover:bg-neutral-800/20 rounded-lg cursor-pointer"
+              className="py-2 px-3 text-xs sm:text-sm font-bold capitalize relative hover:bg-white/[0.04] rounded-xl cursor-pointer"
             >
-              <span className={activeTab === tab ? activeTabClass : 'text-neutral-500'}>
+              <span className={activeTab === tab ? 'text-white' : 'text-neutral-500'}>
                 {tab}
               </span>
               {activeTab === tab && (
-                <span className={`absolute bottom-0 left-0 right-0 h-0.5 rounded-full ${accentBgClass}`} />
+                <span
+                  className={`absolute bottom-0 left-0 right-0 h-0.75 rounded-full ${accentBgClass}`}
+                />
               )}
             </button>
           ))}
@@ -120,39 +138,55 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
       </div>
 
       {/* Main Content Area */}
-      {activeTab === 'people' ? (
-        <div className="divide-y divide-neutral-800/60 p-2">
+      {loading ? (
+        <div className="divide-y divide-white/[0.06]">
+          <PostSkeleton />
+          <PostSkeleton />
+          <PostSkeleton />
+        </div>
+      ) : activeTab === 'people' ? (
+        <div className="divide-y divide-white/[0.06]">
           {filteredUsers.length === 0 ? (
-            <div className="p-8 text-center text-neutral-500 text-sm">No people found</div>
+            <EmptyState
+              title="No accounts found"
+              description={`No accounts match your search for "${query}". Try another query.`}
+            />
           ) : (
-            filteredUsers.map(user => (
+            filteredUsers.map((user) => (
               <div
                 key={user.id}
                 onClick={() => onUserClick(user.username)}
-                className="flex items-center justify-between p-3 hover:bg-neutral-900/40 rounded-xl cursor-pointer transition-colors"
+                className="flex items-center justify-between p-4 hover:bg-white/[0.02] cursor-pointer transition-colors"
               >
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 min-w-0">
                   <Avatar src={user.avatarUrl} name={user.name} size="md" />
-                  <div>
-                    <div className="font-bold text-sm flex items-center gap-1">
+                  <div className="min-w-0">
+                    <div className="font-bold text-sm flex items-center gap-1 text-white truncate">
                       {user.name}
                       {user.verified && <Badge type={user.isGold ? 'gold' : 'blue'} size="sm" />}
                     </div>
-                    <div className="text-xs text-neutral-400">@{user.username}</div>
-                    {user.bio && <p className="text-xs text-neutral-300 mt-1 line-clamp-1">{user.bio}</p>}
+                    <div className="text-xs text-neutral-400 font-mono">@{user.username}</div>
+                    {user.bio && (
+                      <p className="text-xs text-neutral-300 mt-1 line-clamp-1">{user.bio}</p>
+                    )}
                   </div>
                 </div>
-                <Button size="sm" variant="outline">View</Button>
+                <Button size="xs" variant="outline" className="ml-3 shrink-0">
+                  View
+                </Button>
               </div>
             ))
           )}
         </div>
       ) : activeTab === 'media' ? (
-        <div className="divide-y divide-neutral-800/60">
+        <div className="divide-y divide-white/[0.06]">
           {mediaPosts.length === 0 ? (
-            <div className="p-8 text-center text-neutral-500 text-sm">No media posts found</div>
+            <EmptyState
+              title="No media found"
+              description="There are no posts containing photos or videos matching this filter."
+            />
           ) : (
-            mediaPosts.map(post => (
+            mediaPosts.map((post) => (
               <PostCard
                 key={post.id}
                 post={post}
@@ -168,24 +202,24 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
         <div className="flex flex-col">
           {/* Trending Categories Section if no query */}
           {!query && (
-            <div className="p-4 border-b border-neutral-800/80">
-              <h2 className="text-lg font-bold mb-3 flex items-center gap-2">
-                <TrendingUp className="w-5 h-5 text-sky-400" />
-                Trends for you
+            <div className="p-4 border-b border-white/[0.08]">
+              <h2 className="text-base font-bold mb-3 flex items-center gap-2 text-white">
+                <TrendingUp className="w-4 h-4 text-cyan-400" />
+                Featured trends
               </h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {trends.map(t => (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {trends.map((t) => (
                   <div
                     key={t.id}
                     onClick={() => {
                       setQuery(t.topic);
                       onTagClick(t.topic);
                     }}
-                    className="p-3 rounded-xl bg-neutral-900/40 border border-neutral-800/60 hover:bg-neutral-800/40 cursor-pointer transition-colors"
+                    className="p-3 rounded-2xl bg-white/[0.03] border border-white/10 hover:bg-white/[0.06] cursor-pointer transition-colors"
                   >
                     <span className="text-[11px] text-neutral-500">{t.category}</span>
                     <h4 className="font-bold text-sm text-neutral-200 mt-0.5">{t.topic}</h4>
-                    <span className="text-xs text-neutral-500">{t.postsCount}</span>
+                    <span className="text-xs text-neutral-500 font-mono">{t.postsCount}</span>
                   </div>
                 ))}
               </div>
@@ -193,13 +227,14 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
           )}
 
           {/* Posts list */}
-          <div className="divide-y divide-neutral-800/60">
+          <div className="divide-y divide-white/[0.06]">
             {filteredPosts.length === 0 ? (
-              <div className="p-12 text-center text-neutral-500 text-sm">
-                No matching posts found for "{query}"
-              </div>
+              <EmptyState
+                title="No posts found"
+                description={`No posts match your search for "${query}". Try searching with different keywords.`}
+              />
             ) : (
-              filteredPosts.map(post => (
+              filteredPosts.map((post) => (
                 <PostCard
                   key={post.id}
                   post={post}

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Calendar, MapPin, Link as LinkIcon, Sparkles } from 'lucide-react';
+import { ArrowLeft, Calendar, MapPin, Link as LinkIcon } from 'lucide-react';
 import { User, Post } from '../../types/index.ts';
 import { api } from '../../services/api.ts';
 import { useAuth } from '../../context/AuthContext.tsx';
@@ -10,6 +10,8 @@ import { Button } from '../common/Button.tsx';
 import { CdnImage } from '../common/CdnImage.tsx';
 import { PostCard } from '../feed/PostCard.tsx';
 import { EditProfileModal } from './EditProfileModal.tsx';
+import { PostSkeleton } from '../common/LoadingSkeleton.tsx';
+import { EmptyState } from '../common/EmptyState.tsx';
 
 interface ProfileViewProps {
   username?: string;
@@ -78,11 +80,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
   if (loading) {
     return (
-      <div className="p-12 flex justify-center text-neutral-500">
-        <svg className="animate-spin h-7 w-7 text-sky-500" viewBox="0 0 24 24" fill="none">
-          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-        </svg>
+      <div className="flex flex-col min-h-screen">
+        <div className="h-44 sm:h-52 w-full bg-white/[0.04] animate-pulse" />
+        <div className="p-4">
+          <PostSkeleton />
+          <PostSkeleton />
+        </div>
       </div>
     );
   }
@@ -92,45 +95,57 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       <div className="p-12 text-center text-neutral-400">
         <h2 className="text-xl font-bold">This account doesn’t exist</h2>
         <p className="text-sm mt-1 text-neutral-500">Try searching for another user.</p>
-        <Button onClick={onBack} size="sm" className="mt-4 mx-auto">Go Back</Button>
+        <Button onClick={onBack} size="sm" className="mt-4 mx-auto">
+          Go Back
+        </Button>
       </div>
     );
   }
 
-  const headerBg = theme === 'dark' ? 'bg-black/85 border-neutral-800' : theme === 'dim' ? 'bg-[#15202b]/85 border-neutral-700' : 'bg-white/85 border-neutral-200';
+  const headerBg =
+    theme === 'dark'
+      ? 'bg-[#090B10]/85 border-white/[0.08]'
+      : theme === 'dim'
+        ? 'bg-[#0F172A]/85 border-neutral-700'
+        : 'bg-white/85 border-slate-200';
 
-  const defaultBanner = 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop&q=80';
+  const defaultBanner =
+    'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop&q=80';
 
-  // Filter posts for active tab
-  const displayedPosts = activeTab === 'media'
-    ? posts.filter(p => p.mediaUrls && p.mediaUrls.length > 0)
-    : activeTab === 'replies'
-    ? posts.filter(p => p.replyToId)
-    : activeTab === 'likes'
-    ? posts.filter(p => p.isLiked)
-    : posts.filter(p => !p.replyToId);
+  const displayedPosts =
+    activeTab === 'media'
+      ? posts.filter((p) => p.mediaUrls && p.mediaUrls.length > 0)
+      : activeTab === 'replies'
+      ? posts.filter((p) => p.replyToId)
+      : activeTab === 'likes'
+      ? posts.filter((p) => p.isLiked)
+      : posts.filter((p) => !p.replyToId);
 
   return (
     <div className="flex flex-col min-h-screen">
       {/* Sticky Profile Header */}
-      <div className={`sticky top-0 z-20 backdrop-blur-md border-b ${headerBg} px-4 py-2 flex items-center gap-6`}>
+      <div
+        className={`sticky top-0 z-20 backdrop-blur-xl border-b ${headerBg} px-4 py-2.5 flex items-center gap-5`}
+      >
         <button
+          type="button"
           onClick={onBack}
-          className="p-2 rounded-full hover:bg-neutral-800/50 cursor-pointer transition-colors"
+          className="p-2 rounded-full hover:bg-white/[0.08] cursor-pointer transition-colors"
+          title="Back"
         >
           <ArrowLeft className="w-5 h-5 text-white" />
         </button>
         <div>
-          <h2 className="text-lg font-bold flex items-center gap-1 leading-tight">
+          <h2 className="text-base font-bold flex items-center gap-1.5 leading-tight text-white">
             {user.name}
             {user.verified && <Badge type={user.isGold ? 'gold' : 'blue'} size="sm" />}
           </h2>
-          <span className="text-xs text-neutral-500">{posts.length} posts</span>
+          <span className="text-xs text-neutral-400 font-mono">{posts.length} posts</span>
         </div>
       </div>
 
       {/* Cover Banner */}
-      <div className="h-44 sm:h-52 w-full bg-neutral-800 overflow-hidden relative">
+      <div className="h-44 sm:h-52 w-full bg-neutral-900 overflow-hidden relative">
         <CdnImage
           src={user.bannerUrl || defaultBanner}
           alt="Banner cover"
@@ -139,23 +154,19 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       </div>
 
       {/* Profile Details Container */}
-      <div className="px-4 pb-4 border-b border-neutral-800/80">
+      <div className="px-4 pb-4 border-b border-white/[0.08]">
         {/* Avatar & Edit/Follow Button Row */}
-        <div className="flex items-end justify-between -mt-16 sm:-mt-20 mb-4">
+        <div className="flex items-end justify-between -mt-14 sm:-mt-16 mb-3">
           <Avatar
             src={user.avatarUrl}
             name={user.name}
             size="xl"
-            className="ring-4 ring-black"
+            className="ring-4 ring-[#090B10]"
           />
 
           <div>
             {isOwnProfile ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowEditModal(true)}
-              >
+              <Button variant="outline" size="sm" onClick={() => setShowEditModal(true)}>
                 Edit profile
               </Button>
             ) : (
@@ -171,12 +182,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         </div>
 
         {/* Name and Handle */}
-        <div className="mb-3">
-          <h1 className="text-xl font-bold flex items-center gap-1.5 leading-tight">
+        <div className="mb-2.5">
+          <h1 className="text-xl font-black flex items-center gap-1.5 leading-tight text-white">
             {user.name}
             {user.verified && <Badge type={user.isGold ? 'gold' : 'blue'} size="md" />}
           </h1>
-          <span className="text-sm text-neutral-500">@{user.username}</span>
+          <span className="text-sm text-neutral-400 font-mono">@{user.username}</span>
         </div>
 
         {/* Bio */}
@@ -187,7 +198,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         )}
 
         {/* Meta Info: Location, Website, Joined Date */}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-neutral-500 mb-3">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-neutral-400 mb-3">
           {user.location && (
             <div className="flex items-center gap-1">
               <MapPin className="w-3.5 h-3.5" />
@@ -214,56 +225,48 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         </div>
 
         {/* Follower Counts */}
-        <div className="flex items-center gap-4 text-xs">
+        <div className="flex items-center gap-4 text-xs font-mono">
           <div className="flex items-center gap-1">
-            <span className={`font-bold ${theme === 'light' ? 'text-slate-900' : 'text-white'}`}>
-              {user.followingCount}
-            </span>
-            <span className="text-neutral-500">Following</span>
+            <span className="font-bold text-white">{user.followingCount}</span>
+            <span className="text-neutral-500 font-sans">Following</span>
           </div>
           <div className="flex items-center gap-1">
-            <span className={`font-bold ${theme === 'light' ? 'text-slate-900' : 'text-white'}`}>
-              {user.followersCount.toLocaleString()}
-            </span>
-            <span className="text-neutral-500">Followers</span>
+            <span className="font-bold text-white">{user.followersCount.toLocaleString()}</span>
+            <span className="text-neutral-500 font-sans">Followers</span>
           </div>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex border-b border-neutral-800/80">
-        {(['posts', 'replies', 'highlights', 'media', 'likes'] as const).map(tab => (
+      <div className="flex border-b border-white/[0.08]">
+        {(['posts', 'replies', 'highlights', 'media', 'likes'] as const).map((tab) => (
           <button
             key={tab}
+            type="button"
             onClick={() => setActiveTab(tab)}
-            className="flex-1 py-3 text-center text-xs sm:text-sm font-bold capitalize relative hover:bg-neutral-800/20 cursor-pointer"
+            className="flex-1 py-3 text-center text-xs sm:text-sm font-bold capitalize relative hover:bg-white/[0.03] cursor-pointer"
           >
-            <span
-              className={
-                activeTab === tab
-                  ? theme === 'light'
-                    ? 'text-slate-900 font-bold'
-                    : 'text-white font-bold'
-                  : 'text-neutral-500'
-              }
-            >
+            <span className={activeTab === tab ? 'text-white' : 'text-neutral-500'}>
               {tab}
             </span>
             {activeTab === tab && (
-              <span className={`absolute bottom-0 left-0 right-0 h-1 rounded-full ${accentBgClass}`} />
+              <span
+                className={`absolute bottom-0 left-0 right-0 h-0.75 rounded-full ${accentBgClass}`}
+              />
             )}
           </button>
         ))}
       </div>
 
       {/* Profile Posts Feed */}
-      <div className="divide-y divide-neutral-800/60 flex-1">
+      <div className="divide-y divide-white/[0.06] flex-1">
         {displayedPosts.length === 0 ? (
-          <div className="p-12 text-center text-neutral-500 text-sm">
-            No {activeTab} yet from this user.
-          </div>
+          <EmptyState
+            title={`No ${activeTab} yet`}
+            description={`Posts, replies, and saved media from @${user.username} will appear here.`}
+          />
         ) : (
-          displayedPosts.map(post => (
+          displayedPosts.map((post) => (
             <PostCard
               key={post.id}
               post={post}
@@ -271,6 +274,9 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               onReplyClick={onReplyClick}
               onUserClick={onUserClick}
               onTagClick={onTagClick}
+              onDeletePost={(deletedId) => {
+                setPosts((prev) => prev.filter((p) => p.id !== deletedId));
+              }}
             />
           ))
         )}
