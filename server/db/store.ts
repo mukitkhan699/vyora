@@ -66,7 +66,7 @@ export const INITIAL_POSTS: Post[] = [
     id: 'post_1',
     authorId: 'user_mukit',
     author: INITIAL_USERS[0],
-    content: 'Welcome to VYORA ⚡️ The decoupled global transmission platform. Built with modular components, dynamic multi-CDN failover, and PostgreSQL. All configuration is centrally orchestrated in the standalone Node.js backend! #VYORA #DecoupledArchitecture',
+    content: 'Welcome to Zunari ⚡️ Your real-time home for sharing ideas, following people, and connecting with communities. #Zunari',
     mediaUrls: [
       'https://images.unsplash.com/photo-1460925895917-afdab827c52f?w=1000&auto=format&fit=crop&q=80',
     ],
@@ -83,14 +83,14 @@ export const INITIAL_POSTS: Post[] = [
     id: 'post_2',
     authorId: 'user_elon',
     author: INITIAL_USERS[1],
-    content: 'Which transmission capability should VYORA deploy next on the global relay?',
+    content: 'What should Zunari add next to make conversations even better?',
     poll: {
       id: 'poll_1',
       options: [
-        { id: 1, text: 'Sub-millisecond multi-CDN caching', votes: 6890 },
-        { id: 2, text: 'Encrypted Tele-Direct channels', votes: 4410 },
-        { id: 3, text: 'Decentralized telemetry streams', votes: 2750 },
-        { id: 4, text: 'Live VYORA Space transmissions', votes: 1930 },
+        { id: 1, text: 'Group conversations', votes: 6890 },
+        { id: 2, text: 'More ways to personalize your feed', votes: 4410 },
+        { id: 3, text: 'Community events', votes: 2750 },
+        { id: 4, text: 'Photo sharing', votes: 1930 },
       ],
       totalVotes: 15980,
       userVotedIndex: undefined,
@@ -168,11 +168,11 @@ export const INITIAL_NOTIFICATIONS: Notification[] = [
 ];
 
 export const INITIAL_TRENDS: TrendItem[] = [
-  { id: '1', category: 'Global Transmissions · Trending', topic: '#VYORA', postsCount: '158.2K transmissions', trendingRank: 1 },
-  { id: '2', category: 'Infrastructure · Trending', topic: '#PostgreSQL', postsCount: '45.2K posts', trendingRank: 2 },
-  { id: '3', category: 'Edge Relay · Trending', topic: 'Multi-CDN Routing', postsCount: '38.9K posts', trendingRank: 3 },
-  { id: '4', category: 'Architecture · Trending', topic: '#DecoupledNodeAPI', postsCount: '52.1K posts', trendingRank: 4 },
-  { id: '5', category: 'Relay Protocol · Trending', topic: 'Aurora Core v3', postsCount: '29.3K posts', trendingRank: 5 },
+  { id: '1', category: 'Community · Trending', topic: '#Zunari', postsCount: '158.2K posts', trendingRank: 1 },
+  { id: '2', category: 'Design · Trending', topic: '#CreativeIdeas', postsCount: '45.2K posts', trendingRank: 2 },
+  { id: '3', category: 'Culture · Trending', topic: 'Weekend conversations', postsCount: '38.9K posts', trendingRank: 3 },
+  { id: '4', category: 'Community · Trending', topic: '#GoodThings', postsCount: '52.1K posts', trendingRank: 4 },
+  { id: '5', category: 'Discovery · Trending', topic: 'What inspires you?', postsCount: '29.3K posts', trendingRank: 5 },
 ];
 
 export const INITIAL_MESSAGES: Message[] = [
@@ -201,64 +201,3 @@ export const INITIAL_MESSAGES: Message[] = [
     isSender: false,
   },
 ];
-
-// In-Memory store instance for ultra-fast, reliable state
-class Store {
-  public users: Map<string, User> = new Map();
-  public userCredentials: Map<string, string> = new Map(); // userId -> password
-  public sessions: Map<string, { token: string; userId: string; createdAt: string }> = new Map(); // token -> session
-  public posts: Map<string, Post> = new Map();
-  public likes: Set<string> = new Set(); // "userId:postId"
-  public reposts: Set<string> = new Set(); // "userId:postId"
-  public bookmarks: Set<string> = new Set(); // "userId:postId"
-  public follows: Set<string> = new Set(); // "followerId:followingId"
-  public notifications: Notification[] = [];
-  public messages: Message[] = [];
-  public trends: TrendItem[] = [...INITIAL_TRENDS];
-
-  constructor() {
-    this.reset();
-  }
-
-  public reset() {
-    this.users.clear();
-    this.userCredentials.clear();
-    this.sessions.clear();
-    this.posts.clear();
-    this.likes.clear();
-    this.reposts.clear();
-    this.bookmarks.clear();
-    this.follows.clear();
-
-    INITIAL_USERS.forEach(u => {
-      this.users.set(u.id, { ...u });
-      // Default initial passwords for seed accounts
-      this.userCredentials.set(u.id, 'vyora123');
-    });
-
-    INITIAL_POSTS.forEach(p => this.posts.set(p.id, { ...p }));
-    this.notifications = [...INITIAL_NOTIFICATIONS];
-    this.messages = [...INITIAL_MESSAGES];
-
-    // Seed sample follows
-    this.follows.add('user_mukit:user_elon');
-    this.follows.add('user_mukit:user_tech');
-    this.follows.add('user_mukit:user_design');
-
-    // Seed sample likes & bookmarks for current user
-    this.likes.add('user_mukit:post_3');
-    this.bookmarks.add('user_mukit:post_3');
-    this.reposts.add('user_mukit:post_4');
-
-    // Seed a default session for instant access if needed
-    const defaultToken = 'vyora_token_mukit_primary';
-    this.sessions.set(defaultToken, {
-      token: defaultToken,
-      userId: 'user_mukit',
-      createdAt: new Date().toISOString(),
-    });
-  }
-}
-
-export const inMemoryStore = new Store();
-

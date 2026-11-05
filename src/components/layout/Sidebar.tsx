@@ -36,7 +36,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const { theme, accentTextClass, accentBgClass, isDark } = useTheme();
   const [showUserMenu, setShowUserMenu] = useState(false);
 
-  const brandName = appConfig?.appName || 'VYORA';
+  const brandName = appConfig?.appName || 'Zunari';
 
   const navItems = [
     { id: 'home', label: 'Home', icon: Home },

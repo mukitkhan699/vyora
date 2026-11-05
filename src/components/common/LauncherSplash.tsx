@@ -16,7 +16,7 @@ const BOOT_STEPS = [
 
 export const LauncherSplash: React.FC<LauncherSplashProps> = ({
   isLoading,
-  appName = 'VYORA',
+  appName = 'Zunari',
 }) => {
   const [visible, setVisible] = useState(true);
   const [progress, setProgress] = useState(BOOT_STEPS[0].progress);

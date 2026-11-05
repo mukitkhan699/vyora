@@ -4,15 +4,16 @@ import {
   scrypt as scryptCallback,
   timingSafeEqual,
 } from 'node:crypto';
-import { chmodSync, mkdirSync } from 'node:fs';
-import path from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { config } from './config.ts';
 import { INITIAL_USERS } from './db/store.ts';
 import { dbAdapter } from './db/adapter.ts';
+import { query, verifyDatabase, withTransaction } from './db/pool.ts';
+import { HttpError } from './errors.ts';
+import { publishSessionRevocation } from './realtime-events.ts';
+
+export { HttpError } from './errors.ts';
 function scryptAsync(
   password: string,
   salt: Buffer,
@@ -27,12 +28,7 @@ function scryptAsync(
   });
 }
 
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PORT = Number.parseInt(process.env.PORT || String(config.port || 3000), 10) || 3000;
-const DB_PATH = process.env.AUTH_DATABASE_PATH || path.join(rootDir, 'data', 'auth.db');
-const REQUIRE_EMAIL_VERIFICATION = process.env.REQUIRE_EMAIL_VERIFICATION === 'true';
 const COOKIE_SECURE = process.env.COOKIE_SECURE;
-const SMTP_HOST = process.env.SMTP_HOST || '';
 
 const COOKIE_NAME = 'sid';
 const SECURE_COOKIE_NAME = '__Host-sid';
@@ -69,25 +65,6 @@ export interface AuthUser {
   createdAt: number;
 }
 
-export class HttpError extends Error {
-  public readonly status: number;
-  public readonly code?: string;
-  public readonly headers: Record<string, string>;
-
-  constructor(
-    status: number,
-    message: string,
-    code?: string,
-    headers: Record<string, string> = {},
-  ) {
-    super(message);
-    this.name = 'HttpError';
-    this.status = status;
-    this.code = code;
-    this.headers = headers;
-  }
-}
-
 // In-memory sliding window rate limiter
 class SimpleRateLimiter {
   private timestamps = new Map<string, number[]>();
@@ -120,96 +97,6 @@ class SimpleRateLimiter {
 
 const loginLimiter = new SimpleRateLimiter(20, 15 * 60 * 1000);
 const registerLimiter = new SimpleRateLimiter(30, 60 * 60 * 1000);
-
-// Initialize SQLite database
-mkdirSync(path.dirname(DB_PATH), { recursive: true });
-try {
-  chmodSync(path.dirname(DB_PATH), 0o700);
-} catch {
-  // Best effort
-}
-
-const db = new DatabaseSync(DB_PATH);
-try {
-  chmodSync(DB_PATH, 0o600);
-} catch {
-  // Best effort
-}
-
-db.exec(`
-  PRAGMA journal_mode = WAL;
-  PRAGMA foreign_keys = ON;
-  PRAGMA busy_timeout = 5000;
-
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    email TEXT UNIQUE COLLATE NOCASE,
-    password_hash TEXT NOT NULL,
-    email_verified INTEGER NOT NULL DEFAULT 1,
-    created_at INTEGER NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS sessions (
-    token_hash TEXT PRIMARY KEY,
-    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-    csrf_token TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS password_resets (
-    token_hash TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    created_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL,
-    used_at INTEGER
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
-  CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at);
-`);
-
-const statements = {
-  insertUser: db.prepare(
-    'INSERT INTO users (username, email, password_hash, email_verified, created_at) VALUES (?, ?, ?, ?, ?)',
-  ),
-  userByUsername: db.prepare(
-    'SELECT id, username, email, password_hash, email_verified, created_at FROM users WHERE username = ? COLLATE NOCASE',
-  ),
-  userByEmail: db.prepare(
-    'SELECT id, username, email, password_hash, email_verified, created_at FROM users WHERE email = ? COLLATE NOCASE',
-  ),
-  userById: db.prepare(
-    'SELECT id, username, email, password_hash, email_verified, created_at FROM users WHERE id = ?',
-  ),
-  updateUserPassword: db.prepare('UPDATE users SET password_hash = ? WHERE id = ?'),
-  insertSession: db.prepare(
-    'INSERT INTO sessions (token_hash, user_id, csrf_token, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
-  ),
-  sessionByHash: db.prepare(`
-    SELECT
-      s.token_hash,
-      s.user_id,
-      s.csrf_token,
-      s.expires_at,
-      u.username,
-      u.email,
-      u.email_verified,
-      u.created_at AS user_created_at
-    FROM sessions s
-    LEFT JOIN users u ON u.id = s.user_id
-    WHERE s.token_hash = ?
-  `),
-  deleteSession: db.prepare('DELETE FROM sessions WHERE token_hash = ?'),
-  insertPasswordReset: db.prepare(
-    'INSERT INTO password_resets (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)',
-  ),
-  passwordResetByHash: db.prepare(
-    'SELECT token_hash, user_id, created_at, expires_at, used_at FROM password_resets WHERE token_hash = ?',
-  ),
-  markPasswordResetUsed: db.prepare('UPDATE password_resets SET used_at = ? WHERE token_hash = ?'),
-};
 
 export function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
@@ -312,7 +199,7 @@ export function clearSessionCookie(req: IncomingMessage, res: ServerResponse): v
   );
 }
 
-export function getSession(req: IncomingMessage): AuthSession | null {
+export async function getSession(req: IncomingMessage): Promise<AuthSession | null> {
   const secure = isSecureRequest(req);
   const token =
     getCookie(req, secure ? SECURE_COOKIE_NAME : COOKIE_NAME) ||
@@ -320,22 +207,35 @@ export function getSession(req: IncomingMessage): AuthSession | null {
     (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : null);
 
   if (!token) return null;
-  const row = statements.sessionByHash.get(hashToken(token)) as
-    | {
+  const result = await query<{
         token_hash: string;
         user_id: number | null;
         csrf_token: string;
         expires_at: number;
         username: string | null;
         email: string | null;
-        email_verified: number | null;
+        email_verified: boolean | null;
         user_created_at: number | null;
-      }
-    | undefined;
+      }>(
+    `SELECT
+       s.token_hash,
+       s.user_id,
+       s.csrf_token,
+       s.expires_at,
+       u.username,
+       u.email,
+       u.email_verified,
+       u.created_at AS user_created_at
+     FROM zunari_sessions AS s
+     LEFT JOIN zunari_users AS u ON u.id = s.user_id
+     WHERE s.token_hash = $1`,
+    [hashToken(token)],
+  );
+  const row = result.rows[0];
 
   if (!row) return null;
   if (row.expires_at <= Date.now()) {
-    statements.deleteSession.run(row.token_hash);
+    await query('DELETE FROM zunari_sessions WHERE token_hash = $1', [row.token_hash]);
     return null;
   }
 
@@ -345,15 +245,15 @@ export function getSession(req: IncomingMessage): AuthSession | null {
     userId: row.user_id,
     username: row.username,
     email: row.email,
-    emailVerified: row.email_verified ?? 1,
-    userCreatedAt: row.user_created_at,
+    emailVerified: row.email_verified === null ? 1 : Number(row.email_verified),
+    userCreatedAt: row.user_created_at === null ? null : Number(row.user_created_at),
     csrfToken: row.csrf_token,
-    expiresAt: row.expires_at,
+    expiresAt: Number(row.expires_at),
   };
 }
 
-export function getAuthUser(req: IncomingMessage): AuthUser | null {
-  const session = getSession(req);
+export async function getAuthUser(req: IncomingMessage): Promise<AuthUser | null> {
+  const session = await getSession(req);
   if (!session || !session.userId) return null;
   return {
     id: session.userId,
@@ -364,18 +264,16 @@ export function getAuthUser(req: IncomingMessage): AuthUser | null {
   };
 }
 
-export function createSession(user: Record<string, unknown> | null): AuthSession {
+export async function createSession(user: Record<string, unknown> | null): Promise<AuthSession> {
   const token = randomBytes(32).toString('base64url');
   const csrfToken = randomBytes(32).toString('base64url');
   const createdAt = Date.now();
   const expiresAt = createdAt + (user ? SESSION_TTL_MS : ANON_SESSION_TTL_MS);
 
-  statements.insertSession.run(
-    hashToken(token),
-    (user?.id as number | undefined) ?? null,
-    csrfToken,
-    createdAt,
-    expiresAt,
+  await query(
+    `INSERT INTO zunari_sessions (token_hash, user_id, csrf_token, created_at, expires_at)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [hashToken(token), (user?.id as number | undefined) ?? null, csrfToken, createdAt, expiresAt],
   );
 
   return {
@@ -384,21 +282,24 @@ export function createSession(user: Record<string, unknown> | null): AuthSession
     userId: (user?.id as number | undefined) ?? null,
     username: (user?.username as string | undefined) ?? null,
     email: (user?.email as string | undefined) ?? null,
-    emailVerified: (user?.email_verified as number | undefined) ?? 1,
-    userCreatedAt: (user?.created_at as number | undefined) ?? null,
+    emailVerified: user?.email_verified === undefined ? 1 : Number(user.email_verified),
+    userCreatedAt:
+      user?.created_at === undefined || user.created_at === null
+        ? null
+        : Number(user.created_at),
     csrfToken,
     expiresAt,
   };
 }
 
-export function requireSessionWithCsrf(req: IncomingMessage): AuthSession {
-  const session = getSession(req);
+export async function requireSessionWithCsrf(req: IncomingMessage): Promise<AuthSession> {
+  const session = await getSession(req);
   if (!session) {
     throw new HttpError(403, 'Session required. Please sign in.', 'SESSION_REQUIRED');
   }
 
   const csrfHeader = req.headers['x-csrf-token'];
-  if (csrfHeader && !safeEqual(csrfHeader, session.csrfToken)) {
+  if (!csrfHeader || !safeEqual(csrfHeader, session.csrfToken)) {
     throw new HttpError(403, 'Security token invalid. Please refresh the page.', 'CSRF_INVALID');
   }
 
@@ -410,12 +311,43 @@ export function validateStateChangingRequest(req: IncomingMessage): void {
     .split(';')[0]
     .trim()
     .toLowerCase();
-  if (
-    contentType !== 'application/json' &&
-    !contentType.startsWith('multipart/form-data') &&
-    req.method !== 'GET'
-  ) {
-    // Valid for JSON bodies
+  if (contentType !== 'application/json') {
+    throw new HttpError(415, 'Content-Type must be application/json.', 'UNSUPPORTED_MEDIA_TYPE');
+  }
+
+  const originHeader = req.headers.origin;
+  if (originHeader) {
+    let requestOrigin: string;
+    try {
+      requestOrigin = new URL(originHeader).origin;
+    } catch {
+      throw new HttpError(403, 'Request origin is not allowed.', 'ORIGIN_INVALID');
+    }
+
+    let expectedOrigin: string | undefined;
+    const appUrl = process.env.APP_URL?.trim();
+    if (appUrl) {
+      try {
+        expectedOrigin = new URL(appUrl).origin;
+      } catch {
+        throw new HttpError(403, 'Request origin is not allowed.', 'ORIGIN_INVALID');
+      }
+    } else if (req.headers.host) {
+      const forwardedProto = req.headers['x-forwarded-proto'];
+      const protocol =
+        typeof forwardedProto === 'string'
+          ? forwardedProto.split(',')[0].trim().toLowerCase()
+          : COOKIE_SECURE === 'true' || (req.socket as { encrypted?: boolean }).encrypted
+            ? 'https'
+            : 'http';
+      if (protocol === 'http' || protocol === 'https') {
+        expectedOrigin = `${protocol}://${req.headers.host}`;
+      }
+    }
+
+    if (!expectedOrigin || requestOrigin !== expectedOrigin) {
+      throw new HttpError(403, 'Request origin is not allowed.', 'ORIGIN_INVALID');
+    }
   }
 }
 
@@ -463,15 +395,16 @@ export function setAuthError(res: ServerResponse, error: unknown): void {
     });
     return;
   }
-  const message = error instanceof Error ? error.message : 'Internal Server Error';
-  sendJson(res, 500, { error: message, code: 'INTERNAL_ERROR' });
+  sendJson(res, 500, { error: 'Internal server error.', code: 'INTERNAL_ERROR' });
 }
 
-function userToPublic(user: Record<string, unknown> | undefined): Record<string, unknown> | null {
+async function userToPublic(
+  user: Record<string, unknown> | undefined,
+): Promise<Record<string, unknown> | null> {
   if (!user) return null;
   const authId = Number(user.id);
   const username = String(user.username || '');
-  const social = dbAdapter.syncAuthProfile({
+  const social = await dbAdapter.syncAuthProfile({
     id: authId,
     username,
     email: (user.email as string | null) ?? null,
@@ -497,20 +430,24 @@ function sessionPayload(session: AuthSession, user: Record<string, unknown> | nu
 
 // Handlers for Aegis authentication routes
 export async function handleSession(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const session = getSession(req);
+  const session = await getSession(req);
   if (session && session.userId) {
-    const user = statements.userById.get(session.userId) as Record<string, unknown> | undefined;
-    sendJson(res, 200, sessionPayload(session, userToPublic(user)));
+    const result = await query<Record<string, unknown>>(
+      'SELECT id, username, email, email_verified, created_at FROM zunari_users WHERE id = $1',
+      [session.userId],
+    );
+    sendJson(res, 200, sessionPayload(session, await userToPublic(result.rows[0])));
     return;
   }
   // Anonymous session for CSRF token
-  const anonymousSession = session || createSession(null);
+  const anonymousSession = session || (await createSession(null));
   setSessionCookie(req, res, anonymousSession);
   sendJson(res, 200, sessionPayload(anonymousSession, null));
 }
 
 export async function handleLogin(req: IncomingMessage, res: ServerResponse): Promise<void> {
   validateStateChangingRequest(req);
+  await requireSessionWithCsrf(req);
   const body = await readJsonBody(req);
   const identifier = String(body.username || '').trim();
   const password = String(body.password || '');
@@ -527,17 +464,21 @@ export async function handleLogin(req: IncomingMessage, res: ServerResponse): Pr
   loginLimiter.record(`login:${clientIp}`);
 
   // Find by username OR email
-  const user = (statements.userByUsername.get(identifier) ||
-    statements.userByEmail.get(identifier)) as
-    | {
-        id: number;
-        username: string;
-        email: string | null;
-        password_hash: string;
-        email_verified: number;
-        created_at: number;
-      }
-    | undefined;
+  const userResult = await query<{
+    id: number;
+    username: string;
+    email: string | null;
+    password_hash: string;
+    email_verified: boolean;
+    created_at: number | string;
+  }>(
+    `SELECT id, username, email, password_hash, email_verified, created_at
+     FROM zunari_users
+     WHERE lower(username) = lower($1) OR lower(email) = lower($1)
+     LIMIT 1`,
+    [identifier],
+  );
+  const user = userResult.rows[0];
 
   if (!user) {
     throw new HttpError(401, 'Invalid username or password.', 'INVALID_CREDENTIALS');
@@ -549,9 +490,9 @@ export async function handleLogin(req: IncomingMessage, res: ServerResponse): Pr
   }
 
   // Create session
-  const session = createSession(user);
+  const session = await createSession(user);
   setSessionCookie(req, res, session);
-  const publicUser = userToPublic(user);
+  const publicUser = await userToPublic(user);
 
   sendJson(res, 200, {
     ...sessionPayload(session, publicUser),
@@ -561,6 +502,7 @@ export async function handleLogin(req: IncomingMessage, res: ServerResponse): Pr
 
 export async function handleRegister(req: IncomingMessage, res: ServerResponse): Promise<void> {
   validateStateChangingRequest(req);
+  await requireSessionWithCsrf(req);
   const body = await readJsonBody(req);
   const username = normalizeUsername(body.username);
   const email = normalizeEmail(body.email);
@@ -590,72 +532,115 @@ export async function handleRegister(req: IncomingMessage, res: ServerResponse):
   }
   registerLimiter.record(`reg:${clientIp}`);
 
-  if (statements.userByUsername.get(username)) {
-    throw new HttpError(409, 'That username is already taken.', 'USERNAME_TAKEN');
-  }
-  if (statements.userByEmail.get(email)) {
-    throw new HttpError(409, 'An account with that email already exists.', 'EMAIL_TAKEN');
+  const passwordHash = await hashPassword(password);
+  const existingAccount = await query(
+    `SELECT 1 FROM zunari_users
+     WHERE lower(username) = lower($1) OR lower(email) = lower($2)
+     LIMIT 1`,
+    [username, email],
+  );
+  if (existingAccount.rowCount) {
+    throw new HttpError(
+      409,
+      'That username or email address is unavailable.',
+      'ACCOUNT_CONFLICT',
+    );
   }
 
-  const passwordHash = await hashPassword(password);
   const createdAt = Date.now();
 
-  const insertResult = statements.insertUser.run(
-    username,
-    email,
-    passwordHash,
-    1, // Email verified by default in dependency-free mode
-    createdAt,
+  let inserted;
+  try {
+    inserted = await withTransaction(async (connection) => {
+      const nextId = await connection.query<{ id: number }>(
+        "SELECT nextval(pg_get_serial_sequence('zunari_users', 'id'))::integer AS id",
+      );
+      return connection.query<{
+        id: number;
+        username: string;
+        email: string;
+        password_hash: string;
+        email_verified: boolean;
+        created_at: number | string;
+      }>(
+        `INSERT INTO zunari_users
+           (id, public_id, username, name, email, password_hash, email_verified, created_at,
+            joined_date, avatar_url, banner_url, bio, following_count)
+         VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, $8, $9, $10, $11, 1)
+         RETURNING id, username, email, password_hash, email_verified, created_at`,
+        [
+          nextId.rows[0].id,
+          `user_auth_${nextId.rows[0].id}`,
+          username,
+          displayName,
+          email,
+          passwordHash,
+          createdAt,
+          `Joined ${new Date(createdAt).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`,
+          INITIAL_USERS[0].avatarUrl,
+          INITIAL_USERS[0].bannerUrl || null,
+          'New Zunari member',
+        ],
+      );
+    });
+  } catch (error) {
+    if (!(error && typeof error === 'object' && 'code' in error && error.code === '23505')) {
+      throw error;
+    }
+    const existing = await query(
+      'SELECT 1 FROM zunari_users WHERE lower(username) = lower($1) OR lower(email) = lower($2) LIMIT 1',
+      [username, email],
+    );
+    if (existing.rowCount) {
+      throw new HttpError(
+        409,
+        'That username or email address is unavailable.',
+        'ACCOUNT_CONFLICT',
+      );
+    }
+    throw error;
+  }
+  const user = inserted.rows[0];
+  await query(
+    `INSERT INTO zunari_follows (follower_id, following_id, created_at)
+     VALUES ($1, 'user_mukit', $2) ON CONFLICT DO NOTHING`,
+    [`user_auth_${user.id}`, createdAt],
   );
-
-  const userId = Number(insertResult.lastInsertRowid);
-  const user = {
-    id: userId,
-    username,
-    email,
-    password_hash: passwordHash,
-    email_verified: 1,
-    created_at: createdAt,
-  };
-
-  // Sync social profile in store
-  const socialUser = dbAdapter.ensureUserFromAuth({
-    id: userId,
+  const socialUser = await dbAdapter.ensureUserFromAuth({
+    id: Number(user.id),
     username,
     email,
     createdAt,
   });
-  if (displayName && displayName !== username) {
-    socialUser.name = displayName;
-  }
+  await dbAdapter.updateProfile(socialUser.id, { name: displayName });
 
   // Create active session immediately
-  const session = createSession(user);
+  const session = await createSession(user);
   setSessionCookie(req, res, session);
 
   sendJson(res, 201, {
     authenticated: true,
-    user: userToPublic(user),
+    user: await userToPublic(user),
     csrfToken: session.csrfToken,
     expiresAt: session.expiresAt,
-    message: 'Account created successfully! Welcome to VYORA.',
+    message: 'Account created successfully! Welcome to Zunari.',
   });
 }
 
 export async function handleLogout(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const session = getSession(req);
-  if (session) {
-    statements.deleteSession.run(session.tokenHash);
-  }
+  validateStateChangingRequest(req);
+  const session = await requireSessionWithCsrf(req);
+  await query('DELETE FROM zunari_sessions WHERE token_hash = $1', [session.tokenHash]);
+  publishSessionRevocation({ tokenHash: session.tokenHash });
   clearSessionCookie(req, res);
-  const anonymousSession = createSession(null);
+  const anonymousSession = await createSession(null);
   setSessionCookie(req, res, anonymousSession);
   sendJson(res, 200, sessionPayload(anonymousSession, null));
 }
 
 export async function handleChangePassword(req: IncomingMessage, res: ServerResponse): Promise<void> {
   validateStateChangingRequest(req);
-  const session = requireSessionWithCsrf(req);
+  const session = await requireSessionWithCsrf(req);
   if (!session.userId) {
     throw new HttpError(401, 'Authentication required.', 'UNAUTHORIZED');
   }
@@ -671,22 +656,39 @@ export async function handleChangePassword(req: IncomingMessage, res: ServerResp
     throw new HttpError(400, 'New password must be at least 8 characters.', 'INVALID_PASSWORD');
   }
 
-  const user = statements.userById.get(session.userId) as
-    | { id: number; password_hash: string }
-    | undefined;
+  const userResult = await query<{ id: number; password_hash: string }>(
+    'SELECT id, password_hash FROM zunari_users WHERE id = $1',
+    [session.userId],
+  );
+  const user = userResult.rows[0];
 
   if (!user || !(await verifyPassword(currentPassword, user.password_hash))) {
     throw new HttpError(400, 'Current password incorrect.', 'INVALID_PASSWORD');
   }
 
   const newHash = await hashPassword(newPassword);
-  statements.updateUserPassword.run(newHash, session.userId);
+  await withTransaction(async (connection) => {
+    await connection.query('UPDATE zunari_users SET password_hash = $1 WHERE id = $2', [
+      newHash,
+      session.userId,
+    ]);
+    await connection.query('DELETE FROM zunari_sessions WHERE user_id = $1', [session.userId]);
+  });
+  publishSessionRevocation({ userId: session.userId });
+  const nextSession = await createSession(user);
+  setSessionCookie(req, res, nextSession);
 
-  sendJson(res, 200, { changed: true, message: 'Password updated successfully.' });
+  sendJson(res, 200, {
+    changed: true,
+    message: 'Password updated successfully.',
+    csrfToken: nextSession.csrfToken,
+    expiresAt: nextSession.expiresAt,
+  });
 }
 
 export async function handleForgotPassword(req: IncomingMessage, res: ServerResponse): Promise<void> {
   validateStateChangingRequest(req);
+  await requireSessionWithCsrf(req);
   const body = await readJsonBody(req);
   const email = normalizeEmail(body.email);
 
@@ -694,16 +696,18 @@ export async function handleForgotPassword(req: IncomingMessage, res: ServerResp
     throw new HttpError(400, 'Valid email required.', 'INVALID_EMAIL');
   }
 
-  const user = statements.userByEmail.get(email) as { id: number } | undefined;
+  const userResult = await query<{ id: number }>(
+    'SELECT id FROM zunari_users WHERE lower(email) = lower($1)',
+    [email],
+  );
+  const user = userResult.rows[0];
   if (user) {
     const token = randomBytes(24).toString('base64url');
-    statements.insertPasswordReset.run(
-      hashToken(token),
-      user.id,
-      Date.now(),
-      Date.now() + 60 * 60 * 1000,
+    await query(
+      `INSERT INTO zunari_password_resets (token_hash, user_id, created_at, expires_at)
+       VALUES ($1, $2, $3, $4)`,
+      [hashToken(token), user.id, Date.now(), Date.now() + 60 * 60 * 1000],
     );
-    console.log(`[AUTH] Password reset requested for ${email}. Token: ${token}`);
   }
 
   sendJson(res, 200, {
@@ -714,6 +718,7 @@ export async function handleForgotPassword(req: IncomingMessage, res: ServerResp
 
 export async function handleResetPassword(req: IncomingMessage, res: ServerResponse): Promise<void> {
   validateStateChangingRequest(req);
+  await requireSessionWithCsrf(req);
   const body = await readJsonBody(req);
   const token = String(body.token || '');
   const newPassword = String(body.password || '');
@@ -722,19 +727,47 @@ export async function handleResetPassword(req: IncomingMessage, res: ServerRespo
     throw new HttpError(400, 'Valid token and 8+ character password required.', 'INVALID_REQUEST');
   }
 
-  const resetRecord = statements.passwordResetByHash.get(hashToken(token)) as
-    | { token_hash: string; user_id: number; expires_at: number; used_at: number | null }
-    | undefined;
+  const resetResult = await query<{
+    token_hash: string;
+    user_id: number;
+    expires_at: number;
+    used_at: number | null;
+  }>(
+    `SELECT token_hash, user_id, expires_at, used_at
+     FROM zunari_password_resets WHERE token_hash = $1`,
+    [hashToken(token)],
+  );
+  const resetRecord = resetResult.rows[0];
 
   if (!resetRecord || resetRecord.used_at !== null || resetRecord.expires_at < Date.now()) {
     throw new HttpError(400, 'Reset token is invalid or has expired.', 'INVALID_TOKEN');
   }
 
   const newHash = await hashPassword(newPassword);
-  statements.updateUserPassword.run(newHash, resetRecord.user_id);
-  statements.markPasswordResetUsed.run(Date.now(), resetRecord.token_hash);
+  await withTransaction(async (connection) => {
+    await connection.query('UPDATE zunari_users SET password_hash = $1 WHERE id = $2', [
+      newHash,
+      resetRecord.user_id,
+    ]);
+    await connection.query(
+      'UPDATE zunari_password_resets SET used_at = $1 WHERE token_hash = $2',
+      [Date.now(), resetRecord.token_hash],
+    );
+    await connection.query('DELETE FROM zunari_sessions WHERE user_id = $1', [
+      resetRecord.user_id,
+    ]);
+  });
 
-  sendJson(res, 200, { reset: true, message: 'Password reset successfully. You can now sign in.' });
+  publishSessionRevocation({ userId: resetRecord.user_id });
+  clearSessionCookie(req, res);
+  const anonymousSession = await createSession(null);
+  setSessionCookie(req, res, anonymousSession);
+  sendJson(res, 200, {
+    reset: true,
+    message: 'Password reset successfully. You can now sign in.',
+    csrfToken: anonymousSession.csrfToken,
+    expiresAt: anonymousSession.expiresAt,
+  });
 }
 
 // Route dispatcher for auth endpoints
@@ -779,40 +812,60 @@ export async function handleAuthRequest(
   return false;
 }
 
-// Seed demo users with scrypt password 'vyora123'
 export async function initAuth(): Promise<void> {
+  await verifyDatabase();
+}
+
+export async function seedDemoAccounts(): Promise<void> {
   const defaultPassword = 'vyora123';
   const hashedPassword = await hashPassword(defaultPassword);
 
   for (const user of INITIAL_USERS) {
-    const existing = statements.userByUsername.get(user.username);
-    if (!existing) {
-      try {
-        statements.insertUser.run(
+    const existing = await query(
+      'SELECT 1 FROM zunari_users WHERE lower(username) = lower($1) LIMIT 1',
+      [user.username],
+    );
+    if (!existing.rowCount) {
+      await query(
+        `INSERT INTO zunari_users
+           (public_id, username, name, email, password_hash, email_verified, created_at, joined_date,
+            avatar_url, banner_url, bio, location, website, verified, is_gold,
+            followers_count, following_count)
+         VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+         ON CONFLICT DO NOTHING`,
+        [
+          user.id,
           user.username,
+          user.name,
           `${user.username}@vyora.network`,
           hashedPassword,
-          1,
           Date.now(),
-        );
-      } catch (err) {
-        // User may already exist
-      }
+          user.joinedDate,
+          user.avatarUrl,
+          user.bannerUrl || null,
+          user.bio || null,
+          user.location || null,
+          user.website || null,
+          user.verified,
+          Boolean(user.isGold),
+          user.followersCount,
+          user.followingCount,
+        ],
+      );
     }
   }
-  console.log('[AUTH] Aegis authentication initialized with self-contained SQLite.');
 }
 
 export function renderEmailVerificationPage(token: string) {
   return {
     status: 200,
-    html: `<!doctype html><html><body><h1>Email Verified</h1><p>Your address has been confirmed. You can now <a href="/">sign in to VYORA</a>.</p></body></html>`,
+    html: `<!doctype html><html><body><h1>Email Verified</h1><p>Your address has been confirmed. You can now <a href="/">sign in to Zunari</a>.</p></body></html>`,
   };
 }
 
 export function renderPasswordResetPage(token: string) {
   return {
     status: 200,
-    html: `<!doctype html><html><body><h1>Reset Password</h1><p>Please use the VYORA interface to reset your password.</p></body></html>`,
+    html: `<!doctype html><html><body><h1>Reset Password</h1><p>Please use the Zunari interface to reset your password.</p></body></html>`,
   };
 }

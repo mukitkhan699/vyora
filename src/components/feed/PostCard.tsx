@@ -375,7 +375,7 @@ export const PostCard: React.FC<PostCardProps> = ({
             )}
 
             {/* Actions Bar */}
-            <div className="flex items-center justify-between text-neutral-400 text-xs mt-2 -ml-2 max-w-md">
+            <div className="flex w-full min-w-0 items-center justify-between text-neutral-400 text-xs mt-2 -ml-2 max-w-md">
               {/* Reply */}
               <button
                 type="button"
@@ -383,7 +383,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                   e.stopPropagation();
                   if (onReplyClick) onReplyClick(post);
                 }}
-                className="flex items-center gap-1.5 p-2 rounded-full hover:text-cyan-400 hover:bg-cyan-400/10 transition-colors group cursor-pointer"
+                className="min-w-0 flex items-center justify-center gap-1 p-1 sm:gap-1.5 sm:p-2 rounded-full hover:text-cyan-400 hover:bg-cyan-400/10 transition-colors group cursor-pointer"
                 title="Reply"
               >
                 <MessageCircle className="w-4 h-4 group-hover:scale-110 transition-transform" />
@@ -394,7 +394,7 @@ export const PostCard: React.FC<PostCardProps> = ({
               <button
                 type="button"
                 onClick={handleRepost}
-                className={`flex items-center gap-1.5 p-2 rounded-full hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors group cursor-pointer ${
+                className={`min-w-0 flex items-center justify-center gap-1 p-1 sm:gap-1.5 sm:p-2 rounded-full hover:text-emerald-400 hover:bg-emerald-500/10 transition-colors group cursor-pointer ${
                   isReposted ? 'text-emerald-400 font-bold' : ''
                 }`}
                 title="Repost"
@@ -407,7 +407,7 @@ export const PostCard: React.FC<PostCardProps> = ({
               <button
                 type="button"
                 onClick={handleLike}
-                className={`flex items-center gap-1.5 p-2 rounded-full hover:text-rose-500 hover:bg-rose-500/10 transition-colors group cursor-pointer ${
+                className={`min-w-0 flex items-center justify-center gap-1 p-1 sm:gap-1.5 sm:p-2 rounded-full hover:text-rose-500 hover:bg-rose-500/10 transition-colors group cursor-pointer ${
                   isLiked ? 'text-rose-500 font-bold' : ''
                 }`}
                 title="Like"
@@ -421,17 +421,17 @@ export const PostCard: React.FC<PostCardProps> = ({
               </button>
 
               {/* Views */}
-              <div className="flex items-center gap-1.5 p-2 text-neutral-500">
+              <div className="min-w-0 flex items-center justify-center gap-1 p-1 sm:gap-1.5 sm:p-2 text-neutral-500">
                 <BarChart2 className="w-4 h-4" />
-                <span className="font-mono text-[11px]">{post.viewsCount.toLocaleString()}</span>
+                <span className="hidden sm:inline font-mono text-[11px]">{post.viewsCount.toLocaleString()}</span>
               </div>
 
               {/* Bookmark & Share */}
-              <div className="flex items-center">
+              <div className="flex min-w-0 items-center">
                 <button
                   type="button"
                   onClick={handleBookmark}
-                  className={`p-2 rounded-full hover:text-cyan-400 hover:bg-cyan-400/10 transition-colors group cursor-pointer ${
+                  className={`p-1 sm:p-2 rounded-full hover:text-cyan-400 hover:bg-cyan-400/10 transition-colors group cursor-pointer ${
                     isBookmarked ? 'text-cyan-400' : ''
                   }`}
                   title="Bookmark"
@@ -449,7 +449,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                     e.stopPropagation();
                     handleCopyLink();
                   }}
-                  className="p-2 rounded-full hover:text-cyan-400 hover:bg-cyan-400/10 transition-colors group cursor-pointer"
+                  className="p-1 sm:p-2 rounded-full hover:text-cyan-400 hover:bg-cyan-400/10 transition-colors group cursor-pointer"
                   title="Share link"
                 >
                   <Share className="w-4 h-4 group-hover:scale-110 transition-transform" />

@@ -131,7 +131,7 @@ export const Timeline: React.FC<TimelineProps> = ({
             description={
               feedType === 'following'
                 ? 'Follow other accounts to see their updates right here in your feed.'
-                : 'Share your thoughts and publish the very first post on VYORA!'
+                : 'Share your thoughts and publish the very first post on Zunari!'
             }
           />
         ) : (

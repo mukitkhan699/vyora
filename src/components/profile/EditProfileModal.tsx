@@ -51,12 +51,13 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
     setErrorMsg(null);
     try {
       setUploadingAvatar(true);
-      const res = await api.uploadFile(file);
-      setAvatarUrl(res.url);
+      const res = await api.uploadFile(file, 'profile-avatar');
+      setAvatarUrl(api.resolveFileUrl(res.url));
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : 'Avatar upload failed');
     } finally {
       setUploadingAvatar(false);
+      if (avatarInputRef.current) avatarInputRef.current.value = '';
     }
   };
 
@@ -66,12 +67,13 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
     setErrorMsg(null);
     try {
       setUploadingBanner(true);
-      const res = await api.uploadFile(file);
-      setBannerUrl(res.url);
+      const res = await api.uploadFile(file, 'profile-cover');
+      setBannerUrl(api.resolveFileUrl(res.url));
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : 'Banner upload failed');
     } finally {
       setUploadingBanner(false);
+      if (bannerInputRef.current) bannerInputRef.current.value = '';
     }
   };
 
@@ -240,7 +242,13 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
           <Button variant="ghost" size="sm" type="button" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="secondary" size="sm" type="submit" isLoading={saving}>
+          <Button
+            variant="secondary"
+            size="sm"
+            type="submit"
+            isLoading={saving}
+            disabled={saving || uploadingAvatar || uploadingBanner}
+          >
             Save Changes
           </Button>
         </div>

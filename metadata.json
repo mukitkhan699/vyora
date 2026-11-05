@@ -1,6 +1,6 @@
 {
-  "name": "VYORA",
-  "description": "A real-time social transmission platform with a dependency-free Node.js API, SQLite-backed authentication, multi-CDN media delivery, and a responsive React interface.",
+  "name": "Zunari",
+  "description": "A real-time social platform to share ideas, follow people, and join conversations.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

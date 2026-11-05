@@ -1,75 +1,26 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  Globe, 
-  Database, 
   Palette, 
-  Sliders, 
-  Check, 
-  RefreshCw, 
-  Server, 
-  HardDrive,
-  FileCode,
+  Check,
   ShieldCheck,
-  Zap,
-  User as UserIcon,
   Lock
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useTheme, ThemeMode, AccentColor } from '../../context/ThemeContext.tsx';
 import { Button } from '../common/Button.tsx';
-import { CDNInfo } from '../../types/index.ts';
 import { api } from '../../services/api.ts';
 
-interface SettingsViewProps {
-  onOpenBackend?: () => void;
-}
-
-export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenBackend }) => {
-  const { appConfig, refreshConfig, currentUser } = useAuth();
+export const SettingsView: React.FC = () => {
+  const { currentUser } = useAuth();
   const { theme, setTheme, accent, setAccent } = useTheme();
 
-  const [activeSection, setActiveSection] = useState<'appearance' | 'account' | 'backend-config' | 'cdn' | 'database'>('appearance');
-  const [cdns, setCdns] = useState<CDNInfo[]>([]);
-  const [isTestingCdn, setIsTestingCdn] = useState(false);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [activeSection, setActiveSection] = useState<'appearance' | 'account'>('appearance');
 
   // Password change state
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [passwordStatus, setPasswordStatus] = useState<{ success?: boolean; message: string } | null>(null);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
-
-  useEffect(() => {
-    loadCdnHealth();
-  }, []);
-
-  const loadCdnHealth = async () => {
-    try {
-      const res = await api.getCdnHealth();
-      setCdns(res.cdns || []);
-    } catch {
-      if (appConfig?.cdnUrls) {
-        setCdns(appConfig.cdnUrls.map(url => ({
-          url,
-          name: new URL(url).hostname,
-          status: 'active',
-        })));
-      }
-    }
-  };
-
-  const handleTestCdns = async () => {
-    setIsTestingCdn(true);
-    await loadCdnHealth();
-    setIsTestingCdn(false);
-  };
-
-  const handleReloadConfig = async () => {
-    setIsRefreshing(true);
-    await refreshConfig();
-    await loadCdnHealth();
-    setIsRefreshing(false);
-  };
 
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -114,11 +65,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenBackend }) => 
       <div className={`sticky top-0 z-20 backdrop-blur-xl border-b ${headerBg} px-4 py-3 flex items-center justify-between`}>
         <div>
           <h1 className="text-lg font-black tracking-tight text-white">Settings</h1>
-          <p className="text-xs text-neutral-400">Manage account, appearance, and system status</p>
+          <p className="text-xs text-neutral-400">Manage your account and appearance</p>
         </div>
-        <Button size="xs" variant="outline" onClick={handleReloadConfig} isLoading={isRefreshing}>
-          <RefreshCw className="w-3.5 h-3.5" /> Sync
-        </Button>
       </div>
 
       {/* Tabs */}
@@ -126,16 +74,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenBackend }) => 
         {[
           { id: 'appearance', label: 'Appearance', icon: Palette },
           { id: 'account', label: 'Account & Security', icon: Lock },
-          { id: 'backend-config', label: 'System Config', icon: Sliders },
-          { id: 'cdn', label: 'Edge CDNs', icon: Globe },
-          { id: 'database', label: 'Database', icon: Database },
         ].map(tab => {
           const Icon = tab.icon;
           const isActive = activeSection === tab.id;
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveSection(tab.id as any)}
+              onClick={() => setActiveSection(tab.id as 'appearance' | 'account')}
               className={`flex items-center gap-2 py-3 px-3.5 text-xs font-semibold border-b-2 cursor-pointer transition-colors whitespace-nowrap ${
                 isActive ? `border-cyan-400 text-cyan-300 font-bold bg-cyan-400/[0.06]` : 'border-transparent text-neutral-400 hover:text-neutral-200'
               }`}
@@ -173,7 +118,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenBackend }) => 
 
             <div className={`p-4 rounded-2xl border ${cardBg}`}>
               <h2 className="text-sm font-bold mb-1 text-white">Theme</h2>
-              <p className="text-xs text-neutral-400 mb-4">Choose the display mode for VYORA.</p>
+              <p className="text-xs text-neutral-400 mb-4">Choose the display mode for Zunari.</p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 {themesList.map(t => (
                   <div
@@ -218,7 +163,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenBackend }) => 
                 <div className="flex justify-between py-2 border-b border-white/[0.06]">
                   <span className="text-neutral-400">Session Security:</span>
                   <span className="text-emerald-400 flex items-center gap-1 font-mono">
-                    <ShieldCheck className="w-3.5 h-3.5" /> Scrypt + HttpOnly CSRF
+                    <ShieldCheck className="w-3.5 h-3.5" /> Account protection
                   </span>
                 </div>
               </div>
@@ -264,103 +209,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onOpenBackend }) => 
           </div>
         )}
 
-        {/* Section: Backend Config */}
-        {activeSection === 'backend-config' && (
-          <div className="flex flex-col gap-5">
-            <div className={`p-4 rounded-2xl border ${cardBg}`}>
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <Server className="w-4 h-4 text-cyan-400" />
-                  <h2 className="text-sm font-bold text-white">Node.js Server Environment</h2>
-                </div>
-                {onOpenBackend && (
-                  <Button size="xs" variant="outline" onClick={onOpenBackend}>
-                    <FileCode className="w-3.5 h-3.5" /> Inspect Code
-                  </Button>
-                )}
-              </div>
-
-              <div className="space-y-2 text-xs">
-                <div className="flex justify-between py-1.5 border-b border-white/[0.06]">
-                  <span className="text-neutral-400">Application Name:</span>
-                  <span className="font-bold text-white font-mono">{appConfig?.appName || 'VYORA'}</span>
-                </div>
-                <div className="flex justify-between py-1.5 border-b border-white/[0.06]">
-                  <span className="text-neutral-400">Max Post Transmission:</span>
-                  <span className="font-mono text-white">{appConfig?.maxPostLength || 280} chars</span>
-                </div>
-                <div className="flex justify-between py-1.5 border-b border-white/[0.06]">
-                  <span className="text-neutral-400">File Upload:</span>
-                  <span className="font-mono text-emerald-400">{appConfig?.fileEndpoints?.upload || '/api/upload'}</span>
-                </div>
-                <div className="flex justify-between py-1.5 border-b border-white/[0.06]">
-                  <span className="text-neutral-400">Runtime Version:</span>
-                  <span className="font-mono text-cyan-300">{appConfig?.nodeVersion || 'v22.x'}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Section: Edge CDNs */}
-        {activeSection === 'cdn' && (
-          <div className="flex flex-col gap-5">
-            <div className={`p-4 rounded-2xl border ${cardBg}`}>
-              <div className="flex items-center justify-between mb-3">
-                <div className="flex items-center gap-2">
-                  <Globe className="w-4 h-4 text-cyan-400" />
-                  <h2 className="text-sm font-bold text-white">Multi-CDN Edge Pool</h2>
-                </div>
-                <Button size="xs" variant="outline" onClick={handleTestCdns} isLoading={isTestingCdn}>
-                  <RefreshCw className="w-3.5 h-3.5" /> Test CDNs
-                </Button>
-              </div>
-
-              <div className="flex flex-col gap-2">
-                {cdns.map((cdn, idx) => (
-                  <div key={cdn.url} className="flex items-center justify-between p-3 rounded-xl bg-white/[0.02] border border-white/10">
-                    <div className="truncate">
-                      <div className="text-xs font-bold font-mono text-neutral-200 truncate">{cdn.url}</div>
-                      <div className="text-[11px] text-neutral-500">{cdn.name}</div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                      <span className="text-xs font-mono text-neutral-300">
-                        {cdn.latencyMs !== undefined ? `${cdn.latencyMs}ms` : 'Ready'}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Section: Database */}
-        {activeSection === 'database' && (
-          <div className={`p-4 rounded-2xl border ${cardBg}`}>
-            <div className="flex items-center justify-between mb-3">
-              <div className="flex items-center gap-2">
-                <Database className="w-4 h-4 text-cyan-400" />
-                <h2 className="text-sm font-bold text-white">Database Status</h2>
-              </div>
-              <span className="text-xs px-2.5 py-0.5 rounded-full font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                {appConfig?.databaseStatus?.type || 'PostgreSQL'}
-              </span>
-            </div>
-
-            <div className="space-y-2 text-xs">
-              <div className="flex justify-between py-1.5 border-b border-white/[0.06]">
-                <span className="text-neutral-400">Database Driver:</span>
-                <span className="font-mono text-neutral-200">pg (node-postgres connection pool)</span>
-              </div>
-              <div className="flex justify-between py-1.5 border-b border-white/[0.06]">
-                <span className="text-neutral-400">Connection State:</span>
-                <span className="font-mono text-neutral-200">{appConfig?.databaseStatus?.details}</span>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );

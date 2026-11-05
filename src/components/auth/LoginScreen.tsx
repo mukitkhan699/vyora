@@ -45,7 +45,7 @@ export const LoginScreen: React.FC = () => {
     ? `Account created. Verify ${pendingVerificationEmail}, then sign in.`
     : null);
 
-  const brandName = appConfig?.appName || 'VYORA';
+  const brandName = appConfig?.appName || 'Zunari';
 
   const switchMode = (next: AuthMode) => {
     setMode(next);
@@ -160,10 +160,10 @@ export const LoginScreen: React.FC = () => {
 
             <div className="mt-9 grid max-w-lg gap-3 sm:grid-cols-2">
               {[
-                { icon: ShieldCheck, title: 'Scrypt + session auth', text: 'Hardened passwords and CSRF-protected sessions.' },
+                { icon: ShieldCheck, title: 'Secure sign-in', text: 'Protected access to your account.' },
                 { icon: Radio, title: 'Live relay', text: 'Posts, signals, and direct transmissions in one feed.' },
-                { icon: Sparkles, title: 'Multi-CDN media', text: 'Resilient asset delivery across edge relays.' },
-                { icon: Zap, title: 'Zero-cloud core', text: 'Runs on the Node.js runtime with built-in storage.' },
+                { icon: Sparkles, title: 'Your communities', text: 'Find people and ideas worth following.' },
+                { icon: Zap, title: 'Real-time conversations', text: 'Share updates and stay in the conversation.' },
               ].map(({ icon: Icon, title, text }) => (
                 <div key={title} className="rounded-2xl border border-white/[0.07] bg-white/[0.025] p-4 backdrop-blur-sm">
                   <Icon className="h-4 w-4 text-cyan-300" />
@@ -179,9 +179,7 @@ export const LoginScreen: React.FC = () => {
                 Relay online
               </span>
               <span className="text-neutral-700">/</span>
-              <span>Cookie sessions</span>
-              <span className="text-neutral-700">/</span>
-              <span>CSRF protected</span>
+              <span>Account protection</span>
             </div>
           </section>
 
@@ -472,9 +470,9 @@ export const LoginScreen: React.FC = () => {
               <div className="mt-6 flex items-center justify-between border-t border-white/[0.08] pt-4 text-[10px] font-mono text-neutral-600">
                 <span className="flex items-center gap-1.5">
                   <ShieldCheck className="h-3 w-3 text-emerald-400" />
-                  Scrypt + secure cookie session
+                  Secure sign-in
                 </span>
-                <span>v{appConfig?.nodeVersion ? 'node' : '1.0'}</span>
+                <span>Zunari</span>
               </div>
             </div>
 

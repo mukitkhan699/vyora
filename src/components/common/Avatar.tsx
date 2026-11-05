@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { CdnImage } from './CdnImage.tsx';
 
 interface AvatarProps {
@@ -37,6 +37,10 @@ export const Avatar: React.FC<AvatarProps> = ({
   onClick,
 }) => {
   const [hasError, setHasError] = useState(false);
+  useEffect(() => {
+    setHasError(false);
+  }, [src]);
+
   const sizeClasses = SIZE_MAP[size] || SIZE_MAP.md;
   const dotClasses = DOT_SIZE_MAP[size] || DOT_SIZE_MAP.md;
 
@@ -48,8 +52,7 @@ export const Avatar: React.FC<AvatarProps> = ({
     .slice(0, 2)
     .toUpperCase() || 'U';
 
-  const defaultAvatar = `https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80`;
-  const imageSrc = !hasError && src && src.trim() ? src : defaultAvatar;
+  const imageSrc = !hasError && src?.trim() ? src.trim() : null;
 
   return (
     <div

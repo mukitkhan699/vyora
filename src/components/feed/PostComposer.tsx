@@ -83,7 +83,7 @@ export const PostComposer: React.FC<PostComposerProps> = ({
 
     try {
       setIsUploading(true);
-      const res = await api.uploadFile(file);
+      const res = await api.uploadFile(file, 'post-image');
       setMediaUrls(prev => [...prev, res.url]);
       setShowMediaPrompt(false);
     } catch (err: any) {
@@ -328,7 +328,7 @@ export const PostComposer: React.FC<PostComposerProps> = ({
               type="file"
               ref={fileInputRef}
               onChange={handleFileUpload}
-              accept="image/*"
+              accept="image/jpeg,image/png,image/gif,image/webp,image/svg+xml"
               className="hidden"
             />
             <button

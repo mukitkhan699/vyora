@@ -22,6 +22,20 @@ interface ProfileViewProps {
   onTagClick: (tag: string) => void;
 }
 
+function getSafeWebsiteUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const candidate = /^[a-z][a-z\d+.-]*:/i.test(value) ? value : `https://${value}`;
+  try {
+    const url = new URL(candidate);
+    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password) {
+      return null;
+    }
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
 export const ProfileView: React.FC<ProfileViewProps> = ({
   username,
   onBack,
@@ -42,6 +56,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
   const targetUsername = username || currentUser?.username || 'mukitk';
   const isOwnProfile = currentUser && user && currentUser.id === user.id;
+  const websiteUrl = getSafeWebsiteUrl(user?.website);
 
   useEffect(() => {
     fetchProfile();
@@ -205,16 +220,16 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               <span>{user.location}</span>
             </div>
           )}
-          {user.website && (
+          {websiteUrl && (
             <div className="flex items-center gap-1">
               <LinkIcon className="w-3.5 h-3.5" />
               <a
-                href={user.website}
+                href={websiteUrl}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 className={`hover:underline ${accentTextClass}`}
               >
-                {user.website.replace(/^https?:\/\//, '')}
+                {websiteUrl.replace(/^https?:\/\//, '')}
               </a>
             </div>
           )}

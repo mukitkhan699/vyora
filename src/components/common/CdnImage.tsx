@@ -1,10 +1,14 @@
-import React, { useState, useEffect } from 'react';
-import { cdnManager } from '../../utils/cdnManager.ts';
+import React, { useState, useEffect, useRef } from 'react';
+import { getBackendApiUrl } from '../../config/backendUrl.ts';
 
 interface CdnImageProps extends Omit<React.ImgHTMLAttributes<HTMLImageElement>, 'src'> {
   src?: string | null;
   fallbackSrc?: string;
   showSkeleton?: boolean;
+}
+
+function resolveSource(source: string): string {
+  return source.startsWith('/api/files/') ? `${getBackendApiUrl()}${source}` : source;
 }
 
 export const CdnImage: React.FC<CdnImageProps> = ({
@@ -13,26 +17,26 @@ export const CdnImage: React.FC<CdnImageProps> = ({
   className = '',
   fallbackSrc,
   showSkeleton = true,
+  onError,
+  onLoad,
   ...props
 }) => {
   const [currentSrc, setCurrentSrc] = useState<string | null>(() => {
     if (src && src.trim()) {
-      return cdnManager.resolveAssetUrl(src.trim(), 0);
+      return resolveSource(src.trim());
     }
     return fallbackSrc || null;
   });
-  const [attempt, setAttempt] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [hasFailed, setHasFailed] = useState<boolean>(false);
+  const imageRef = useRef<HTMLImageElement>(null);
 
   useEffect(() => {
     if (src && src.trim()) {
-      setAttempt(0);
       setHasFailed(false);
       setIsLoading(true);
-      setCurrentSrc(cdnManager.resolveAssetUrl(src.trim(), 0));
+      setCurrentSrc(resolveSource(src.trim()));
     } else if (fallbackSrc) {
-      setAttempt(0);
       setHasFailed(false);
       setIsLoading(true);
       setCurrentSrc(fallbackSrc);
@@ -42,30 +46,26 @@ export const CdnImage: React.FC<CdnImageProps> = ({
     }
   }, [src, fallbackSrc]);
 
-  const handleError = () => {
-    const nextAttempt = attempt + 1;
-    const cdns = cdnManager.getCdns();
-
-    // If we have alternative CDNs, try the next one
-    if (src && nextAttempt < cdns.length) {
-      setAttempt(nextAttempt);
-      const fallbackUrl = cdnManager.recordAssetFailure(currentSrc || '') || cdnManager.resolveAssetUrl(src, nextAttempt);
-      if (fallbackUrl) {
-        setCurrentSrc(fallbackUrl);
-        return;
-      }
+  useEffect(() => {
+    const image = imageRef.current;
+    if (image?.complete && image.naturalWidth > 0) {
+      setIsLoading(false);
     }
-    
+  }, [currentSrc]);
+
+  const handleError = (event: React.SyntheticEvent<HTMLImageElement, Event>) => {
     if (fallbackSrc && currentSrc !== fallbackSrc) {
       setCurrentSrc(fallbackSrc);
     } else {
       setHasFailed(true);
       setIsLoading(false);
+      onError?.(event);
     }
   };
 
-  const handleLoad = () => {
+  const handleLoad = (event: React.SyntheticEvent<HTMLImageElement, Event>) => {
     setIsLoading(false);
+    onLoad?.(event);
   };
 
   if (hasFailed || !currentSrc) {
@@ -77,11 +77,12 @@ export const CdnImage: React.FC<CdnImageProps> = ({
   }
 
   return (
-    <div className="relative inline-block overflow-hidden">
+    <div className={`relative inline-block overflow-hidden ${className}`}>
       {isLoading && showSkeleton && (
         <div className={`absolute inset-0 bg-neutral-800/60 animate-pulse ${className}`} />
       )}
       <img
+        ref={imageRef}
         src={currentSrc}
         alt={alt}
         className={`${className} ${isLoading ? 'opacity-0' : 'opacity-100'} transition-opacity duration-200`}

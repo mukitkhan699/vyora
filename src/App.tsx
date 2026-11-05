@@ -69,7 +69,7 @@ function MainApp() {
         />
 
         {/* Center Main Social Feed View */}
-        <main className="flex-1 min-h-screen border-r border-white/[0.08] max-w-2xl pb-20 sm:pb-4 w-full">
+        <main className="min-w-0 flex-1 min-h-screen border-r border-white/[0.08] max-w-2xl pb-20 sm:pb-4 w-full">
           {currentTab === 'home' && (
             <Timeline
               onPostClick={handlePostClick}

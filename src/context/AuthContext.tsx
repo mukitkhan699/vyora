@@ -1,7 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User, AppConfig } from '../types/index.ts';
 import { api, AuthUser } from '../services/api.ts';
-import { cdnManager } from '../utils/cdnManager.ts';
 
 export interface RegisterResult {
   user: User | null;
@@ -36,7 +35,7 @@ function toUser(user: AuthUser | User | null | undefined): User | null {
   if (!user) return null;
   return {
     id: String(user.id),
-    name: user.name || user.username || 'VYORA Operator',
+    name: user.name || user.username || 'Zunari Operator',
     username: user.username,
     avatarUrl:
       user.avatarUrl ||
@@ -68,10 +67,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const cfg = await api.getConfig();
       setAppConfig(cfg);
       if (cfg.appName && typeof document !== 'undefined') {
-        document.title = `${cfg.appName} - Global Transmission Platform`;
-      }
-      if (cfg.cdnUrls && cfg.cdnUrls.length > 0) {
-        cdnManager.setCdns(cfg.cdnUrls);
+        document.title = `${cfg.appName} - Real-Time Social Network`;
       }
     } catch (e) {
       console.warn('Could not fetch server config:', e);

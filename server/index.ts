@@ -5,16 +5,20 @@ import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { config } from './config.ts';
+import { closeDatabase } from './db/pool.ts';
+import { closeStorage } from './storage/b2.ts';
+import { initializeBackend } from './bootstrap.ts';
+import { attachRealtimeServer, closeRealtimeServer } from './realtime.ts';
 import { handleApiRequest } from './routes/api.ts';
 import {
-  initAuth,
   renderEmailVerificationPage,
   renderPasswordResetPage,
   setAuthError,
 } from './auth.ts';
+import { formatStartupError } from './errors.ts';
 
-const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const distDir = path.join(rootDir, 'dist');
+const parentDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const distDir = path.basename(parentDir) === 'dist' ? parentDir : path.join(parentDir, 'dist');
 
 const CONTENT_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -171,7 +175,7 @@ export async function handleRequest(req: IncomingMessage, res: ServerResponse): 
     sendText(
       res,
       503,
-      'VYORA is running, but no frontend build was found. Run `npm run build` first.',
+      'Zunari is running, but no frontend build was found. Run `npm run build` first.',
     );
   } catch (error) {
     if (res.headersSent) {
@@ -195,11 +199,12 @@ export function createServer() {
   server.keepAliveTimeout = 5_000;
   server.maxHeadersCount = 100;
   server.timeout = 30_000;
+  attachRealtimeServer(server);
   return server;
 }
 
 export async function startServer(): Promise<void> {
-  await initAuth();
+  const stopCleanup = await initializeBackend();
   const port = Number(process.env.PORT) || config.port || 3000;
   const host = process.env.HOST || '0.0.0.0';
   const server = createServer();
@@ -214,13 +219,18 @@ export async function startServer(): Promise<void> {
     process.on(signal, () => {
       if (shuttingDown) return;
       shuttingDown = true;
+      stopCleanup();
       try {
         server.closeIdleConnections?.();
         server.closeAllConnections?.();
       } catch {
         // Ignore.
       }
-      server.close(() => process.exit(0));
+      void (async () => {
+        await closeRealtimeServer();
+        await Promise.all([closeDatabase(), Promise.resolve(closeStorage())]);
+        process.exit(0);
+      })();
       setTimeout(() => process.exit(1), 10_000).unref();
     });
   }
@@ -232,7 +242,7 @@ const isDirectRun =
 
 if (isDirectRun) {
   startServer().catch((error) => {
-    console.error('Failed to start server:', error);
+    console.error(`Failed to start server: ${formatStartupError(error)}`);
     process.exit(1);
   });
 }

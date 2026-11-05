@@ -1,22 +1,24 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import fs from 'node:fs';
-import path from 'node:path';
 import { config } from '../config.ts';
 import { dbAdapter } from '../db/adapter.ts';
-import { getAuthUser, handleAuthRequest, setAuthError } from '../auth.ts';
+import {
+  getAuthUser,
+  handleAuthRequest,
+  requireSessionWithCsrf,
+  setAuthError,
+} from '../auth.ts';
+import {
+  abortUpload,
+  createLegacyUpload,
+  createUploadUrl,
+  deleteOwnedAsset,
+  finalizeUpload,
+  getAuthorizedDownloadUrl,
+  listOwnedAssets,
+  type MediaPurpose,
+} from '../storage/b2.ts';
 
-interface StoredFile {
-  id: string;
-  filename: string;
-  mimeType: string;
-  data: Buffer;
-  size: number;
-  uploadedBy: string;
-  createdAt: string;
-}
-
-const fileStorage = new Map<string, StoredFile>();
-const MAX_JSON_BYTES = 12 * 1024 * 1024;
+class PayloadTooLargeError extends Error {}
 
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   const body = Buffer.from(JSON.stringify(payload));
@@ -51,19 +53,39 @@ async function readJson(req: IncomingMessage, maxBytes = 64 * 1024): Promise<Rec
   return parsed as Record<string, unknown>;
 }
 
-function getCurrentUserId(req: IncomingMessage): string {
-  const authUser = getAuthUser(req);
-  if (authUser) return dbAdapter.syncAuthProfile(authUser).id;
-  return 'user_mukit';
+async function readFileBody(req: IncomingMessage, maxBytes: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.length;
+    if (total > maxBytes) {
+      req.resume();
+      throw new PayloadTooLargeError(
+        `File exceeds maximum upload limit of ${Math.round(maxBytes / (1024 * 1024))}MB.`,
+      );
+    }
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
 }
 
-function requireUserId(req: IncomingMessage, res: ServerResponse): string | null {
-  const authUser = getAuthUser(req);
+async function getCurrentUserId(req: IncomingMessage): Promise<string> {
+  const authUser = await getAuthUser(req);
+  if (authUser) return (await dbAdapter.syncAuthProfile(authUser)).id;
+  return '';
+}
+
+async function requireUserId(req: IncomingMessage, res: ServerResponse): Promise<string | null> {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    await requireSessionWithCsrf(req);
+  }
+  const authUser = await getAuthUser(req);
   if (!authUser) {
     sendError(res, 401, 'Authentication required.');
     return null;
   }
-  return dbAdapter.syncAuthProfile(authUser).id;
+  return (await dbAdapter.syncAuthProfile(authUser)).id;
 }
 
 function getPathSegments(pathname: string): string[] {
@@ -82,7 +104,7 @@ export async function handleApiRequest(
     if (await handleAuthRequest(req, res, url)) return true;
 
     if (pathname === '/api/auth/demo-accounts' && method === 'GET') {
-      const accounts = dbAdapter.getDemoAccounts();
+      const accounts = await dbAdapter.getDemoAccounts();
       sendJson(res, 200, {
         accounts: accounts.map((entry) => ({
           ...entry.user,
@@ -106,18 +128,6 @@ export async function handleApiRequest(
         enableDirectMessages: config.enableDirectMessages,
         allowMediaUploads: config.allowMediaUploads,
         enableTelemetryPulse: config.enableTelemetryPulse,
-        cdnUrls: config.cdnUrls,
-        databaseType: 'SQLite + memory',
-        databaseStatus: dbAdapter.getStatus(),
-        endpoints: config.endpoints,
-        fileEndpoints: {
-          upload: '/api/upload',
-          filesBase: '/api/files',
-          mediaCatalog: '/api/media/catalog',
-        },
-        nodeVersion: process.version,
-        serverUptime: Math.round(process.uptime()),
-        isConfigManagedByBackend: true,
       });
       return true;
     }
@@ -126,162 +136,148 @@ export async function handleApiRequest(
       sendJson(res, 200, {
         avatars: config.mediaCatalog.avatars,
         attachments: config.mediaCatalog.attachments,
-        cdns: config.cdnUrls,
       });
       return true;
     }
 
     if (pathname === '/api/upload' && method === 'POST') {
-      try {
-        const currentUserId = getCurrentUserId(req);
-        const body = await readJson(req, MAX_JSON_BYTES);
-        const { data, filename, mimeType: providedMime } = body;
-
-        if (!data || typeof data !== 'string') {
-          sendError(res, 400, 'Missing file payload or data.');
-          return true;
-        }
-
-        let mimeType = typeof providedMime === 'string' ? providedMime : 'application/octet-stream';
-        let base64Data = data;
-        if (data.startsWith('data:')) {
-          const match = data.match(/^data:([a-zA-Z0-9/+.-]+);base64,(.+)$/);
-          if (match) {
-            mimeType = match[1];
-            base64Data = match[2];
-          }
-        }
-
-        const fileBuffer = Buffer.from(base64Data, 'base64');
-        if (fileBuffer.length > config.fileConfig.uploadLimitBytes) {
-          sendError(
-            res,
-            413,
-            `File exceeds maximum upload limit of ${Math.round(config.fileConfig.uploadLimitBytes / (1024 * 1024))}MB.`,
-          );
-          return true;
-        }
-
-        const fileId = `file_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-        const cleanFilename =
-          typeof filename === 'string' && filename
-            ? filename
-            : `${fileId}.${mimeType.split('/')[1] || 'bin'}`;
-
-        const storedFile: StoredFile = {
-          id: fileId,
-          filename: cleanFilename,
-          mimeType,
-          data: fileBuffer,
-          size: fileBuffer.length,
-          uploadedBy: currentUserId,
-          createdAt: new Date().toISOString(),
-        };
-        fileStorage.set(fileId, storedFile);
-
-        sendJson(res, 201, {
-          success: true,
-          fileId,
-          url: `/api/files/${fileId}`,
-          filename: cleanFilename,
-          mimeType,
-          size: fileBuffer.length,
-          createdAt: storedFile.createdAt,
-        });
-      } catch (error) {
-        sendError(res, 500, `File upload failed: ${(error as Error).message}`);
+      if (!config.allowMediaUploads) {
+        sendError(res, 403, 'Media uploads are disabled.');
+        return true;
       }
+      await requireSessionWithCsrf(req);
+      const currentUserId = await requireUserId(req, res);
+      if (!currentUserId) return true;
+      const mimeType = (req.headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase();
+      if (!config.fileConfig.allowedMimeTypes.includes(mimeType)) {
+        sendError(res, 415, 'Unsupported media type.');
+        return true;
+      }
+      const fileBuffer = await readFileBody(req, config.fileConfig.uploadLimitBytes);
+      if (fileBuffer.length === 0) {
+        sendError(res, 400, 'Uploaded file is empty.');
+        return true;
+      }
+      const requestedPurpose = url.searchParams.get('purpose');
+      const purpose: MediaPurpose =
+        requestedPurpose === 'profile-avatar' || requestedPurpose === 'profile-cover'
+          ? requestedPurpose
+          : 'post-image';
+      const storedFile = await createLegacyUpload(
+        {
+          ownerId: currentUserId,
+          filename: url.searchParams.get('filename') || 'upload',
+          mimeType,
+          size: fileBuffer.length,
+          purpose,
+        },
+        fileBuffer,
+      );
+      sendJson(res, 201, {
+        success: true,
+        fileId: storedFile.id,
+        url: `/api/files/${storedFile.id}`,
+        filename: storedFile.filename,
+        mimeType: storedFile.mime_type,
+        size: Number(storedFile.byte_size),
+        createdAt: new Date(Number(storedFile.created_at)).toISOString(),
+      });
+      return true;
+    }
+
+    if (pathname === '/api/uploads/presign' && method === 'POST') {
+      if (!config.allowMediaUploads) {
+        sendError(res, 403, 'Media uploads are disabled.');
+        return true;
+      }
+      await requireSessionWithCsrf(req);
+      const ownerId = await requireUserId(req, res);
+      if (!ownerId) return true;
+      const body = await readJson(req);
+      const purpose = body.purpose;
+      if (
+        purpose !== 'profile-avatar' &&
+        purpose !== 'profile-cover' &&
+        purpose !== 'post-image'
+      ) {
+        sendError(res, 400, 'A supported upload purpose is required.');
+        return true;
+      }
+      const upload = await createUploadUrl({
+        ownerId,
+        filename: typeof body.filename === 'string' ? body.filename : '',
+        mimeType: typeof body.mimeType === 'string' ? body.mimeType.toLowerCase() : '',
+        size: Number(body.size),
+        purpose,
+      });
+      sendJson(res, 201, {
+        ...upload,
+        headers: { 'Content-Type': upload.mimeType },
+      });
+      return true;
+    }
+
+    const finalizeMatch = /^\/api\/uploads\/([^/]+)\/complete$/.exec(pathname);
+    if (finalizeMatch && method === 'POST') {
+      await requireSessionWithCsrf(req);
+      const ownerId = await requireUserId(req, res);
+      if (!ownerId) return true;
+      await readJson(req);
+      const asset = await finalizeUpload(ownerId, finalizeMatch[1]);
+      sendJson(res, 200, {
+        success: true,
+        fileId: asset.id,
+        url: `/api/files/${asset.id}`,
+        filename: asset.filename,
+        mimeType: asset.mime_type,
+        size: Number(asset.byte_size),
+        createdAt: new Date(Number(asset.created_at)).toISOString(),
+      });
+      return true;
+    }
+
+    const abortMatch = /^\/api\/uploads\/([^/]+)\/abort$/.exec(pathname);
+    if (abortMatch && method === 'POST') {
+      const ownerId = await requireUserId(req, res);
+      if (!ownerId) return true;
+      await readJson(req);
+      await abortUpload(ownerId, abortMatch[1]);
+      sendJson(res, 200, { success: true });
       return true;
     }
 
     const fileMatch = /^\/api\/files\/([^/]+)$/.exec(pathname);
     if (fileMatch && method === 'GET') {
-      const file = fileStorage.get(fileMatch[1]);
-      if (!file) {
-        sendError(res, 404, 'File not found on backend server.');
-        return true;
-      }
-      res.statusCode = 200;
-      res.setHeader('Content-Type', file.mimeType);
-      res.setHeader('Content-Length', file.size);
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-      res.setHeader('Content-Disposition', `inline; filename="${file.filename.replace(/"/g, '')}"`);
-      res.end(file.data);
+      const authUser = await getAuthUser(req);
+      const requesterId = authUser ? (await dbAdapter.syncAuthProfile(authUser)).id : null;
+      const downloadUrl = await getAuthorizedDownloadUrl(fileMatch[1], requesterId);
+      res.statusCode = 302;
+      res.setHeader('Location', downloadUrl);
+      res.setHeader('Cache-Control', 'private, no-store');
+      res.end();
       return true;
     }
 
     if (pathname === '/api/files' && method === 'GET') {
+      const currentUserId = await requireUserId(req, res);
+      if (!currentUserId) return true;
       sendJson(res, 200, {
-        files: Array.from(fileStorage.values()).map((file) => ({
-          id: file.id,
-          url: `/api/files/${file.id}`,
-          filename: file.filename,
-          mimeType: file.mimeType,
-          size: file.size,
-          uploadedBy: file.uploadedBy,
-          createdAt: file.createdAt,
-        })),
+        files: await listOwnedAssets(currentUserId),
       });
       return true;
     }
 
-    if (pathname === '/api/backend-code' && method === 'GET') {
-      const files = [
-        { name: 'server.ts', path: 'server.ts', description: 'Development entry point (Vite middleware in dev)' },
-        { name: 'server/index.ts', path: 'server/index.ts', description: 'Dependency-free HTTP server and static asset handler' },
-        { name: 'server/config.ts', path: 'server/config.ts', description: 'Environment & platform configuration' },
-        { name: 'server/auth.ts', path: 'server/auth.ts', description: 'Scrypt authentication, sessions, CSRF & verification' },
-        { name: 'server/routes/api.ts', path: 'server/routes/api.ts', description: 'REST API handlers' },
-        { name: 'server/db/adapter.ts', path: 'server/db/adapter.ts', description: 'Social data adapter' },
-        { name: 'server/db/store.ts', path: 'server/db/store.ts', description: 'In-memory social state and seed data' },
-      ];
-      sendJson(res, 200, {
-        files: files.map((file) => {
-          let code = '';
-          try {
-            code = fs.readFileSync(path.join(process.cwd(), file.path), 'utf-8');
-          } catch (error) {
-            code = `// Error reading ${file.path}: ${(error as Error).message}`;
-          }
-          return { ...file, code };
-        }),
-      });
-      return true;
-    }
-
-    if (pathname === '/api/cdn/health' && method === 'GET') {
-      const results = await Promise.all(
-        config.cdnUrls.map(async (cdnUrl) => {
-          const startTime = Date.now();
-          try {
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 3500);
-            const response = await fetch(cdnUrl, { method: 'HEAD', signal: controller.signal });
-            clearTimeout(timeout);
-            return {
-              url: cdnUrl,
-              name: new URL(cdnUrl).hostname,
-              status: response.ok || response.status < 500 ? 'active' : 'fallback',
-              latencyMs: Date.now() - startTime,
-              statusCode: response.status,
-            };
-          } catch (error) {
-            return {
-              url: cdnUrl,
-              name: new URL(cdnUrl).hostname,
-              status: 'offline',
-              latencyMs: Date.now() - startTime,
-              error: (error as Error).message,
-            };
-          }
-        }),
-      );
-      sendJson(res, 200, { cdns: results });
+    if (fileMatch && method === 'DELETE') {
+      await requireSessionWithCsrf(req);
+      const currentUserId = await requireUserId(req, res);
+      if (!currentUserId) return true;
+      await deleteOwnedAsset(currentUserId, fileMatch[1]);
+      sendJson(res, 200, { success: true });
       return true;
     }
 
     if (pathname === '/api/posts' && method === 'GET') {
-      const currentUserId = getCurrentUserId(req);
+      const currentUserId = await getCurrentUserId(req);
       const feedType = (url.searchParams.get('feed') as 'for-you' | 'following') || 'for-you';
       const authorId = url.searchParams.get('authorId') || undefined;
       sendJson(res, 200, await dbAdapter.getPosts(currentUserId, feedType, authorId));
@@ -289,7 +285,7 @@ export async function handleApiRequest(
     }
 
     if (pathname === '/api/posts' && method === 'POST') {
-      const authorId = requireUserId(req, res);
+      const authorId = await requireUserId(req, res);
       if (!authorId) return true;
       const body = await readJson(req);
       const content = typeof body.content === 'string' ? body.content : '';
@@ -320,7 +316,7 @@ export async function handleApiRequest(
 
     const postMatch = /^\/api\/posts\/([^/]+)$/.exec(pathname);
     if (postMatch && method === 'GET') {
-      const result = await dbAdapter.getPostById(postMatch[1], getCurrentUserId(req));
+      const result = await dbAdapter.getPostById(postMatch[1], await getCurrentUserId(req));
       if (!result.post) {
         sendError(res, 404, 'Post not found.');
         return true;
@@ -330,7 +326,7 @@ export async function handleApiRequest(
     }
 
     if (postMatch && method === 'DELETE') {
-      const currentUserId = requireUserId(req, res);
+      const currentUserId = await requireUserId(req, res);
       if (!currentUserId) return true;
       try {
         const success = await dbAdapter.deletePost(currentUserId, postMatch[1]);
@@ -347,7 +343,7 @@ export async function handleApiRequest(
 
     const actionMatch = /^\/api\/posts\/([^/]+)\/(like|repost|bookmark)$/.exec(pathname);
     if (actionMatch && method === 'POST') {
-      const currentUserId = requireUserId(req, res);
+      const currentUserId = await requireUserId(req, res);
       if (!currentUserId) return true;
       const [, postId, action] = actionMatch;
       if (action === 'like') {
@@ -362,7 +358,7 @@ export async function handleApiRequest(
 
     const pollVoteMatch = /^\/api\/posts\/([^/]+)\/poll\/vote$/.exec(pathname);
     if (pollVoteMatch && method === 'POST') {
-      const currentUserId = requireUserId(req, res);
+      const currentUserId = await requireUserId(req, res);
       if (!currentUserId) return true;
       const body = await readJson(req);
       if (typeof body.optionIndex !== 'number') {
@@ -387,13 +383,13 @@ export async function handleApiRequest(
       }
       sendJson(res, 200, {
         ...user,
-        isFollowing: await dbAdapter.isFollowing(getCurrentUserId(req), user.id),
+        isFollowing: await dbAdapter.isFollowing(await getCurrentUserId(req), user.id),
       });
       return true;
     }
 
     if (pathname === '/api/users/profile' && method === 'PUT') {
-      const currentUserId = requireUserId(req, res);
+      const currentUserId = await requireUserId(req, res);
       if (!currentUserId) return true;
       sendJson(res, 200, await dbAdapter.updateProfile(currentUserId, await readJson(req)));
       return true;
@@ -401,37 +397,43 @@ export async function handleApiRequest(
 
     const followMatch = /^\/api\/users\/([^/]+)\/follow$/.exec(pathname);
     if (followMatch && method === 'POST') {
-      const currentUserId = requireUserId(req, res);
+      const currentUserId = await requireUserId(req, res);
       if (!currentUserId) return true;
       sendJson(res, 200, await dbAdapter.toggleFollow(currentUserId, followMatch[1]));
       return true;
     }
 
     if (pathname === '/api/bookmarks' && method === 'GET') {
-      sendJson(res, 200, await dbAdapter.getBookmarks(getCurrentUserId(req)));
+      const currentUserId = await requireUserId(req, res);
+      if (!currentUserId) return true;
+      sendJson(res, 200, await dbAdapter.getBookmarks(currentUserId));
       return true;
     }
 
     if (pathname === '/api/notifications' && method === 'GET') {
-      sendJson(res, 200, await dbAdapter.getNotifications(getCurrentUserId(req)));
+      const currentUserId = await requireUserId(req, res);
+      if (!currentUserId) return true;
+      sendJson(res, 200, await dbAdapter.getNotifications(currentUserId));
       return true;
     }
 
     if (pathname === '/api/notifications/read-all' && method === 'POST') {
-      sendJson(res, 200, { success: await dbAdapter.markNotificationsRead() });
+      const currentUserId = await requireUserId(req, res);
+      if (!currentUserId) return true;
+      sendJson(res, 200, { success: await dbAdapter.markNotificationsRead(currentUserId) });
       return true;
     }
 
     const messagesMatch = /^\/api\/messages\/([^/]+)$/.exec(pathname);
     if (messagesMatch && method === 'GET') {
-      const currentUserId = requireUserId(req, res);
+      const currentUserId = await requireUserId(req, res);
       if (!currentUserId) return true;
       sendJson(res, 200, await dbAdapter.getMessages(currentUserId, messagesMatch[1]));
       return true;
     }
 
     if (pathname === '/api/messages' && method === 'POST') {
-      const currentUserId = requireUserId(req, res);
+      const currentUserId = await requireUserId(req, res);
       if (!currentUserId) return true;
       const body = await readJson(req);
       const recipientId = typeof body.recipientId === 'string' ? body.recipientId : '';
@@ -459,6 +461,10 @@ export async function handleApiRequest(
   } catch (error) {
     if (error instanceof SyntaxError) {
       sendError(res, 400, 'Invalid JSON request body.');
+      return true;
+    }
+    if (error instanceof PayloadTooLargeError) {
+      sendError(res, 413, error.message);
       return true;
     }
     if (error instanceof Error && error.message === 'Request body is too large.') {

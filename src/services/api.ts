@@ -1,4 +1,4 @@
-import { Post, User, Notification, Message, TrendItem, AppConfig, CDNInfo, BackendCodeFile } from '../types/index.ts';
+import { Post, User, Notification, Message, TrendItem, AppConfig } from '../types/index.ts';
 import { getBackendApiUrl } from '../config/backendUrl.ts';
 
 export interface AuthUser extends User {
@@ -94,7 +94,7 @@ class ApiService {
     return result.data;
   }
 
-  private rememberSession(payload: AuthResponse): AuthResponse {
+  private rememberSession<T extends { csrfToken?: string }>(payload: T): T {
     if (payload.csrfToken) this.csrfToken = payload.csrfToken;
     return payload;
   }
@@ -159,18 +159,40 @@ class ApiService {
     });
   }
 
-  public async resetPassword(token: string, password: string): Promise<{ reset: boolean; message: string }> {
-    return this.request<{ reset: boolean; message: string }>('/auth/reset-password', {
+  public async resetPassword(token: string, password: string): Promise<{
+    reset: boolean;
+    message: string;
+    csrfToken?: string;
+    expiresAt?: number;
+  }> {
+    const data = await this.request<{
+      reset: boolean;
+      message: string;
+      csrfToken?: string;
+      expiresAt?: number;
+    }>('/auth/reset-password', {
       method: 'POST',
       body: JSON.stringify({ token, password }),
     });
+    return this.rememberSession(data);
   }
 
-  public async changePassword(currentPassword: string, newPassword: string): Promise<{ changed: boolean; message: string }> {
-    return this.request<{ changed: boolean; message: string }>('/auth/change-password', {
+  public async changePassword(currentPassword: string, newPassword: string): Promise<{
+    changed: boolean;
+    message: string;
+    csrfToken?: string;
+    expiresAt?: number;
+  }> {
+    const data = await this.request<{
+      changed: boolean;
+      message: string;
+      csrfToken?: string;
+      expiresAt?: number;
+    }>('/auth/change-password', {
       method: 'POST',
       body: JSON.stringify({ currentPassword, newPassword }),
     });
+    return this.rememberSession(data);
   }
 
   public async resendVerification(email?: string, username?: string): Promise<{ sent: boolean; message: string }> {
@@ -189,16 +211,11 @@ class ApiService {
     return this.request<AppConfig>('/config');
   }
 
-  public getCdnHealth(): Promise<{ cdns: CDNInfo[] }> {
-    return this.request<{ cdns: CDNInfo[] }>('/cdn/health');
-  }
-
-  public getBackendCode(): Promise<{ files: BackendCodeFile[] }> {
-    return this.request<{ files: BackendCodeFile[] }>('/backend-code');
-  }
-
   // Media & File Storage
-  public async uploadFile(file: File): Promise<{
+  public async uploadFile(
+    file: File,
+    purpose: 'profile-avatar' | 'profile-cover' | 'post-image' = 'post-image',
+  ): Promise<{
     success: boolean;
     fileId: string;
     url: string;
@@ -206,39 +223,73 @@ class ApiService {
     mimeType: string;
     size: number;
   }> {
-    const dataUrl = await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-
-    return this.request<{
-      success: boolean;
+    const upload = await this.request<{
       fileId: string;
-      url: string;
-      filename: string;
-      mimeType: string;
-      size: number;
-    }>('/upload', {
+      uploadUrl: string;
+      headers: Record<string, string>;
+    }>('/uploads/presign', {
       method: 'POST',
       body: JSON.stringify({
-        data: dataUrl,
         filename: file.name,
         mimeType: file.type,
+        size: file.size,
+        purpose,
       }),
     });
+
+    let response: Response;
+    try {
+      response = await fetch(upload.uploadUrl, {
+        method: 'PUT',
+        headers: upload.headers,
+        body: file,
+        credentials: 'omit',
+        cache: 'no-store',
+      });
+    } catch {
+      await this.request(`/uploads/${upload.fileId}/abort`, {
+        method: 'POST',
+        body: '{}',
+      });
+      throw new ApiError('Unable to upload media to storage.', 502);
+    }
+
+    if (!response.ok) {
+      await this.request(`/uploads/${upload.fileId}/abort`, {
+        method: 'POST',
+        body: '{}',
+      });
+      throw new ApiError(`Media upload failed with status ${response.status}.`, response.status);
+    }
+
+    try {
+      return await this.request<{
+        success: boolean;
+        fileId: string;
+        url: string;
+        filename: string;
+        mimeType: string;
+        size: number;
+      }>(`/uploads/${upload.fileId}/complete`, {
+        method: 'POST',
+        body: '{}',
+      });
+    } catch (error) {
+      await this.request(`/uploads/${upload.fileId}/abort`, {
+        method: 'POST',
+        body: '{}',
+      });
+      throw error;
+    }
   }
 
   public getMediaCatalog(): Promise<{
     avatars: string[];
     attachments: string[];
-    cdns: string[];
   }> {
     return this.request<{
       avatars: string[];
       attachments: string[];
-      cdns: string[];
     }>('/media/catalog');
   }
 
