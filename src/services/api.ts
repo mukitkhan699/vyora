@@ -223,7 +223,7 @@ class ApiService {
     mimeType: string;
     size: number;
   }> {
-    const upload = await this.request<{
+    const res = await this.request<{
       fileId: string;
       uploadUrl: string;
       headers: Record<string, string>;
@@ -239,27 +239,36 @@ class ApiService {
 
     let response: Response;
     try {
-      response = await fetch(upload.uploadUrl, {
+      response = await fetch(res.uploadUrl, {
         method: 'PUT',
-        headers: upload.headers,
+        headers: res.headers,
         body: file,
         credentials: 'omit',
         cache: 'no-store',
       });
-    } catch {
-      await this.request(`/uploads/${upload.fileId}/abort`, {
+    } catch (networkError) {
+      await this.request(`/uploads/${res.fileId}/abort`, {
         method: 'POST',
         body: '{}',
       });
-      throw new ApiError('Unable to upload media to storage.', 502);
+      throw new ApiError('Network error uploading media. Check your connection.', 502);
     }
 
     if (!response.ok) {
-      await this.request(`/uploads/${upload.fileId}/abort`, {
+      let errorDetail = '';
+      try {
+        const errorText = await response.text();
+        if (errorText) {
+          errorDetail = `: ${errorText.slice(0, 200)}`;
+        }
+      } catch {
+        // ignore
+      }
+      await this.request(`/uploads/${res.fileId}/abort`, {
         method: 'POST',
         body: '{}',
       });
-      throw new ApiError(`Media upload failed with status ${response.status}.`, response.status);
+      throw new ApiError(`Media upload failed (${response.status})${errorDetail}`, response.status);
     }
 
     try {
@@ -270,12 +279,12 @@ class ApiService {
         filename: string;
         mimeType: string;
         size: number;
-      }>(`/uploads/${upload.fileId}/complete`, {
+      }>(`/uploads/${res.fileId}/complete`, {
         method: 'POST',
         body: '{}',
       });
     } catch (error) {
-      await this.request(`/uploads/${upload.fileId}/abort`, {
+      await this.request(`/uploads/${res.fileId}/abort`, {
         method: 'POST',
         body: '{}',
       });

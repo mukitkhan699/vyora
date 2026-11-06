@@ -191,8 +191,15 @@ export async function createUploadUrl(input: UploadRequest): Promise<{
       size: input.size,
       expiresAt: now + SIGNED_URL_TTL_SECONDS * 1000,
     };
-  } catch {
+  } catch (error) {
     await query('DELETE FROM zunari_media_assets WHERE id = $1 AND owner_id = $2', [fileId, input.ownerId]);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.error('[B2] Presigned URL generation failed:', {
+      bucket: getBucket(),
+      region: process.env.B2_REGION?.trim(),
+      endpoint: process.env.B2_ENDPOINT?.trim(),
+      error: errorMessage,
+    });
     throw new HttpError(503, 'Unable to prepare the media upload.', 'STORAGE_UNAVAILABLE');
   }
 }

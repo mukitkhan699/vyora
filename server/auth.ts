@@ -601,11 +601,6 @@ export async function handleRegister(req: IncomingMessage, res: ServerResponse):
     throw error;
   }
   const user = inserted.rows[0];
-  await query(
-    `INSERT INTO zunari_follows (follower_id, following_id, created_at)
-     VALUES ($1, 'user_mukit', $2) ON CONFLICT DO NOTHING`,
-    [`user_auth_${user.id}`, createdAt],
-  );
   const socialUser = await dbAdapter.ensureUserFromAuth({
     id: Number(user.id),
     username,
@@ -613,6 +608,15 @@ export async function handleRegister(req: IncomingMessage, res: ServerResponse):
     createdAt,
   });
   await dbAdapter.updateProfile(socialUser.id, { name: displayName });
+
+  const mukitExists = await query('SELECT 1 FROM zunari_users WHERE public_id = $1', ['user_mukit']);
+  if (mukitExists.rowCount) {
+    await query(
+      `INSERT INTO zunari_follows (follower_id, following_id, created_at)
+       VALUES ($1, 'user_mukit', $2) ON CONFLICT DO NOTHING`,
+      [`user_auth_${user.id}`, createdAt],
+    );
+  }
 
   // Create active session immediately
   const session = await createSession(user);
