@@ -19,6 +19,16 @@ function getConfiguredOrigin(): string | undefined {
   }
 }
 
+function getAdminOrigin(): string | undefined {
+  const adminOrigin = process.env.ADMIN_ORIGIN?.trim();
+  if (!adminOrigin) return undefined;
+  try {
+    return new URL(adminOrigin).origin;
+  } catch {
+    return undefined;
+  }
+}
+
 function isAllowedOrigin(socket: Socket): boolean {
   const origin = socket.handshake.headers.origin;
   if (!origin) return true;
@@ -33,6 +43,8 @@ function isAllowedOrigin(socket: Socket): boolean {
   const allowedOrigins = new Set<string>();
   const configuredOrigin = getConfiguredOrigin();
   if (configuredOrigin) allowedOrigins.add(configuredOrigin);
+  const adminOrigin = getAdminOrigin();
+  if (adminOrigin) allowedOrigins.add(adminOrigin);
   const host = socket.request.headers.host;
   if (host) {
     const forwardedProtocol = socket.request.headers['x-forwarded-proto'];
@@ -49,10 +61,12 @@ function isAllowedOrigin(socket: Socket): boolean {
 export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
   if (activeServer) throw new Error('Socket.IO is already attached to an HTTP server.');
   const allowedOrigin = getConfiguredOrigin();
+  const adminOrigin = getAdminOrigin();
+  const corsOrigins = [allowedOrigin, adminOrigin].filter((o): o is string => Boolean(o));
   const io = new SocketServer(httpServer, {
     serveClient: false,
     maxHttpBufferSize: 64 * 1024,
-    cors: allowedOrigin ? { origin: allowedOrigin, credentials: true } : undefined,
+    cors: corsOrigins.length > 0 ? { origin: corsOrigins, credentials: true } : undefined,
   });
   activeServer = io;
 

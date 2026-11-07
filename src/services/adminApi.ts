@@ -142,6 +142,11 @@ class AdminApiService {
   }
 
   private getBackendApiUrl(): string {
+    // Use VITE_ADMIN_API_URL if provided (for separate admin frontend deployment)
+    if (typeof import.meta !== 'undefined' && import.meta.env?.VITE_ADMIN_API_URL) {
+      return import.meta.env.VITE_ADMIN_API_URL.replace(/\/$/, '');
+    }
+    // Fallback to same-origin for integrated deployment
     if (typeof window !== 'undefined') {
       const protocol = window.location.protocol;
       const host = window.location.host;
@@ -180,7 +185,7 @@ class AdminApiService {
       ...options,
       method,
       headers,
-      credentials: 'same-origin',
+      credentials: 'include',
       cache: 'no-store',
     });
 

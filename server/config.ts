@@ -67,6 +67,7 @@ export interface ServerConfig {
   enableDirectMessages: boolean;
   allowMediaUploads: boolean;
   enableTelemetryPulse: boolean;
+  adminOrigin: string | undefined;
   fileConfig: {
     uploadLimitBytes: number;
     allowedMimeTypes: string[];
@@ -93,6 +94,7 @@ export const config: ServerConfig = {
   enableDirectMessages: bool(process.env.ENABLE_DIRECT_MESSAGES, true),
   allowMediaUploads: bool(process.env.ALLOW_MEDIA_UPLOADS, true),
   enableTelemetryPulse: true,
+  adminOrigin: process.env.ADMIN_ORIGIN?.trim() || undefined,
   fileConfig: {
     uploadLimitBytes: 10 * 1024 * 1024,
     allowedMimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],
@@ -104,7 +106,7 @@ export const config: ServerConfig = {
       'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=300&auto=format&fit=crop&q=80',
       'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=300&auto=format&fit=crop&q=80',
       'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=300&auto=format&fit=crop&q=80',
-      'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=300&auto=format&fit=crop&q=80',
+      'https://images.unsplash.com/photo-1522075469751-3a6694fb2f61?w=300&auto=format&fit=crop&q=80',
     ],
     attachments: [
       'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1000&auto=format&fit=crop&q=80',

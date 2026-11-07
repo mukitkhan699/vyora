@@ -16,6 +16,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && tsc -p tsconfig.server.json",
+    "build:admin": "vite build --config vite.config.admin.ts",
     "start": "node dist/server.js",
     "preview": "vite preview",
     "clean": "rm -rf dist",
@@ -31,6 +32,7 @@
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
     "@vitejs/plugin-react": "^6.1.1",
+    "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
@@ -43,6 +45,7 @@
     "vite": "^8.3.0"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/pg": "^8.23.1",

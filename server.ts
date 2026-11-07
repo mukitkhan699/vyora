@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createViteServer } from 'vite';
 import path from 'node:path';
@@ -23,6 +24,16 @@ async function startDevelopmentServer(): Promise<void> {
   const stopCleanup = await initializeBackend();
 
   const app = express();
+
+  // CORS middleware for cross-origin requests (admin frontend)
+  const corsOrigins = ['https://zunari.duckdns.org'];
+  if (config.adminOrigin) corsOrigins.push(config.adminOrigin);
+  app.use(cors({
+    origin: corsOrigins,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'X-CSRF-Token'],
+  }));
 
   app.all(
     ['/api', '/api/*', '/health', '/verify-email', '/reset-password'],
