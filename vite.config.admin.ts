@@ -4,20 +4,30 @@ import path from 'path';
 import { defineConfig } from 'vite';
 
 export default defineConfig(() => {
+  const repoRoot = process.cwd();
+  const adminRoot = path.resolve(repoRoot, 'admin');
+
   return {
+    root: adminRoot,
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        '@': path.resolve(process.cwd()),
+        '@': path.resolve(repoRoot, 'src'),
+        '/src': path.resolve(repoRoot, 'src'),
       },
     },
     optimizeDeps: {
       include: ['socket.io-client'],
     },
     build: {
-      outDir: path.resolve(process.cwd(), 'dist/admin'),
+      outDir: path.resolve(repoRoot, 'dist/admin'),
       emptyOutDir: true,
       sourcemap: false,
+      rollupOptions: {
+        input: {
+          main: path.resolve(repoRoot, 'src/admin/main.tsx'),
+        },
+      },
     },
     server: {
       hmr: process.env.DISABLE_HMR !== 'true',
