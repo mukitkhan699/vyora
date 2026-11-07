@@ -146,8 +146,13 @@ class ApiService {
   }
 
   public async getSession(): Promise<AuthResponse> {
-    const data = await this.request<AuthResponse>('/auth/session');
-    return this.rememberSession(data);
+    try {
+      const data = await this.request<AuthResponse>('/auth/session');
+      return this.rememberSession(data);
+    } catch (err) {
+      if (err instanceof ApiError) throw err;
+      throw new ApiError('Unable to connect to authentication service.', 0, 'AUTH_CONNECTION_FAILED');
+    }
   }
 
   public async logout(): Promise<AuthResponse> {

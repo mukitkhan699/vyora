@@ -40,10 +40,14 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 function toUser(user: AuthUser | User | null | undefined): User | null {
   if (!user) return null;
+  const id = String(user.id ?? '');
+  if (!id) return null;
+  const username = String(user.username ?? '');
+  if (!username) return null;
   return {
-    id: String(user.id),
-    name: user.name || user.username || 'Zunari Operator',
-    username: user.username,
+    id,
+    name: String(user.name ?? username ?? 'Zunari Operator'),
+    username,
     avatarUrl:
       user.avatarUrl ||
       'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&auto=format&fit=crop&q=80',
@@ -127,29 +131,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     const init = async () => {
-      setIsLoading(true);
-      const minimumSplash = new Promise((resolve) => setTimeout(resolve, 650));
-      const sessionPromise = api
-        .getSession()
-        .then((session) => {
-          if (session.authenticated && session.user) {
-            const user = toUser(session.user);
-            setCurrentUser(user);
-            return user;
-          }
-          setCurrentUser(null);
-          return null;
-        })
-        .catch(() => {
-          setCurrentUser(null);
-          return null;
-        });
+      try {
+        setIsLoading(true);
+        const minimumSplash = new Promise((resolve) => setTimeout(resolve, 650));
+        const sessionPromise = api
+          .getSession()
+          .then((session) => {
+            if (session.authenticated && session.user) {
+              const user = toUser(session.user);
+              setCurrentUser(user);
+              return user;
+            }
+            setCurrentUser(null);
+            return null;
+          })
+          .catch(() => {
+            setCurrentUser(null);
+            return null;
+          });
 
-      await Promise.all([refreshConfig(), sessionPromise, minimumSplash]);
-      await refreshUsersAndDemos();
-      await refreshNotificationsCount();
-      await refreshAdminSession();
-      setIsLoading(false);
+        await Promise.all([refreshConfig(), sessionPromise, minimumSplash]);
+        await refreshUsersAndDemos();
+        await refreshNotificationsCount();
+        await refreshAdminSession();
+      } catch (err) {
+        console.error('Auth initialization failed:', err);
+      } finally {
+        setIsLoading(false);
+      }
     };
     init();
   }, [refreshAdminSession]);

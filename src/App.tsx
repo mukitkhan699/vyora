@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, Component, ErrorInfo, ReactNode } from 'react';
 import { ThemeProvider } from './context/ThemeContext.tsx';
 import { AuthProvider, useAuth } from './context/AuthContext.tsx';
 import { Sidebar } from './components/layout/Sidebar.tsx';
@@ -25,6 +25,44 @@ import { Post } from './types/index.ts';
 interface BaseSidebarProps {
   currentTab: string;
   onSelectTab: (tab: string) => void;
+}
+
+class ErrorBoundary extends Component<{ children: ReactNode; fallback?: ReactNode }, { hasError: boolean; error: Error | null }> {
+  constructor(props: { children: ReactNode; fallback?: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('Application error:', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      if (this.props.fallback) {
+        return this.props.fallback;
+      }
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-[#060910] text-white p-4">
+          <div className="text-center max-w-md">
+            <h1 className="text-2xl font-bold mb-4">Something went wrong</h1>
+            <p className="text-neutral-400 mb-6">{this.state.error?.message || 'An unexpected error occurred'}</p>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-6 py-3 bg-cyan-500 text-black font-bold rounded-xl hover:bg-cyan-400 transition-colors"
+            >
+              Reload Page
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 function MainApp() {
@@ -229,13 +267,13 @@ function MainApp() {
 }
 
 function AppShell() {
-  const { isLoading, isAuthenticated, appConfig } = useAuth();
+  const { isLoading, isAuthenticated, appConfig, currentUser } = useAuth();
 
   if (isLoading) {
     return <LauncherSplash isLoading={true} appName={appConfig?.appName} />;
   }
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated || !currentUser?.id || !currentUser?.username) {
     return <LoginScreen />;
   }
 
@@ -246,7 +284,9 @@ export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <AppShell />
+        <ErrorBoundary>
+          <AppShell />
+        </ErrorBoundary>
       </AuthProvider>
     </ThemeProvider>
   );

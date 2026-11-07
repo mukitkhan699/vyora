@@ -243,8 +243,13 @@ class AdminApiService {
   }
 
   public async getSession(): Promise<AdminSessionResponse> {
-    const data = await this.request<AdminSessionResponse>('/admin/me');
-    return this.rememberSession(data);
+    try {
+      const data = await this.request<AdminSessionResponse>('/admin/me');
+      return this.rememberSession(data);
+    } catch (err) {
+      if (err instanceof AdminApiError) throw err;
+      throw new AdminApiError('Unable to connect to admin service.', 0, 'ADMIN_CONNECTION_FAILED');
+    }
   }
 
   public async getStats(): Promise<AdminStats> {
