@@ -12,7 +12,6 @@ import {
   LogOut,
   ShieldCheck,
   ExternalLink,
-  Shield,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useTheme } from '../../context/ThemeContext.tsx';
@@ -33,7 +32,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectTab,
   onOpenCompose,
 }) => {
-  const { currentUser, logout, unreadNotificationsCount, appConfig, isAdmin, adminRole, isAuthenticated } = useAuth();
+  const { currentUser, logout, unreadNotificationsCount, appConfig, isAuthenticated } = useAuth();
   const { theme, accentTextClass, accentBgClass, isDark } = useTheme();
   const [showUserMenu, setShowUserMenu] = useState(false);
 
@@ -52,7 +51,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'bookmarks', label: 'Bookmarks', icon: Bookmark },
     { id: 'profile', label: 'Profile', icon: UserIcon },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
-    ...(isAuthenticated ? [{ id: 'overview', label: 'Admin', icon: Shield }] : []),
   ];
 
   const hoverBg = theme === 'light' ? 'hover:bg-slate-100' : 'hover:bg-white/[0.06]';

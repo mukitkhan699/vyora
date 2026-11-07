@@ -10,6 +10,11 @@ import {
   LogOut,
   Activity,
   History,
+  ShieldCheck,
+  Award,
+  Crown,
+  Users2,
+  FileText as FileTextIcon,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { adminApi, AdminRole } from '../../services/adminApi.ts';
@@ -26,10 +31,11 @@ interface AdminSidebarProps {
 const adminNavItems = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard, roles: ['super_admin', 'admin', 'moderator', 'verification_manager', 'analyst'] as AdminRole[] },
   { id: 'users', label: 'Users', icon: Users, roles: ['super_admin', 'admin', 'moderator', 'verification_manager', 'analyst'] as AdminRole[] },
-  { id: 'posts', label: 'Posts', icon: FileText, roles: ['super_admin', 'admin', 'moderator'] as AdminRole[] },
+  { id: 'verification', label: 'Verification', icon: ShieldCheck, roles: ['super_admin', 'admin', 'verification_manager'] as AdminRole[] },
+  { id: 'gold', label: 'Gold Membership', icon: Award, roles: ['super_admin', 'admin'] as AdminRole[] },
   { id: 'reports', label: 'Reports', icon: Flag, roles: ['super_admin', 'admin', 'moderator'] as AdminRole[] },
   { id: 'audit', label: 'Audit Log', icon: History, roles: ['super_admin', 'admin', 'moderator', 'verification_manager', 'analyst'] as AdminRole[] },
-  { id: 'stats', label: 'Analytics', icon: BarChart2, roles: ['super_admin', 'admin', 'analyst'] as AdminRole[] },
+  { id: 'admin-accounts', label: 'Admin Accounts', icon: Users2, roles: ['super_admin', 'admin'] as AdminRole[] },
   { id: 'settings', label: 'Settings', icon: Settings, roles: ['super_admin', 'admin'] as AdminRole[] },
 ];
 

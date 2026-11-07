@@ -76,6 +76,25 @@ function MainApp() {
 
   const isAdminTab = ['overview', 'users', 'posts', 'reports', 'audit', 'stats'].includes(currentTab);
 
+  // Prevent right-click on public frontend (best-effort deterrent)
+  React.useEffect(() => {
+    if (isAdminTab) return; // Don't restrict admin frontend
+    const handleContextMenu = (e: MouseEvent) => {
+      // Allow right-click on inputs, textareas, and contenteditable elements
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable
+      ) {
+        return;
+      }
+      e.preventDefault();
+    };
+    document.addEventListener('contextmenu', handleContextMenu);
+    return () => document.removeEventListener('contextmenu', handleContextMenu);
+  }, [isAdminTab]);
+
   const handlePostClick = (post: Post) => {
     setSelectedPostId(post.id);
   };

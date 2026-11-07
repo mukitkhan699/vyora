@@ -150,6 +150,7 @@ class AdminApiService {
     if (typeof window !== 'undefined') {
       const protocol = window.location.protocol;
       const host = window.location.host;
+      console.warn('[AdminApi] VITE_ADMIN_API_URL not set, falling back to same-origin. This will fail for separate admin frontend deployment.');
       return `${protocol}//${host}`;
     }
     return 'http://localhost:3000';
@@ -188,6 +189,16 @@ class AdminApiService {
       credentials: 'include',
       cache: 'no-store',
     });
+
+    // Detect HTML responses (indicates wrong base URL - serving SPA index.html instead of API)
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('text/html')) {
+      throw new AdminApiError(
+        'API request returned HTML instead of JSON. Check VITE_ADMIN_API_URL configuration - the admin frontend may be pointing to the wrong backend URL.',
+        response.status,
+        'HTML_RESPONSE'
+      );
+    }
 
     const data = await response.json().catch(() => ({} as T));
     return { data: data as T, response };
@@ -235,6 +246,10 @@ class AdminApiService {
       method: 'POST',
       body: JSON.stringify({ username, password }),
     });
+    // Validate required fields
+    if (!data.authenticated || !data.adminRole || !data.permissions || !data.csrfToken) {
+      throw new AdminApiError('Invalid login response from server - missing required fields.', 500, 'INVALID_LOGIN_RESPONSE');
+    }
     return this.rememberSession(data);
   }
 
