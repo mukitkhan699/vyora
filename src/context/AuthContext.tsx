@@ -1,6 +1,7 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { User, AppConfig } from '../types/index.ts';
 import { api, AuthUser } from '../services/api.ts';
+import { adminApi, AdminUser, AdminRole, AdminPermissions } from '../services/adminApi.ts';
 
 export interface RegisterResult {
   user: User | null;
@@ -27,6 +28,12 @@ interface AuthContextType {
   setAuthError: (err: string | null) => void;
   pendingVerificationEmail: string | null;
   clearPendingVerification: () => void;
+  isAdmin: boolean;
+  adminRole: AdminRole | null;
+  adminPermissions: AdminPermissions | null;
+  adminLogin: (username: string, password: string) => Promise<{ adminRole: AdminRole; permissions: AdminPermissions }>;
+  adminLogout: () => Promise<void>;
+  refreshAdminSession: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -61,6 +68,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [authError, setAuthError] = useState<string | null>(null);
   const [pendingVerificationEmail, setPendingVerificationEmail] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [adminRole, setAdminRole] = useState<AdminRole | null>(null);
+  const [adminPermissions, setAdminPermissions] = useState<AdminPermissions | null>(null);
 
   const refreshConfig = async () => {
     try {
@@ -96,6 +106,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const refreshAdminSession = useCallback(async () => {
+    try {
+      const session = await adminApi.getSession();
+      if (session.authenticated && session.adminRole) {
+        setIsAdmin(true);
+        setAdminRole(session.adminRole);
+        setAdminPermissions(session.permissions ?? null);
+      } else {
+        setIsAdmin(false);
+        setAdminRole(null);
+        setAdminPermissions(null);
+      }
+    } catch {
+      setIsAdmin(false);
+      setAdminRole(null);
+      setAdminPermissions(null);
+    }
+  }, []);
+
   useEffect(() => {
     const init = async () => {
       setIsLoading(true);
@@ -119,10 +148,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       await Promise.all([refreshConfig(), sessionPromise, minimumSplash]);
       await refreshUsersAndDemos();
       await refreshNotificationsCount();
+      await refreshAdminSession();
       setIsLoading(false);
     };
     init();
-  }, []);
+  }, [refreshAdminSession]);
+
+  // Periodically refresh admin session to handle expiration gracefully
+  useEffect(() => {
+    if (!isAdmin) return;
+    const interval = setInterval(() => {
+      refreshAdminSession();
+    }, 5 * 60 * 1000); // 5 minutes
+    return () => clearInterval(interval);
+  }, [isAdmin, refreshAdminSession]);
 
   const login = async (username: string, password: string): Promise<User> => {
     setAuthError(null);
@@ -207,6 +246,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const adminLogin = async (username: string, password: string): Promise<{ adminRole: AdminRole; permissions: AdminUser['permissions'] }> => {
+    setAuthError(null);
+    try {
+      const res = await adminApi.login(username, password);
+      setIsAdmin(true);
+      setAdminRole(res.adminRole);
+      setAdminPermissions(res.permissions);
+      return { adminRole: res.adminRole, permissions: res.permissions };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Admin login failed';
+      setAuthError(message);
+      throw new Error(message);
+    }
+  };
+
+  const adminLogout = async (): Promise<void> => {
+    try {
+      await adminApi.logout();
+    } catch (e) {
+      console.warn('Admin backend logout warning:', e);
+    } finally {
+      setIsAdmin(false);
+      setAdminRole(null);
+      setAdminPermissions(null);
+    }
+  };
+
   const updateCurrentUser = async (data: Partial<User>): Promise<User> => {
     const updated = await api.updateProfile(data);
     setCurrentUser(updated);
@@ -236,6 +302,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setAuthError,
         pendingVerificationEmail,
         clearPendingVerification,
+        isAdmin,
+        adminRole,
+        adminPermissions,
+        adminLogin,
+        adminLogout,
+        refreshAdminSession,
       }}
     >
       {children}

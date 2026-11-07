@@ -16,16 +16,26 @@ import { ProfileView } from './components/profile/ProfileView.tsx';
 import { SettingsView } from './components/settings/SettingsView.tsx';
 import { LauncherSplash } from './components/common/LauncherSplash.tsx';
 import { LoginScreen } from './components/auth/LoginScreen.tsx';
+import { AdminRoute } from './components/admin/AdminRoute.tsx';
+import { AdminDashboard } from './components/admin/AdminDashboard.tsx';
+import { AdminSidebar } from './components/admin/AdminSidebar.tsx';
 import { Post } from './types/index.ts';
 
+interface BaseSidebarProps {
+  currentTab: string;
+  onSelectTab: (tab: string) => void;
+}
+
 function MainApp() {
-  const { appConfig } = useAuth();
+  const { appConfig, isAdmin, adminRole } = useAuth();
 
   const [currentTab, setCurrentTab] = useState<string>('home');
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
   const [targetUsername, setTargetUsername] = useState<string | null>(null);
   const [exploreQuery, setExploreQuery] = useState<string>('');
   const [isComposeOpen, setIsComposeOpen] = useState<boolean>(false);
+
+  const isAdminTab = ['overview', 'users', 'posts', 'reports', 'audit', 'stats', 'settings'].includes(currentTab);
 
   const handlePostClick = (post: Post) => {
     setSelectedPostId(post.id);
@@ -52,6 +62,29 @@ function MainApp() {
     setCurrentTab('explore');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
+
+  const handleAdminLogout = () => {
+    setCurrentTab('home');
+  };
+
+  if (isAdminTab) {
+    return (
+      <div className="min-h-screen flex justify-center selection:bg-cyan-500/30 selection:text-white">
+        <div className="flex w-full max-w-7xl justify-between">
+          <AdminSidebar
+            currentTab={currentTab}
+            onSelectTab={setCurrentTab}
+            onLogout={handleAdminLogout}
+          />
+          <main className="min-w-0 flex-1 min-h-screen border-r border-white/[0.08] max-w-2xl pb-20 sm:pb-4 w-full">
+            <AdminRoute allowedRoles={adminRole ? [adminRole] : undefined}>
+              <AdminDashboard />
+            </AdminRoute>
+          </main>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex justify-center selection:bg-cyan-500/30 selection:text-white">

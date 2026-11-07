@@ -7,6 +7,7 @@ import {
   requireSessionWithCsrf,
   setAuthError,
 } from '../auth.ts';
+import { handleAdminRequest } from './admin.ts';
 import {
   abortUpload,
   createLegacyUpload,
@@ -102,6 +103,8 @@ export async function handleApiRequest(
 
   try {
     if (await handleAuthRequest(req, res, url)) return true;
+
+    if (await handleAdminRequest(req, res, url)) return true;
 
     if (pathname === '/api/auth/demo-accounts' && method === 'GET') {
       const accounts = await dbAdapter.getDemoAccounts();

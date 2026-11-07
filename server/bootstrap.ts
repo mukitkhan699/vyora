@@ -1,11 +1,13 @@
 import { validateServerConfiguration } from './config.ts';
 import { initAuth } from './auth.ts';
+import { bootstrapSuperAdmin } from './auth/admin.ts';
 import { cleanupAbandonedUploads, validateStorageConfiguration } from './storage/b2.ts';
 
 export async function initializeBackend(): Promise<() => void> {
   validateServerConfiguration();
   validateStorageConfiguration();
   await initAuth();
+  await bootstrapSuperAdmin();
   await cleanupAbandonedUploads();
 
   const cleanupTimer = setInterval(() => {
