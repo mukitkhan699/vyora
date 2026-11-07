@@ -52,7 +52,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'bookmarks', label: 'Bookmarks', icon: Bookmark },
     { id: 'profile', label: 'Profile', icon: UserIcon },
     { id: 'settings', label: 'Settings', icon: SettingsIcon },
-    ...(isAdmin ? [{ id: 'overview', label: 'Admin', icon: Shield }] : []),
+    ...(isAuthenticated ? [{ id: 'overview', label: 'Admin', icon: Shield }] : []),
   ];
 
   const hoverBg = theme === 'light' ? 'hover:bg-slate-100' : 'hover:bg-white/[0.06]';
