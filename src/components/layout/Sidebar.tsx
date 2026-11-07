@@ -33,7 +33,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSelectTab,
   onOpenCompose,
 }) => {
-  const { currentUser, logout, unreadNotificationsCount, appConfig, isAdmin, adminRole } = useAuth();
+  const { currentUser, logout, unreadNotificationsCount, appConfig, isAdmin, adminRole, isAuthenticated } = useAuth();
   const { theme, accentTextClass, accentBgClass, isDark } = useTheme();
   const [showUserMenu, setShowUserMenu] = useState(false);
 

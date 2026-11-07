@@ -1,7 +1,7 @@
 import React from 'react';
 
 interface CardProps {
-  children: React.ReactNode;
+  children?: React.ReactNode;
   className?: string;
   variant?: 'default' | 'bordered' | 'elevated';
   padding?: 'none' | 'sm' | 'md' | 'lg';
