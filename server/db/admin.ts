@@ -308,7 +308,7 @@ export async function getActiveAdminSessions(): Promise<{
   created_at: number;
   expires_at: number;
   last_activity_at: number;
-}[]> {
+}>[] {
   const result = await query<{
     id: string;
     admin_id: string;
@@ -317,6 +317,7 @@ export async function getActiveAdminSessions(): Promise<{
     created_at: number;
     expires_at: number;
     last_activity_at: number;
+    admin_username: string;
   }>(
     `SELECT s.*, u.username AS admin_username
      FROM zunari_admin_sessions s

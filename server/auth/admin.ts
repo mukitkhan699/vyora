@@ -2,7 +2,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { query, withTransaction } from '../db/pool.ts';
 import { HttpError } from '../errors.ts';
-import { getAuthUser, requireSessionWithCsrf, safeEqual } from './auth.ts';
+import { getAuthUser, requireSessionWithCsrf, safeEqual } from '../auth.ts';
 
 export type AdminRole =
   | 'super_admin'
