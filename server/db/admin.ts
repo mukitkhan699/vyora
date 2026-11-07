@@ -299,16 +299,18 @@ export async function updateAdminRolePermissions(
   );
 }
 
-export async function getActiveAdminSessions(): Promise<{
-  id: string;
-  admin_id: string;
-  admin_username: string;
-  ip_address: string | null;
-  user_agent: string | null;
-  created_at: number;
-  expires_at: number;
-  last_activity_at: number;
-}>[] {
+export async function getActiveAdminSessions(): Promise<
+  {
+    id: string;
+    admin_id: string;
+    admin_username: string;
+    ip_address: string | null;
+    user_agent: string | null;
+    created_at: number;
+    expires_at: number;
+    last_activity_at: number;
+  }[]
+> {
   const result = await query<{
     id: string;
     admin_id: string;
