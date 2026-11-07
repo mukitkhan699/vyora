@@ -19,6 +19,7 @@ import { LoginScreen } from './components/auth/LoginScreen.tsx';
 import { AdminRoute } from './components/admin/AdminRoute.tsx';
 import { AdminDashboard } from './components/admin/AdminDashboard.tsx';
 import { AdminSidebar } from './components/admin/AdminSidebar.tsx';
+import { AuditLogView } from './components/admin/AuditLogView.tsx';
 import { Post } from './types/index.ts';
 
 interface BaseSidebarProps {
@@ -68,6 +69,27 @@ function MainApp() {
   };
 
   if (isAdminTab) {
+    const renderAdminContent = () => {
+      switch (currentTab) {
+        case 'overview':
+          return <AdminDashboard />;
+        case 'audit':
+          return <AuditLogView />;
+        case 'users':
+        case 'posts':
+        case 'reports':
+        case 'stats':
+        default:
+          return (
+            <div className="p-6 text-center text-neutral-500">
+              <div className="text-6xl mb-4">🚧</div>
+              <h2 className="text-xl font-semibold text-white mb-2">{currentTab.charAt(0).toUpperCase() + currentTab.slice(1)}</h2>
+              <p>Coming soon — this section is under development.</p>
+            </div>
+          );
+      }
+    };
+
     return (
       <div className="min-h-screen flex justify-center selection:bg-cyan-500/30 selection:text-white">
         <div className="flex w-full max-w-7xl justify-between">
@@ -78,7 +100,7 @@ function MainApp() {
           />
           <main className="min-w-0 flex-1 min-h-screen border-r border-white/[0.08] max-w-2xl pb-20 sm:pb-4 w-full">
             <AdminRoute allowedRoles={adminRole ? [adminRole] : undefined}>
-              <AdminDashboard />
+              {renderAdminContent()}
             </AdminRoute>
           </main>
         </div>
