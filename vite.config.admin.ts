@@ -8,14 +8,14 @@ export default defineConfig(() => {
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '../..'),
+        '@': path.resolve(process.cwd()),
       },
     },
     optimizeDeps: {
       include: ['socket.io-client'],
     },
     build: {
-      outDir: path.resolve(__dirname, '../../dist/admin'),
+      outDir: path.resolve(process.cwd(), 'dist/admin'),
       emptyOutDir: true,
       sourcemap: false,
     },
