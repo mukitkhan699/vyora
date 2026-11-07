@@ -51,7 +51,10 @@ class ApiService {
       ...((options.headers as Record<string, string>) || {}),
     };
 
-    if (options.body !== undefined && !headers['Content-Type']) {
+    const hasContentType = Object.keys(headers).some(k => k.toLowerCase() === 'content-type');
+    const isFormData = options.body instanceof FormData;
+
+    if (options.body !== undefined && !hasContentType && !isFormData) {
       headers['Content-Type'] = 'application/json';
     }
     if (method !== 'GET' && method !== 'HEAD' && this.csrfToken) {

@@ -35,7 +35,7 @@ function MainApp() {
   const [exploreQuery, setExploreQuery] = useState<string>('');
   const [isComposeOpen, setIsComposeOpen] = useState<boolean>(false);
 
-  const isAdminTab = ['overview', 'users', 'posts', 'reports', 'audit', 'stats', 'settings'].includes(currentTab);
+  const isAdminTab = ['overview', 'users', 'posts', 'reports', 'audit', 'stats'].includes(currentTab);
 
   const handlePostClick = (post: Post) => {
     setSelectedPostId(post.id);
