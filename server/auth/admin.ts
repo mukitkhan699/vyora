@@ -262,6 +262,14 @@ export async function requireAdminSession(req: IncomingMessage): Promise<AdminSe
   return session;
 }
 
+export async function requireAdminSessionReadOnly(req: IncomingMessage): Promise<AdminSession> {
+  const session = await getAdminSession(req);
+  if (!session) {
+    throw new HttpError(403, 'Admin session required. Please sign in to the admin dashboard.', 'ADMIN_SESSION_REQUIRED');
+  }
+  return session;
+}
+
 export function requirePermission(permission: keyof AdminPermissions, subPermission?: keyof AdminPermissions[keyof AdminPermissions]) {
   return async (req: IncomingMessage): Promise<AdminSession> => {
     const session = await requireAdminSession(req);

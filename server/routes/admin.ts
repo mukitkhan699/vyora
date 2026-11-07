@@ -9,6 +9,7 @@ import {
 } from '../auth.ts';
 import {
   requireAdminSession,
+  requireAdminSessionReadOnly,
   requirePermission,
   logAdminAction,
   setUserAdminRole,
@@ -180,7 +181,10 @@ export async function handleAdminRequest(
       return true;
     }
 
-    const adminSession = await requireAdminSession(req);
+    const isReadOnlyMethod = method === 'GET' || method === 'HEAD';
+    const adminSession = isReadOnlyMethod
+      ? await requireAdminSessionReadOnly(req)
+      : await requireAdminSession(req);
     const adminId = getAdminIdFromSession(adminSession);
 
     if (pathname === '/api/admin/stats' && method === 'GET') {
