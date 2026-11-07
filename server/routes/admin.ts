@@ -84,7 +84,9 @@ export async function handleAdminRequest(
   }
 
   try {
-    await validateStateChangingRequest(req);
+    if (method !== 'GET' && method !== 'HEAD') {
+      await validateStateChangingRequest(req);
+    }
 
     if (pathname === '/api/admin/login' && method === 'POST') {
       const body = await parseAdminRequest(req);
