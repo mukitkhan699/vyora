@@ -1,5 +1,4 @@
 import React from 'react';
-import { VerificationBadge } from './VerificationBadge.tsx';
 
 interface BadgeProps {
   type?: 'blue' | 'gold' | 'cyan' | 'gray' | 'violet' | 'amber' | 'emerald' | 'rose';
@@ -8,12 +7,15 @@ interface BadgeProps {
   children?: React.ReactNode;
 }
 
-const sizeMap = {
-  xs: 16,
-  sm: 18,
-  md: 20,
-  lg: 24,
+const sizeClassMap = {
+  xs: 'w-3.5 h-3.5',
+  sm: 'w-3.5 h-3.5',
+  md: 'w-4 h-4',
+  lg: 'w-5 h-5',
 } as const;
+
+const ORIGINAL_BADGE_PATH =
+  'M22.5 12.5c0-1.58-.875-2.95-2.148-3.6.154-.435.238-.905.238-1.4 0-2.21-1.79-4-4-4-.495 0-.965.084-1.4.238C14.55 2.475 13.18 1.6 11.6 1.6c-1.58 0-2.95.875-3.6 2.148-.435-.154-.905-.238-1.4-.238-2.21 0-4 1.79-4 4 0 .495.084.965.238 1.4C1.575 9.55.7 10.92.7 12.5c0 1.58.875 2.95 2.148 3.6-.154.435-.238.905-.238 1.4 0 2.21 1.79 4 4 4 .495 0 .965-.084 1.4-.238 1.05 1.273 2.42 2.148 4 2.148 1.58 0 2.95-.875 3.6-2.148.435.154.905.238 1.4.238 2.21 0 4-1.79 4-4 0-.495-.084-.965-.238-1.4 1.273-1.05 2.148-2.42 2.148-4zM10.2 16.5l-3.5-3.5 1.4-1.4 2.1 2.1 5.3-5.3 1.4 1.4-6.7 6.7z';
 
 export const Badge: React.FC<BadgeProps> = ({
   type = 'cyan',
@@ -21,16 +23,22 @@ export const Badge: React.FC<BadgeProps> = ({
   className = '',
   children,
 }) => {
-  const pixelSize = sizeMap[size];
+  const sizeClass = sizeClassMap[size];
 
-  // Use VerificationBadge for verified (blue) and gold types
   if (type === 'blue' || type === 'gold') {
     const badge = (
-      <VerificationBadge
-        type={type === 'blue' ? 'verified' : 'gold'}
-        size={sizeMap[size]}
-        className={className}
-      />
+      <svg
+        viewBox="0 0 24 24"
+        aria-label={type === 'gold' ? 'Verified organization' : 'Verified account'}
+        className={
+          type === 'gold'
+            ? `${sizeClass} fill-[#e7a32b] shrink-0 inline-block align-middle ${className}`
+            : `${sizeClass} shrink-0 inline-block align-middle ${className}`
+        }
+        style={type === 'blue' ? { fill: '#1d9bf0' } : undefined}
+      >
+        <path d={ORIGINAL_BADGE_PATH} />
+      </svg>
     );
 
     if (!children) return badge;
@@ -44,8 +52,6 @@ export const Badge: React.FC<BadgeProps> = ({
   }
 
   const fillHex: Record<string, string> = {
-    blue: '#1d9bf0',
-    gold: '#e7a32b',
     cyan: '#00f2fe',
     gray: '#71767b',
     violet: '#a855f7',
@@ -54,7 +60,6 @@ export const Badge: React.FC<BadgeProps> = ({
     rose: '#f43f5e',
   };
 
-  // Verification checkmark path for other badge types
   const verificationPath = (
     <path
       fillRule="evenodd"
@@ -63,23 +68,13 @@ export const Badge: React.FC<BadgeProps> = ({
     />
   );
 
-  // Gold star badge for other gold uses (if needed)
-  const goldStarPath = (
-    <path
-      fillRule="evenodd"
-      d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L8.82 14.27l-5-4.87L11.09 2L12 2.01z"
-      clipRule="evenodd"
-    />
-  );
-
-  // Other badge types with text label
   if (children) {
     return (
       <span className={`inline-flex items-center gap-1 ${className}`}>
         <svg
           viewBox="0 0 24 24"
           aria-label="Badge"
-          className={`w-4 h-4 shrink-0 inline-block align-middle`}
+          className="w-4 h-4 shrink-0 inline-block align-middle"
           style={{ fill: fillHex[type] || fillHex.cyan }}
         >
           {verificationPath}
@@ -89,7 +84,6 @@ export const Badge: React.FC<BadgeProps> = ({
     );
   }
 
-  // Standalone badge icons
   return (
     <svg
       viewBox="0 0 24 24"
