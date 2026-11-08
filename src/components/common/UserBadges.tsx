@@ -1,5 +1,5 @@
 import React from 'react';
-import { Badge } from './Badge.tsx';
+import { VerificationBadge } from './VerificationBadge.tsx';
 
 interface UserBadgesProps {
   verified?: boolean;
@@ -8,18 +8,26 @@ interface UserBadgesProps {
   className?: string;
 }
 
+const sizeMap = {
+  xs: 16,
+  sm: 18,
+  md: 20,
+  lg: 24,
+} as const;
+
 export const UserBadges: React.FC<UserBadgesProps> = ({
   verified,
   isGold,
   size = 'sm',
   className = '',
 }) => {
-  if (!verified && !isGold) return null;
+  const badgeType = isGold ? 'gold' : verified ? 'verified' : null;
+
+  if (!badgeType) return null;
 
   return (
-    <span className={`inline-flex items-center gap-1 shrink-0 ${className}`}>
-      {verified && <Badge type="blue" size={size} />}
-      {isGold && <Badge type="gold" size={size} />}
+    <span className={`inline-flex items-center align-middle shrink-0 ${className}`}>
+      <VerificationBadge type={badgeType} size={sizeMap[size]} />
     </span>
   );
 };

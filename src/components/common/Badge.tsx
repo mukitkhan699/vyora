@@ -10,9 +10,9 @@ interface BadgeProps {
 
 const sizeMap = {
   xs: 16,
-  sm: 20,
-  md: 24,
-  lg: 32,
+  sm: 18,
+  md: 20,
+  lg: 24,
 } as const;
 
 export const Badge: React.FC<BadgeProps> = ({
@@ -24,15 +24,22 @@ export const Badge: React.FC<BadgeProps> = ({
   const pixelSize = sizeMap[size];
 
   // Use VerificationBadge for verified (blue) and gold types
-  if (type === 'blue') {
-    return (
-      <VerificationBadge type="verified" size={sizeMap[size]} className={className} />
+  if (type === 'blue' || type === 'gold') {
+    const badge = (
+      <VerificationBadge
+        type={type === 'blue' ? 'verified' : 'gold'}
+        size={sizeMap[size]}
+        className={className}
+      />
     );
-  }
 
-  if (type === 'gold') {
+    if (!children) return badge;
+
     return (
-      <VerificationBadge type="gold" size={sizeMap[size]} className={className} />
+      <span className={`inline-flex items-center gap-1 ${className}`}>
+        {badge}
+        {children}
+      </span>
     );
   }
 

@@ -156,7 +156,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         <div>
           <h2 className="text-base font-bold flex items-center gap-1.5 leading-tight text-white">
             {user.name}
-            <UserBadges verified={user.verified} isGold={user.isGold} size="sm" />
+            <UserBadges verified={user.verified} isGold={user.isGold} size="md" />
           </h2>
           <span className="text-xs text-neutral-400 font-mono">{posts.length} posts</span>
         </div>

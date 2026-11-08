@@ -19,7 +19,7 @@ import { useAuth } from '../../context/AuthContext.tsx';
 import { api } from '../../services/api.ts';
 import { VyoraIcon } from '../common/VyoraIcon.tsx';
 import { Avatar } from '../common/Avatar.tsx';
-import { Badge } from '../common/Badge.tsx';
+import { UserBadges } from '../common/UserBadges.tsx';
 
 type AuthMode = 'signin' | 'register' | 'forgot';
 
@@ -450,7 +450,7 @@ export const LoginScreen: React.FC = () => {
                           <span className="min-w-0 truncate">
                             <span className="flex items-center gap-1 truncate text-xs font-bold text-white">
                               {account.name}
-                              {account.verified && <Badge type={account.isGold ? 'gold' : 'blue'} size="sm" />}
+                              <UserBadges verified={account.verified} isGold={account.isGold} size="sm" />
                             </span>
                             <span className="block truncate font-mono text-[10px] text-neutral-500">
                               @{account.username}
