@@ -5,6 +5,7 @@ import { useTheme } from '../../context/ThemeContext.tsx';
 import { api } from '../../services/api.ts';
 import { Avatar } from '../common/Avatar.tsx';
 import { Badge } from '../common/Badge.tsx';
+import { UserBadges } from '../common/UserBadges.tsx';
 import { Button } from '../common/Button.tsx';
 import { TrendItem, User } from '../../types/index.ts';
 
@@ -55,7 +56,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
       ? 'bg-slate-100 focus:bg-white border-slate-200 text-slate-900'
       : 'bg-[#0B0E14] focus:bg-[#070A0F] border-white/[0.08] focus:border-cyan-400 text-white';
 
-  const followRecommendations = allUsers.filter((u) => u.id !== currentUser?.id).slice(0, 3);
+  const followRecommendations = Array.isArray(allUsers) ? allUsers.filter((u) => u.id !== currentUser?.id).slice(0, 3) : [];
 
   return (
     <aside className="hidden lg:flex flex-col gap-4 w-80 xl:w-88 p-4 min-h-screen sticky top-0 overflow-y-auto shrink-0 select-none">
@@ -89,7 +90,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
           <h3 className="text-base font-bold tracking-tight">Trends for you</h3>
         </div>
         <div className="flex flex-col gap-3">
-          {trends.slice(0, 5).map((t) => (
+          {(Array.isArray(trends) ? trends : []).slice(0, 5).map((t) => (
             <div
               key={t.id}
               onClick={() => {
@@ -124,7 +125,7 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
                   <div className="truncate leading-tight">
                     <div className="text-xs font-bold flex items-center gap-1 truncate group-hover:underline">
                       {user.name}
-                      {user.verified && <Badge type={user.isGold ? 'gold' : 'blue'} size="sm" />}
+                      <UserBadges verified={user.verified} isGold={user.isGold} size="sm" />
                     </div>
                     <div className="text-[11px] text-neutral-400 truncate font-mono">
                       @{user.username}

@@ -297,12 +297,16 @@ export async function handleApiRequest(
       const replyToId = typeof body.replyToId === 'string' ? body.replyToId : undefined;
       const quotePostId = typeof body.quotePostId === 'string' ? body.quotePostId : undefined;
 
-      if (!content.trim()) {
-        sendError(res, 400, 'Post content cannot be empty.');
+      if (!content.trim() && (!mediaUrls || mediaUrls.length === 0)) {
+        sendError(res, 400, 'Post content or media is required.');
         return true;
       }
       if (content.length > config.maxPostLength) {
         sendError(res, 400, `Post exceeds maximum length of ${config.maxPostLength} characters.`);
+        return true;
+      }
+      if (mediaUrls && mediaUrls.length > 4) {
+        sendError(res, 400, 'A maximum of 4 media attachments are allowed per post.');
         return true;
       }
       const post = await dbAdapter.createPost(

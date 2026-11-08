@@ -12,6 +12,8 @@ import { PostCard } from '../feed/PostCard.tsx';
 import { EditProfileModal } from './EditProfileModal.tsx';
 import { PostSkeleton } from '../common/LoadingSkeleton.tsx';
 import { EmptyState } from '../common/EmptyState.tsx';
+import { Modal } from '../common/Modal.tsx';
+import { UserBadges } from '../common/UserBadges.tsx';
 
 interface ProfileViewProps {
   username?: string;
@@ -52,6 +54,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const [isFollowing, setIsFollowing] = useState(false);
   const [activeTab, setActiveTab] = useState<'posts' | 'replies' | 'highlights' | 'media' | 'likes'>('posts');
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showVerificationNotice, setShowVerificationNotice] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const targetUsername = username || currentUser?.username || 'mukitk';
@@ -153,7 +156,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         <div>
           <h2 className="text-base font-bold flex items-center gap-1.5 leading-tight text-white">
             {user.name}
-            {user.verified && <Badge type={user.isGold ? 'gold' : 'blue'} size="sm" />}
+            <UserBadges verified={user.verified} isGold={user.isGold} size="sm" />
           </h2>
           <span className="text-xs text-neutral-400 font-mono">{posts.length} posts</span>
         </div>
@@ -171,19 +174,31 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
       {/* Profile Details Container */}
       <div className="px-4 pb-4 border-b border-white/[0.08]">
         {/* Avatar & Edit/Follow Button Row */}
-        <div className="flex items-end justify-between -mt-14 sm:-mt-16 mb-3">
-          <Avatar
-            src={user.avatarUrl}
-            name={user.name}
-            size="xl"
-            className="ring-4 ring-[#090B10]"
-          />
+        <div className="flex flex-wrap items-end justify-between gap-3 -mt-12 sm:-mt-16 mb-4 relative z-10">
+          <div className="shrink-0">
+            <Avatar
+              src={user.avatarUrl}
+              name={user.name}
+              size="xl"
+              className="ring-4 ring-[#090B10] shadow-xl"
+            />
+          </div>
 
-          <div>
+          <div className="flex flex-wrap items-center gap-2 pt-1 sm:pt-4 ml-auto">
             {isOwnProfile ? (
-              <Button variant="outline" size="sm" onClick={() => setShowEditModal(true)}>
-                Edit profile
-              </Button>
+              <>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowVerificationNotice(true)}
+                  className="font-medium"
+                >
+                  Get Verified
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => setShowEditModal(true)}>
+                  Edit profile
+                </Button>
+              </>
             ) : (
               <Button
                 variant={isFollowing ? 'outline' : 'secondary'}
@@ -200,7 +215,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
         <div className="mb-2.5">
           <h1 className="text-xl font-black flex items-center gap-1.5 leading-tight text-white">
             {user.name}
-            {user.verified && <Badge type={user.isGold ? 'gold' : 'blue'} size="md" />}
+            <UserBadges verified={user.verified} isGold={user.isGold} size="md" />
           </h1>
           <span className="text-sm text-neutral-400 font-mono">@{user.username}</span>
         </div>
@@ -305,6 +320,33 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
           user={user}
           onSave={handleProfileSave}
         />
+      )}
+
+      {/* Verification Notice Modal */}
+      {showVerificationNotice && (
+        <Modal
+          isOpen={showVerificationNotice}
+          onClose={() => setShowVerificationNotice(false)}
+          title="Account Verification"
+          maxWidth="max-w-md"
+        >
+          <div className="text-center py-4 px-2">
+            <div className="mx-auto w-12 h-12 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center mb-4 text-cyan-400">
+              <Badge type="blue" size="lg" />
+            </div>
+            <h3 className="text-lg font-bold mb-2">Verification applications coming soon</h3>
+            <p className="text-sm text-neutral-400 leading-relaxed mb-6">
+              We are working on a structured application workflow for verified badges. Check back soon for updates on how to apply.
+            </p>
+            <Button
+              onClick={() => setShowVerificationNotice(false)}
+              className="w-full"
+              size="sm"
+            >
+              Got it
+            </Button>
+          </div>
+        </Modal>
       )}
     </div>
   );

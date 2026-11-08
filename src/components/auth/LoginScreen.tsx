@@ -225,14 +225,14 @@ export const LoginScreen: React.FC = () => {
               {mode === 'signin' && (
                 <form onSubmit={handleSignIn} className="space-y-4">
                   <label className="block">
-                    <span className="mb-1.5 block text-xs font-medium text-neutral-300">Operator handle</span>
+                    <span className="mb-1.5 block text-xs font-medium text-neutral-300">Username</span>
                     <span className="relative block">
                       <UserRound className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
                       <input
                         type="text"
                         value={username}
                         onChange={(e) => setUsername(e.target.value)}
-                        placeholder="your_handle"
+                        placeholder="username"
                         autoComplete="username"
                         autoFocus
                         required
@@ -243,7 +243,7 @@ export const LoginScreen: React.FC = () => {
 
                   <label className="block">
                     <span className="mb-1.5 flex items-center justify-between text-xs font-medium text-neutral-300">
-                      <span>Security key</span>
+                      <span>Password</span>
                       <button
                         type="button"
                         onClick={() => switchMode('forgot')}
@@ -299,7 +299,7 @@ export const LoginScreen: React.FC = () => {
               {mode === 'register' && (
                 <form onSubmit={handleRegister} className="space-y-4">
                   <label className="block">
-                    <span className="mb-1.5 block text-xs font-medium text-neutral-300">Operator handle</span>
+                    <span className="mb-1.5 block text-xs font-medium text-neutral-300">Username</span>
                     <span className="relative block">
                       <UserRound className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
                       <input

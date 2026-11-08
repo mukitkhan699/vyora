@@ -1,14 +1,15 @@
 @import "tailwindcss";
 
 @layer base {
-  :root {
+  :root, .theme-dark {
     --bg-primary: #090B10;
     --bg-secondary: #10131A;
     --bg-elevated: #171B24;
     --surface-card: #11151D;
-    --surface-hover: #1A202B;
-    --border-subtle: #252B36;
-    --border-strong: #333C4D;
+    --surface-card-border: rgba(255, 255, 255, 0.08);
+    --surface-hover: rgba(255, 255, 255, 0.05);
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --border-strong: rgba(255, 255, 255, 0.15);
     --text-primary: #F4F6FA;
     --text-secondary: #A1A8B5;
     --text-muted: #697384;
@@ -17,6 +18,10 @@
     --color-success: #10B981;
     --color-warning: #F59E0B;
     --color-error: #EF4444;
+    --input-bg: rgba(0, 0, 0, 0.4);
+    --input-border: rgba(255, 255, 255, 0.1);
+    --modal-bg: #0F131A;
+    --modal-border: rgba(255, 255, 255, 0.1);
   }
 
   .theme-dim {
@@ -24,12 +29,17 @@
     --bg-secondary: #162035;
     --bg-elevated: #1E2B44;
     --surface-card: #152238;
-    --surface-hover: #1F304E;
+    --surface-card-border: rgba(255, 255, 255, 0.1);
+    --surface-hover: rgba(255, 255, 255, 0.07);
     --border-subtle: #2A3B5A;
     --border-strong: #3B527A;
     --text-primary: #F8FAFC;
     --text-secondary: #94A3B8;
     --text-muted: #64748B;
+    --input-bg: rgba(15, 23, 42, 0.6);
+    --input-border: rgba(255, 255, 255, 0.12);
+    --modal-bg: #162035;
+    --modal-border: rgba(255, 255, 255, 0.12);
   }
 
   .theme-light {
@@ -37,12 +47,17 @@
     --bg-secondary: #FFFFFF;
     --bg-elevated: #F1F5F9;
     --surface-card: #FFFFFF;
+    --surface-card-border: #E2E8F0;
     --surface-hover: #F1F5F9;
     --border-subtle: #E2E8F0;
     --border-strong: #CBD5E1;
     --text-primary: #0F172A;
-    --text-secondary: #475569;
-    --text-muted: #94A3B8;
+    --text-secondary: #334155;
+    --text-muted: #64748B;
+    --input-bg: #FFFFFF;
+    --input-border: #CBD5E1;
+    --modal-bg: #FFFFFF;
+    --modal-border: #E2E8F0;
   }
 
   * {
@@ -57,6 +72,57 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
+  }
+
+  /* In light mode, override common dark classes for high contrast */
+  .theme-light .text-white {
+    color: #0F172A !important;
+  }
+
+  .theme-light .text-neutral-100,
+  .theme-light .text-neutral-200,
+  .theme-light .text-neutral-300 {
+    color: #1E293B !important;
+  }
+
+  .theme-light .text-neutral-400 {
+    color: #475569 !important;
+  }
+
+  .theme-light .text-neutral-500 {
+    color: #64748B !important;
+  }
+
+  .theme-light .bg-black\/40,
+  .theme-light .bg-black\/50,
+  .theme-light .bg-black\/20,
+  .theme-light .bg-\[\#121722\],
+  .theme-light .bg-\[\#11151D\],
+  .theme-light .bg-\[\#0a0f18\]\/90,
+  .theme-light .bg-\[\#0a0f18\]\/95 {
+    background-color: #FFFFFF !important;
+    border-color: #E2E8F0 !important;
+    color: #0F172A !important;
+  }
+
+  .theme-light .border-white\/10,
+  .theme-light .border-white\/\[0\.08\],
+  .theme-light .border-white\/\[0\.06\],
+  .theme-light .border-white\/\[0\.07\],
+  .theme-light .border-white\/\[0\.09\],
+  .theme-light .divide-white\/\[0\.06\] > :not([hidden]) ~ :not([hidden]),
+  .theme-light .border-white\/20 {
+    border-color: #E2E8F0 !important;
+  }
+
+  .theme-light .hover\:bg-white\/\[0\.06\]:hover,
+  .theme-light .hover\:bg-white\/\[0\.08\]:hover,
+  .theme-light .hover\:bg-white\/\[0\.03\]:hover {
+    background-color: #F1F5F9 !important;
+  }
+
+  .theme-light .ring-\[\#090B10\] {
+    --tw-ring-color: #FFFFFF !important;
   }
 
   /* Custom subtle scrollbar */

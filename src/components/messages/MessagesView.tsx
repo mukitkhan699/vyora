@@ -6,6 +6,7 @@ import { useAuth } from '../../context/AuthContext.tsx';
 import { useTheme } from '../../context/ThemeContext.tsx';
 import { Avatar } from '../common/Avatar.tsx';
 import { Badge } from '../common/Badge.tsx';
+import { UserBadges } from '../common/UserBadges.tsx';
 import { EmptyState } from '../common/EmptyState.tsx';
 import { io, type Socket } from 'socket.io-client';
 import { getBackendApiUrl } from '../../config/backendUrl.ts';
@@ -163,7 +164,7 @@ export const MessagesView: React.FC = () => {
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-sm truncate flex items-center gap-1 text-white">
                       {user.name}
-                      {user.verified && <Badge type={user.isGold ? 'gold' : 'blue'} size="sm" />}
+                      <UserBadges verified={user.verified} isGold={user.isGold} size="sm" />
                     </span>
                   </div>
                   <div className="text-xs text-neutral-400 truncate font-mono">
@@ -198,9 +199,7 @@ export const MessagesView: React.FC = () => {
               <div className="min-w-0">
                 <div className="font-bold text-sm flex items-center gap-1 text-white truncate">
                   {selectedUser.name}
-                  {selectedUser.verified && (
-                    <Badge type={selectedUser.isGold ? 'gold' : 'blue'} size="sm" />
-                  )}
+<UserBadges verified={selectedUser.verified} isGold={selectedUser.isGold} size="sm" />
                 </div>
                 <div className="text-xs text-neutral-500 font-mono">@{selectedUser.username}</div>
               </div>

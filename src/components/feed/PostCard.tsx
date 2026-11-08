@@ -16,7 +16,9 @@ import { useAuth } from '../../context/AuthContext.tsx';
 import { useTheme } from '../../context/ThemeContext.tsx';
 import { Avatar } from '../common/Avatar.tsx';
 import { Badge } from '../common/Badge.tsx';
+import { UserBadges } from '../common/UserBadges.tsx';
 import { CdnImage } from '../common/CdnImage.tsx';
+import { PostImageGallery } from './PostImageGallery.tsx';
 import { DropdownMenu } from '../common/DropdownMenu.tsx';
 import { ConfirmationDialog } from '../common/ConfirmationDialog.tsx';
 import { api } from '../../services/api.ts';
@@ -230,9 +232,7 @@ export const PostCard: React.FC<PostCardProps> = ({
                 >
                   {post.author.name}
                 </span>
-                {post.author.verified && (
-                  <Badge type={post.author.isGold ? 'gold' : 'blue'} size="sm" />
-                )}
+<UserBadges verified={post.author.verified} isGold={post.author.isGold} size="sm" />
                 <span className="text-neutral-500 truncate font-mono text-xs">
                   @{post.author.username}
                 </span>
@@ -271,30 +271,9 @@ export const PostCard: React.FC<PostCardProps> = ({
               {renderFormattedContent(post.content)}
             </div>
 
-            {/* Attached Media Grid */}
+            {/* Post Media Gallery */}
             {post.mediaUrls && post.mediaUrls.filter((u) => u && u.trim()).length > 0 && (
-              <div
-                className={`grid gap-2 mb-3 rounded-2xl overflow-hidden border border-white/10 ${
-                  post.mediaUrls.filter((u) => u && u.trim()).length === 1
-                    ? 'grid-cols-1 max-h-96'
-                    : 'grid-cols-2 max-h-80'
-                }`}
-              >
-                {post.mediaUrls
-                  .filter((u) => u && u.trim())
-                  .map((url, i) => (
-                    <div
-                      key={i}
-                      className="relative overflow-hidden bg-neutral-900/60 max-h-80 flex items-center justify-center"
-                    >
-                      <CdnImage
-                        src={url}
-                        alt="Post media"
-                        className="w-full h-full object-cover hover:scale-101 transition-transform duration-200"
-                      />
-                    </div>
-                  ))}
-              </div>
+              <PostImageGallery images={post.mediaUrls} />
             )}
 
             {/* Poll Component */}
@@ -423,7 +402,7 @@ export const PostCard: React.FC<PostCardProps> = ({
               {/* Views */}
               <div className="min-w-0 flex items-center justify-center gap-1 p-1 sm:gap-1.5 sm:p-2 text-neutral-500">
                 <BarChart2 className="w-4 h-4" />
-                <span className="hidden sm:inline font-mono text-[11px]">{post.viewsCount.toLocaleString()}</span>
+                <span className="hidden sm:inline font-mono text-[11px]">{(post.viewsCount || 0).toLocaleString()}</span>
               </div>
 
               {/* Bookmark & Share */}
