@@ -9,7 +9,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { query, withTransaction } from '../db/pool.ts';
-import { HttpError } from '../errors.ts';
+import { HttpError, redactSensitiveText } from '../errors.ts';
 
 export type MediaPurpose = 'profile-avatar' | 'profile-cover' | 'post-image';
 
@@ -55,7 +55,7 @@ function getBucket(): string {
   return bucket;
 }
 
-function getClient(): S3Client {
+export function getClient(): S3Client {
   if (client) return client;
   const endpoint = process.env.B2_ENDPOINT?.trim();
   const region = process.env.B2_REGION?.trim();
@@ -73,6 +73,8 @@ function getClient(): S3Client {
     region,
     forcePathStyle: true,
     credentials: { accessKeyId, secretAccessKey },
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
   });
   return client;
 }
@@ -106,6 +108,52 @@ export function matchesFileSignature(mimeType: string, bytes: Uint8Array): boole
       header.subarray(8, 12).toString('ascii') === 'WEBP';
   }
   return false;
+}
+
+interface StorageErrorDetails {
+  name: string;
+  status?: number;
+  code?: string;
+  message?: string;
+}
+
+function describeStorageError(error: unknown): StorageErrorDetails {
+  if (!(error instanceof Error)) {
+    return {
+      name: 'UnknownError',
+      message: redactSensitiveText(String(error)),
+    };
+  }
+
+  const candidate = error as Error & {
+    Code?: unknown;
+    code?: unknown;
+    status?: unknown;
+    statusCode?: unknown;
+    $metadata?: { httpStatusCode?: unknown };
+  };
+  const metadataStatus = candidate.$metadata?.httpStatusCode;
+  const status =
+    typeof metadataStatus === 'number'
+      ? metadataStatus
+      : typeof candidate.statusCode === 'number'
+        ? candidate.statusCode
+        : typeof candidate.status === 'number'
+          ? candidate.status
+          : undefined;
+  const code =
+    typeof candidate.Code === 'string'
+      ? candidate.Code
+      : typeof candidate.code === 'string'
+        ? candidate.code
+        : undefined;
+
+  return {
+    name: candidate.name || 'Error',
+    status,
+    code,
+    message: redactSensitiveText(candidate.message || 'No error message was provided.'),
+  };
 }
 
 export function validateStorageConfiguration(): void {
@@ -193,12 +241,11 @@ export async function createUploadUrl(input: UploadRequest): Promise<{
     };
   } catch (error) {
     await query('DELETE FROM zunari_media_assets WHERE id = $1 AND owner_id = $2', [fileId, input.ownerId]);
-    const errorMessage = error instanceof Error ? error.message : String(error);
     console.error('[B2] Presigned URL generation failed:', {
-      bucket: getBucket(),
+      bucket: process.env.B2_BUCKET?.trim(),
       region: process.env.B2_REGION?.trim(),
       endpoint: process.env.B2_ENDPOINT?.trim(),
-      error: errorMessage,
+      ...describeStorageError(error),
     });
     throw new HttpError(503, 'Unable to prepare the media upload.', 'STORAGE_UNAVAILABLE');
   }
@@ -218,7 +265,8 @@ export async function finalizeUpload(ownerId: string, fileId: string): Promise<M
     head = await getClient().send(
       new HeadObjectCommand({ Bucket: getBucket(), Key: asset.object_key }),
     );
-  } catch {
+  } catch (error) {
+    console.error('[B2] HeadObject verification failed:', describeStorageError(error));
     throw new HttpError(409, 'Uploaded object could not be verified.', 'UPLOAD_NOT_VERIFIED');
   }
 
@@ -236,7 +284,8 @@ export async function finalizeUpload(ownerId: string, fileId: string): Promise<M
         }),
       );
       bytes = await sample.Body?.transformToByteArray();
-    } catch {
+    } catch (error) {
+      console.error('[B2] GetObject signature sample failed:', describeStorageError(error));
       throw new HttpError(503, 'Unable to verify the uploaded image.', 'STORAGE_UNAVAILABLE');
     }
     validSignature = Boolean(bytes && matchesFileSignature(asset.mime_type, bytes));

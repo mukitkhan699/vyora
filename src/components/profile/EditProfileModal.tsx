@@ -3,6 +3,7 @@ import { User } from '../../types/index.ts';
 import { Modal } from '../common/Modal.tsx';
 import { Button } from '../common/Button.tsx';
 import { api } from '../../services/api.ts';
+import { IMAGE_ACCEPT_ATTRIBUTE, validateImageFile } from '../../utils/mediaValidation.ts';
 import { Upload, AlertCircle } from 'lucide-react';
 import { Avatar } from '../common/Avatar.tsx';
 
@@ -49,6 +50,12 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     setErrorMsg(null);
+    const validationError = validateImageFile(file);
+    if (validationError) {
+      setErrorMsg(validationError);
+      if (avatarInputRef.current) avatarInputRef.current.value = '';
+      return;
+    }
     try {
       setUploadingAvatar(true);
       const res = await api.uploadFile(file, 'profile-avatar');
@@ -65,6 +72,12 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     setErrorMsg(null);
+    const validationError = validateImageFile(file);
+    if (validationError) {
+      setErrorMsg(validationError);
+      if (bannerInputRef.current) bannerInputRef.current.value = '';
+      return;
+    }
     try {
       setUploadingBanner(true);
       const res = await api.uploadFile(file, 'profile-cover');
@@ -165,7 +178,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
                 type="file"
                 ref={avatarInputRef}
                 onChange={handleAvatarFile}
-                accept="image/*"
+                accept={IMAGE_ACCEPT_ATTRIBUTE}
                 className="hidden"
               />
               <button
@@ -214,7 +227,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
               type="file"
               ref={bannerInputRef}
               onChange={handleBannerFile}
-              accept="image/*"
+              accept={IMAGE_ACCEPT_ATTRIBUTE}
               className="hidden"
             />
             <div className="flex gap-2">

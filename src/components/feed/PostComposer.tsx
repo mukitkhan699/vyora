@@ -16,6 +16,7 @@ import { Avatar } from '../common/Avatar.tsx';
 import { CdnImage } from '../common/CdnImage.tsx';
 import { Button } from '../common/Button.tsx';
 import { api } from '../../services/api.ts';
+import { IMAGE_ACCEPT_ATTRIBUTE, validateImageFile } from '../../utils/mediaValidation.ts';
 import { Post } from '../../types/index.ts';
 
 interface PostComposerProps {
@@ -80,6 +81,13 @@ export const PostComposer: React.FC<PostComposerProps> = ({
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    const validationError = validateImageFile(file);
+    if (validationError) {
+      alert(validationError);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
 
     try {
       setIsUploading(true);
@@ -328,7 +336,7 @@ export const PostComposer: React.FC<PostComposerProps> = ({
               type="file"
               ref={fileInputRef}
               onChange={handleFileUpload}
-              accept="image/jpeg,image/png,image/gif,image/webp,image/svg+xml"
+              accept={IMAGE_ACCEPT_ATTRIBUTE}
               className="hidden"
             />
             <button

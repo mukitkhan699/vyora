@@ -30,6 +30,48 @@ class ApiError extends Error {
   }
 }
 
+const UPLOAD_ERROR_DETAIL_LIMIT = 200;
+
+function sanitizeUploadErrorDetail(value: string): string {
+  return value
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, UPLOAD_ERROR_DETAIL_LIMIT);
+}
+
+function describeUploadFailure(status: number, body: string): string {
+  const trimmed = body.trim();
+  let code = '';
+  let message = '';
+
+  if (trimmed) {
+    try {
+      const payload = JSON.parse(trimmed) as {
+        Code?: unknown;
+        code?: unknown;
+        Message?: unknown;
+        message?: unknown;
+        error?: unknown;
+      };
+      const rawCode = payload.Code ?? payload.code;
+      const rawMessage = payload.Message ?? payload.message ?? payload.error;
+      if (typeof rawCode === 'string') code = sanitizeUploadErrorDetail(rawCode);
+      if (typeof rawMessage === 'string') message = sanitizeUploadErrorDetail(rawMessage);
+    } catch {
+      const codeMatch = /<Code>([^<]{1,200})<\/Code>/i.exec(trimmed);
+      const messageMatch = /<Message>([^<]{1,200})<\/Message>/i.exec(trimmed);
+      if (codeMatch) code = sanitizeUploadErrorDetail(codeMatch[1]);
+      if (messageMatch) message = sanitizeUploadErrorDetail(messageMatch[1]);
+    }
+  }
+
+  const detail = [code, message].filter(Boolean).join(': ');
+  return detail
+    ? `Media upload failed (${status}): ${detail}`
+    : `Media upload failed (${status}).`;
+}
+
 class ApiService {
   private csrfToken: string | null = null;
   private refreshing: Promise<AuthResponse> | null = null;
@@ -263,20 +305,17 @@ class ApiService {
     }
 
     if (!response.ok) {
-      let errorDetail = '';
+      let errorBody = '';
       try {
-        const errorText = await response.text();
-        if (errorText) {
-          errorDetail = `: ${errorText.slice(0, 200)}`;
-        }
+        errorBody = await response.text();
       } catch {
-        // ignore
+        // The status code still provides a safe fallback message.
       }
       await this.request(`/uploads/${res.fileId}/abort`, {
         method: 'POST',
         body: '{}',
       });
-      throw new ApiError(`Media upload failed (${response.status})${errorDetail}`, response.status);
+      throw new ApiError(describeUploadFailure(response.status, errorBody), response.status);
     }
 
     try {
