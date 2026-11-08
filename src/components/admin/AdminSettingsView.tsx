@@ -221,9 +221,10 @@ export const AdminSettingsView: React.FC = () => {
                       </Button>
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                )}
+              </Card>
+            );
+          })}
           </div>
         </Card>
 
@@ -280,7 +281,6 @@ export const AdminSettingsView: React.FC = () => {
             </div>
           </div>
         </Card>
-      </div>
     </div>
   );
 };

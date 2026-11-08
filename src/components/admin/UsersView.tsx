@@ -326,7 +326,7 @@ export const UsersView: React.FC = () => {
             <h2 className="text-lg font-bold text-white mb-4">Change Role for @{selectedUser.username}</h2>
             <Select
               value={selectedUser.admin_role || ''}
-              onChange={(e) => handleRoleChange(selectedUser, e.target.value || null)}
+              onChange={(e) => handleRoleChange(selectedUser, (e.target.value || null) as any)}
               options={[
                 { value: '', label: 'Remove Admin Role' },
                 { value: 'super_admin', label: 'Super Admin' },
@@ -360,7 +360,7 @@ export const UsersView: React.FC = () => {
             />
             <div className="flex justify-end gap-2">
               <Button variant="ghost" onClick={() => { setShowSuspendModal(false); setSuspendReason(''); setSelectedUser(null); }}>Cancel</Button>
-              <Button variant="destructive" onClick={() => handleSuspend(selectedUser)} disabled={!suspendReason.trim()}>Suspend User</Button>
+              <Button variant="danger" onClick={() => handleSuspend(selectedUser)} disabled={!suspendReason.trim()}>Suspend User</Button>
             </div>
           </div>
         </div>

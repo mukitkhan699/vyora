@@ -6,6 +6,7 @@ import { useTheme } from '../../context/ThemeContext.tsx';
 import { PostCard } from '../feed/PostCard.tsx';
 import { Avatar } from '../common/Avatar.tsx';
 import { Badge } from '../common/Badge.tsx';
+import { UserBadges } from '../common/UserBadges.tsx';
 import { Button } from '../common/Button.tsx';
 import { PostSkeleton } from '../common/LoadingSkeleton.tsx';
 import { EmptyState } from '../common/EmptyState.tsx';
@@ -163,7 +164,7 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
                   <div className="min-w-0">
                     <div className="font-bold text-sm flex items-center gap-1 text-white truncate">
                       {user.name}
-                      {user.verified && <Badge type={user.isGold ? 'gold' : 'blue'} size="sm" />}
+                      <UserBadges verified={user.verified} isGold={user.isGold} size="sm" />
                     </div>
                     <div className="text-xs text-neutral-400 font-mono">@{user.username}</div>
                     {user.bio && (

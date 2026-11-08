@@ -97,7 +97,7 @@ const getReasonBadge = (reason: string) => {
     illegal: 'red',
     misinfo: 'yellow',
     fake: 'purple',
-    other: 'gray',
+    other: 'gray' as any,
   };
   // Using available badge types
   const badgeColors: Record<string, 'blue' | 'gold' | 'cyan' | 'gray' | 'violet' | 'amber' | 'emerald' | 'rose'> = {
@@ -108,7 +108,7 @@ const getReasonBadge = (reason: string) => {
     illegal: 'violet',
     misinfo: 'amber',
     fake: 'violet',
-    other: 'gray',
+    other: 'gray' as any,
   };
   return <Badge type={badgeColors[reason] || 'gray'} size="xs">{reason}</Badge>;
 };
@@ -201,7 +201,7 @@ export const ReportsView: React.FC = () => {
       illegal: 'violet',
       misinfo: 'amber',
       fake: 'violet',
-      other: 'gray',
+      other: 'gray' as any,
     };
     return <Badge type={badgeColors[reason] || 'gray'} size="xs">{reason}</Badge>;
   };
@@ -324,7 +324,8 @@ export const ReportsView: React.FC = () => {
                         <span className="font-bold text-white text-xs">{report.reporter_username?.charAt(0).toUpperCase() || 'U'}</span>
                       </div>
                       <span className="font-medium text-white truncate">@{report.reporter_username}</span>
-                    </td>
+                    </div>
+                  </td>
                     <td className="px-4 py-3">
                       {report.type === 'user' ? (
                         <span className="font-medium text-white truncate max-w-xs">@{report.reported_username}</span>
@@ -373,26 +374,3 @@ export const ReportsView: React.FC = () => {
     </div>
   );
 };
-
-function getReasonBadge(reason: string) {
-  const badgeColors: Record<string, 'blue' | 'gold' | 'cyan' | 'gray' | 'violet' | 'amber' | 'emerald' | 'rose'> = {
-    spam: 'amber',
-    harassment: 'rose',
-    hate: 'rose',
-    violence: 'rose',
-    illegal: 'violet',
-    misinfo: 'amber',
-    fake: 'violet',
-    other: 'gray',
-  };
-  return <Badge type={badgeColors[reason] || 'gray'} size="xs">{reason}</Badge>;
-}
-
-function getStatusBadge(status: ReportStatus) {
-  switch (status) {
-    case 'pending': return <Badge type="amber" size="xs">Pending</Badge>;
-    case 'reviewed': return <Badge type="blue" size="xs">Reviewed</Badge>;
-    case 'dismissed': return <Badge type="gray" size="xs">Dismissed</Badge>;
-    case 'action_taken': return <Badge type="emerald" size="xs">Action Taken</Badge>;
-  }
-}

@@ -21,7 +21,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "test": "node --import tsx --test server/storage/b2.test.ts server/profile-validation.test.ts",
+    "test": "node --import tsx --test server/storage/b2.test.ts server/profile-validation.test.ts server/post-publishing.test.ts",
     "db:migrate": "tsx server/db/run-migrations.ts",
     "db:import-sqlite": "tsx server/db/import-sqlite.ts",
     "db:seed-demo": "tsx server/db/seed-demo.ts"

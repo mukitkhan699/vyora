@@ -244,16 +244,3 @@ export const VerificationView: React.FC = () => {
     </div>
   );
 };
-
-function getRoleBadge(role: AdminRole | null) {
-  if (!role) return <Badge type="gray" size="xs">None</Badge>;
-  const badges: Record<string, { label: string; color: 'blue' | 'gold' | 'violet' | 'amber' | 'cyan' }> = {
-    super_admin: { label: 'Super Admin', color: 'gold' },
-    admin: { label: 'Admin', color: 'violet' },
-    moderator: { label: 'Moderator', color: 'blue' },
-    verification_manager: { label: 'Verification', color: 'amber' },
-    analyst: { label: 'Analyst', color: 'cyan' },
-  };
-  const badge = badges[role];
-  return badge ? <Badge type={badge.color} size="xs">{badge.label}</Badge> : null;
-}

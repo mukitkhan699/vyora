@@ -6,6 +6,7 @@ import { useAuth } from '../../context/AuthContext.tsx';
 import { useTheme } from '../../context/ThemeContext.tsx';
 import { Avatar } from '../common/Avatar.tsx';
 import { Badge } from '../common/Badge.tsx';
+import { UserBadges } from '../common/UserBadges.tsx';
 import { PostSkeleton } from '../common/LoadingSkeleton.tsx';
 import { EmptyState } from '../common/EmptyState.tsx';
 
@@ -161,13 +162,7 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
                     <span className="font-bold hover:underline text-white">
                       {notif.sender.name}
                     </span>
-                    {notif.sender.verified && (
-                      <Badge
-                        type={notif.sender.isGold ? 'gold' : 'blue'}
-                        size="sm"
-                        className="ml-1"
-                      />
-                    )}
+<UserBadges verified={notif.sender.verified} isGold={notif.sender.isGold} size="sm" className="ml-1" />
                     <span className="text-neutral-400 ml-1.5">{label}</span>
                   </div>
 

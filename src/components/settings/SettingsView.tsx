@@ -51,9 +51,9 @@ export const SettingsView: React.FC = () => {
   ];
 
   const themesList: { id: ThemeMode; label: string; sub: string; bg: string; text: string; border: string }[] = [
-    { id: 'dark', label: 'Dark', sub: 'Obsidian (#090B10)', bg: 'bg-[#090B10]', text: 'text-white', border: 'border-white/10' },
-    { id: 'dim', label: 'Dim', sub: 'Dark Navy (#0F172A)', bg: 'bg-[#0F172A]', text: 'text-[#F8FAFC]', border: 'border-neutral-700' },
-    { id: 'light', label: 'Light', sub: 'Slate White (#F8FAFC)', bg: 'bg-[#F8FAFC]', text: 'text-slate-900', border: 'border-slate-200' },
+    { id: 'dark', label: 'Dark', sub: 'Obsidian', bg: 'bg-[#090B10]', text: 'text-white', border: 'border-white/10' },
+    { id: 'dim', label: 'Dim', sub: 'Dark Navy', bg: 'bg-[#0F172A]', text: 'text-[#F8FAFC]', border: 'border-neutral-700' },
+    { id: 'light', label: 'Light', sub: 'Slate White', bg: 'bg-[#F8FAFC]', text: 'text-slate-900', border: 'border-slate-200' },
   ];
 
   const headerBg = theme === 'dark' ? 'bg-[#090B10]/85 border-white/[0.08]' : theme === 'dim' ? 'bg-[#0F172A]/85 border-neutral-700' : 'bg-white/85 border-slate-200';
@@ -160,12 +160,7 @@ export const SettingsView: React.FC = () => {
                   <span className="text-neutral-400">Joined Date:</span>
                   <span className="text-neutral-200">{currentUser?.joinedDate}</span>
                 </div>
-                <div className="flex justify-between py-2 border-b border-white/[0.06]">
-                  <span className="text-neutral-400">Session Security:</span>
-                  <span className="text-emerald-400 flex items-center gap-1 font-mono">
-                    <ShieldCheck className="w-3.5 h-3.5" /> Account protection
-                  </span>
-                </div>
+
               </div>
             </div>
 

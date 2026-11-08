@@ -17,6 +17,7 @@ import { useAuth } from '../../context/AuthContext.tsx';
 import { useTheme } from '../../context/ThemeContext.tsx';
 import { Avatar } from '../common/Avatar.tsx';
 import { Badge } from '../common/Badge.tsx';
+import { UserBadges } from '../common/UserBadges.tsx';
 import { Button } from '../common/Button.tsx';
 import { Tooltip } from '../common/Tooltip.tsx';
 import { VyoraIcon } from '../common/VyoraIcon.tsx';
@@ -66,7 +67,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         : 'bg-white border-slate-200';
 
   return (
-    <aside className="w-18 xl:w-68 h-screen sticky top-0 flex flex-col justify-between py-4 px-2 xl:px-4 border-r border-white/[0.08] z-20 select-none shrink-0 transition-all duration-200">
+    <aside className="hidden sm:flex sm:w-18 xl:w-68 h-[100dvh] sticky top-0 flex-col justify-between py-4 px-2 xl:px-4 border-r border-white/[0.08] z-20 select-none shrink-0 transition-all duration-200 pb-[calc(1rem+env(safe-area-inset-bottom,0px))]">
       <div className="flex flex-col gap-2">
         {/* Brand Header */}
         <div
@@ -153,10 +154,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="text-[11px] text-neutral-400 truncate font-mono">
                 @{currentUser.username}
               </div>
-              <div className="mt-1.5 flex items-center gap-1 text-[10px] font-mono text-emerald-400">
-                <ShieldCheck className="w-3 h-3" />
-                Session active & authenticated
-              </div>
+
             </div>
 
             <div className="pt-1.5 flex flex-col gap-1">
@@ -216,9 +214,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="hidden xl:flex flex-col text-left truncate leading-tight">
                 <span className="font-bold text-sm flex items-center gap-1 truncate text-white">
                   {currentUser.name}
-                  {currentUser.verified && (
-                    <Badge type={currentUser.isGold ? 'gold' : 'blue'} size="sm" />
-                  )}
+                  <UserBadges verified={currentUser.verified} isGold={currentUser.isGold} size="sm" />
                 </span>
                 <span className="text-xs text-neutral-400 truncate font-mono">
                   @{currentUser.username}
