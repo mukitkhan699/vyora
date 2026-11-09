@@ -33,14 +33,6 @@ export function validateServerConfiguration(): void {
     throw new Error('DATABASE_URL must use the PostgreSQL protocol.');
   }
 
-  const directDatabaseUrl = process.env.DATABASE_URL_DIRECT?.trim();
-  if (!directDatabaseUrl) throw new Error('DATABASE_URL_DIRECT is required for migrations.');
-  try {
-    new URL(directDatabaseUrl);
-  } catch {
-    throw new Error('DATABASE_URL_DIRECT must be a valid PostgreSQL connection URL.');
-  }
-
   const trustProxyHopsRaw = process.env.TRUST_PROXY_HOPS?.trim();
   if (trustProxyHopsRaw !== undefined) {
     const parsed = Number.parseInt(trustProxyHopsRaw, 10);
@@ -72,6 +64,23 @@ export function validateServerConfiguration(): void {
   );
   if (missingB2Variables.length) {
     throw new Error(`Missing required Backblaze configuration: ${missingB2Variables.join(', ')}.`);
+  }
+}
+
+export function validateMigrationConfiguration(): void {
+  const directDatabaseUrl = process.env.DATABASE_URL_DIRECT?.trim();
+  if (!directDatabaseUrl) {
+    throw new Error('DATABASE_URL_DIRECT is required for migrations.');
+  }
+
+  let parsedDirectDatabaseUrl: URL;
+  try {
+    parsedDirectDatabaseUrl = new URL(directDatabaseUrl);
+  } catch {
+    throw new Error('DATABASE_URL_DIRECT must be a valid PostgreSQL connection URL.');
+  }
+  if (!['postgres:', 'postgresql:'].includes(parsedDirectDatabaseUrl.protocol)) {
+    throw new Error('DATABASE_URL_DIRECT must use the PostgreSQL protocol.');
   }
 }
 
