@@ -1,4 +1,4 @@
-import { Post, User, Notification, Message, TrendItem, AppConfig } from '../types/index.ts';
+import { Post, User, Notification, Message, Conversation, TrendItem, AppConfig } from '../types/index.ts';
 import { getBackendApiUrl } from '../config/backendUrl.ts';
 
 export interface AuthUser extends User {
@@ -264,7 +264,7 @@ class ApiService {
   // Media & File Storage
   public async uploadFile(
     file: File,
-    purpose: 'profile-avatar' | 'profile-cover' | 'post-image' = 'post-image',
+    purpose: 'profile-avatar' | 'profile-cover' | 'post-image' | 'message-attachment' = 'post-image',
   ): Promise<{
     success: boolean;
     fileId: string;
@@ -452,7 +452,124 @@ class ApiService {
     });
   }
 
-  // Messages
+  // Messages & Conversations (v2)
+  public getConversations(): Promise<{ conversations: Conversation[] }> {
+    return this.request<{ conversations: Conversation[] }>('/conversations');
+  }
+
+  public createConversation(data: {
+    type: 'direct' | 'group';
+    recipientId?: string;
+    title?: string;
+    participantIds?: string[];
+    avatarUrl?: string;
+  }): Promise<{ conversation: Conversation }> {
+    return this.request<{ conversation: Conversation }>('/conversations', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  public getConversation(id: string): Promise<{ conversation: Conversation }> {
+    return this.request<{ conversation: Conversation }>(`/conversations/${id}`);
+  }
+
+  public updateConversation(
+    id: string,
+    data: { title?: string; avatarUrl?: string },
+  ): Promise<{ conversation: Conversation }> {
+    return this.request<{ conversation: Conversation }>(`/conversations/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
+  public addParticipants(id: string, userIds: string[]): Promise<{ participants: any[] }> {
+    return this.request<{ participants: any[] }>(`/conversations/${id}/participants`, {
+      method: 'POST',
+      body: JSON.stringify({ userIds }),
+    });
+  }
+
+  public removeParticipant(id: string, userId: string): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/conversations/${id}/participants/${userId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  public getConversationMessages(
+    id: string,
+    before?: string,
+    limit?: number,
+  ): Promise<{ messages: Message[] }> {
+    const params = new URLSearchParams();
+    if (before) params.append('before', before);
+    if (limit) params.append('limit', String(limit));
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    return this.request<{ messages: Message[] }>(`/conversations/${id}/messages${qs}`);
+  }
+
+  public sendConversationMessage(
+    id: string,
+    data: {
+      text?: string;
+      clientId?: string;
+      replyToMessageId?: string;
+      attachmentAssetIds?: string[];
+    },
+  ): Promise<{ message: Message }> {
+    return this.request<{ message: Message }>(`/conversations/${id}/messages`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  public editConversationMessage(
+    conversationId: string,
+    messageId: string,
+    text: string,
+  ): Promise<{ message: Message }> {
+    return this.request<{ message: Message }>(`/conversations/${conversationId}/messages/${messageId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ text }),
+    });
+  }
+
+  public deleteConversationMessage(
+    conversationId: string,
+    messageId: string,
+  ): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/conversations/${conversationId}/messages/${messageId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  public toggleMessageReaction(
+    conversationId: string,
+    messageId: string,
+    emoji: string,
+  ): Promise<{ added: boolean; emoji: string }> {
+    return this.request<{ added: boolean; emoji: string }>(
+      `/conversations/${conversationId}/messages/${messageId}/reactions`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ emoji }),
+      },
+    );
+  }
+
+  public sendReceipts(
+    conversationId: string,
+    type: 'delivered' | 'read',
+    messageIds: string[],
+  ): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/conversations/${conversationId}/receipts`, {
+      method: 'POST',
+      body: JSON.stringify({ type, messageIds }),
+    });
+  }
+
+  // Legacy Direct Messages fallback
   public getMessages(recipientId: string): Promise<Message[]> {
     return this.request<Message[]>(`/messages/${recipientId}`);
   }

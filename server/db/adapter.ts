@@ -378,11 +378,12 @@ export class DatabaseAdapter {
       for (const message of INITIAL_MESSAGES) {
         const [participantA, participantB] = [message.senderId, message.recipientId].sort();
         const conversationId = `conversation_${participantA}_${participantB}`;
+        const createdAtParsed = typeof message.createdAt === 'number' ? message.createdAt : Date.parse(String(message.createdAt));
         await connection.query(
           `INSERT INTO zunari_conversations (id, participant_a_id, participant_b_id, created_at)
            VALUES ($1, $2, $3, $4)
            ON CONFLICT (participant_a_id, participant_b_id) DO NOTHING`,
-          [conversationId, participantA, participantB, Date.parse(message.createdAt)],
+          [conversationId, participantA, participantB, createdAtParsed],
         );
         await connection.query(
           `INSERT INTO zunari_messages (id, conversation_id, sender_id, recipient_id, text, created_at)
@@ -393,7 +394,7 @@ export class DatabaseAdapter {
             message.senderId,
             message.recipientId,
             message.text,
-            Date.parse(message.createdAt),
+            createdAtParsed,
           ],
         );
       }
@@ -494,7 +495,7 @@ export class DatabaseAdapter {
           await makeAssetPublicIfOwned(
             connection,
             userId,
-            normalizedAvatarUrl,
+            String(normalizedAvatarUrl),
             'profile-avatar',
           );
         }
@@ -502,7 +503,7 @@ export class DatabaseAdapter {
           await makeAssetPublicIfOwned(
             connection,
             userId,
-            normalizedBannerUrl,
+            String(normalizedBannerUrl),
             'profile-cover',
           );
         }

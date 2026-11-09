@@ -60,19 +60,78 @@ export interface Notification {
   read: boolean;
 }
 
+export interface MessageAttachment {
+  id: string;
+  messageId: string;
+  mediaAssetId: string;
+  filename: string;
+  mimeType: string;
+  byteSize: number;
+  status: 'active' | 'expired' | 'cleaned';
+  expiresAt: number;
+  createdAt: number;
+  url: string;
+}
+
+export interface MessageReaction {
+  emoji: string;
+  userId: string;
+  username?: string;
+  createdAt: number;
+}
+
+export interface MessageReceipt {
+  userId: string;
+  deliveredAt: number | null;
+  readAt: number | null;
+}
+
 export interface Message {
   id: string;
-  senderId: string;
-  recipientId: string;
+  senderId?: string | null;
+  recipientId?: string;
+  conversationId?: string;
   text: string;
-  createdAt: string;
-  isSender: boolean;
+  clientId?: string | null;
+  replyToMessageId?: string | null;
+  replyToMessage?: {
+    id: string;
+    senderId: string | null;
+    senderUsername?: string;
+    text: string;
+  } | null;
+  isEdited?: boolean;
+  editedAt?: number | null;
+  isDeleted?: boolean;
+  deletedAt?: number | null;
+  createdAt: string | number;
+  isSender?: boolean;
+  attachments?: MessageAttachment[];
+  reactions?: MessageReaction[];
+  receipts?: MessageReceipt[];
+}
+
+export interface ConversationParticipant {
+  userId: string;
+  role: 'owner' | 'admin' | 'member';
+  joinedAt: number;
+  leftAt: number | null;
+  lastReadMessageId: string | null;
+  user?: User;
 }
 
 export interface Conversation {
   id: string;
-  participant: User;
-  lastMessage: Message;
+  type?: 'direct' | 'group';
+  title?: string | null;
+  avatarUrl?: string | null;
+  createdBy?: string | null;
+  lastMessageAt?: number;
+  createdAt?: string | number;
+  updatedAt?: string | number;
+  participants?: ConversationParticipant[];
+  participant?: User; // legacy fallback
+  lastMessage?: Message | null;
   unreadCount: number;
 }
 
