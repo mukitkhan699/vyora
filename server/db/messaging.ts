@@ -730,13 +730,84 @@ export class MessagingRepository {
   }
 
   public async getMessageById(messageId: string, currentUserId: string): Promise<MessageRecord | null> {
-    const res = await query<{ conversation_id: string }>(
-      'SELECT conversation_id FROM zunari_messages_v2 WHERE id = $1',
-      [messageId],
+    const res = await query<{
+      id: string;
+      conversation_id: string;
+      sender_id: string | null;
+      client_id: string | null;
+      text: string;
+      reply_to_message_id: string | null;
+      is_edited: boolean;
+      edited_at: string | number | null;
+      is_deleted: boolean;
+      deleted_at: string | number | null;
+      created_at: string | number;
+      sender_username: string | null;
+      sender_name: string | null;
+      sender_avatar_url: string | null;
+      sender_verified: boolean | null;
+      sender_is_gold: boolean | null;
+      reply_sender_id: string | null;
+      reply_sender_username: string | null;
+      reply_text: string | null;
+    }>(
+      `SELECT m.*,
+              u.username AS sender_username, u.name AS sender_name, u.avatar_url AS sender_avatar_url,
+              u.verified AS sender_verified, u.is_gold AS sender_is_gold,
+              rm.sender_id AS reply_sender_id, ru.username AS reply_sender_username, rm.text AS reply_text
+       FROM zunari_messages_v2 m
+       JOIN zunari_conversation_participants p
+         ON p.conversation_id = m.conversation_id AND p.user_id = $2
+       LEFT JOIN zunari_users u ON u.public_id = m.sender_id
+       LEFT JOIN zunari_messages_v2 rm ON rm.id = m.reply_to_message_id
+       LEFT JOIN zunari_users ru ON ru.public_id = rm.sender_id
+       WHERE m.id = $1 AND (p.left_at IS NULL OR m.created_at <= p.left_at)`,
+      [messageId, currentUserId],
     );
-    if (!res.rows[0]) return null;
-    const msgs = await this.getMessages(res.rows[0].conversation_id, currentUserId, { limit: 1 });
-    return msgs.find((m) => m.id === messageId) || null;
+    const r = res.rows[0];
+    if (!r) return null;
+
+    const attachmentsMap = await this.getAttachmentsForMessages([r.id]);
+    const reactionsMap = await this.getReactionsForMessages([r.id]);
+    const receiptsMap = await this.getReceiptsForMessages([r.id]);
+
+    return {
+      id: r.id,
+      conversationId: r.conversation_id,
+      senderId: r.sender_id,
+      sender: r.sender_id && r.sender_username
+        ? {
+            id: r.sender_id,
+            username: r.sender_username,
+            name: r.sender_name || '',
+            avatarUrl: r.sender_avatar_url || '',
+            verified: Boolean(r.sender_verified),
+            isGold: Boolean(r.sender_is_gold),
+            followersCount: 0,
+            followingCount: 0,
+            joinedDate: '',
+          }
+        : undefined,
+      clientId: r.client_id,
+      text: r.is_deleted ? 'This message was deleted.' : r.text,
+      replyToMessageId: r.reply_to_message_id,
+      replyToMessage: r.reply_to_message_id
+        ? {
+            id: r.reply_to_message_id,
+            senderId: r.reply_sender_id,
+            senderUsername: r.reply_sender_username || undefined,
+            text: r.reply_text || '',
+          }
+        : null,
+      isEdited: Boolean(r.is_edited),
+      editedAt: r.edited_at ? Number(r.edited_at) : null,
+      isDeleted: Boolean(r.is_deleted),
+      deletedAt: r.deleted_at ? Number(r.deleted_at) : null,
+      createdAt: Number(r.created_at),
+      attachments: attachmentsMap.get(r.id) || [],
+      reactions: reactionsMap.get(r.id) || [],
+      receipts: receiptsMap.get(r.id) || [],
+    };
   }
 
   public async editMessage(
