@@ -27,27 +27,34 @@ All variables below must be supplied securely server-side. Do not expose secrets
 
 ---
 
-## 2. Render Startup Configuration & `DATABASE_URL_DIRECT` Analysis
+## 2. Render Startup Configuration & `DATABASE_URL_DIRECT` Architecture
 
-### The Issue
-On Render web services, startup failures occur if the application configuration validation crashes the main server process when `DATABASE_URL_DIRECT` is absent:
-1. Neon provides two connection URLs: a pooled URL (`-pooler`) for regular web process queries (high concurrency, uses PgBouncer), and a direct unpooled URL for migrations.
-2. In production deployments, PgBouncer in transaction pooling mode prevents PostgreSQL session-level advisory locks (`pg_advisory_lock`), which our migration runner uses.
-3. Therefore, migrations must use `DATABASE_URL_DIRECT`, while runtime API queries use `DATABASE_URL`.
+### Architectural Separation
+Normal application server startup (`npm start` or `npm run dev`) is completely decoupled from schema migration execution (`npm run db:migrate`):
+1. **Application Server Runtime (`npm start`)**:
+   - Operates entirely on the pooled `DATABASE_URL` via PgBouncer.
+   - Does **not** require or validate `DATABASE_URL_DIRECT`.
+   - On startup, executes `verifyDatabase()` to verify that all required tables exist (including `zunari_conversations_v2`, `zunari_messages_v2`, `zunari_call_sessions`).
+   - If the database has not been migrated, it fails fast with an explicit error: `Zunari database schema is not installed or pending migrations. Run the approved migration command (npm run db:migrate).` This guarantees the application never runs against an unmigrated or broken schema.
+2. **Migration Runner (`npm run db:migrate`)**:
+   - Strictly enforces `DATABASE_URL_DIRECT`.
+   - Connects directly to PostgreSQL (bypassing PgBouncer connection pooling) to acquire session-level advisory locks (`pg_advisory_lock`), execute DDL statements within transactions, and record migration checksums in `zunari_schema_migrations`.
+   - If `DATABASE_URL_DIRECT` is absent, the migration command fails immediately with: `DATABASE_URL_DIRECT is required for migrations. Provide an unpooled PostgreSQL direct connection URL.`
 
-### Recommended Render Configuration
+### Step-by-Step Render Deployment Procedure
+To safely execute migrations and start the application on Render:
 1. In the **Render Dashboard -> Environment Settings**:
-   - Set `DATABASE_URL` to your Neon pooled connection string.
-   - Set `DATABASE_URL_DIRECT` to your Neon direct connection string (unpooled).
+   - Set `DATABASE_URL` to your Neon pooled connection string (`...-pooler...`).
+   - Set `DATABASE_URL_DIRECT` to your Neon direct unpooled connection string.
 2. In the **Render Build Command**:
    ```bash
-   npm install --legacy-peer-deps && npm run build
+   npm ci --include=dev && npm run build
    ```
-3. In the **Render Pre-Deploy Command** (recommended) or Release Phase:
+3. In the **Render Pre-Deploy Command** (under Settings -> Build & Deploy):
    ```bash
    npm run db:migrate
    ```
-   *Note*: Running migrations separately in the pre-deploy step ensures that migrations are applied before the web servers spin up, preventing race conditions across scaled web instances.
+   *Why this is safe*: Render runs the Pre-Deploy command in a standalone ephemeral container before any new web server instances are started. If `npm run db:migrate` fails, the deployment is aborted immediately and existing web traffic is never routed to a broken deployment. Once migrations succeed, Render starts the web server container with `npm start`.
 
 ---
 

@@ -19,7 +19,7 @@ function readEnvFile(): void {
 
 readEnvFile();
 
-export function validateServerConfiguration(): void {
+export function validateDatabaseUrl(): void {
   const databaseUrl = process.env.DATABASE_URL?.trim();
   if (!databaseUrl) throw new Error('DATABASE_URL is required.');
 
@@ -32,14 +32,27 @@ export function validateServerConfiguration(): void {
   if (!['postgres:', 'postgresql:'].includes(parsedDatabaseUrl.protocol)) {
     throw new Error('DATABASE_URL must use the PostgreSQL protocol.');
   }
+}
 
+export function validateMigrationConfiguration(): void {
   const directDatabaseUrl = process.env.DATABASE_URL_DIRECT?.trim();
-  if (!directDatabaseUrl) throw new Error('DATABASE_URL_DIRECT is required for migrations.');
+  if (!directDatabaseUrl) {
+    throw new Error('DATABASE_URL_DIRECT is required for migrations. Provide an unpooled PostgreSQL direct connection URL.');
+  }
+
+  let parsedUrl: URL;
   try {
-    new URL(directDatabaseUrl);
+    parsedUrl = new URL(directDatabaseUrl);
   } catch {
     throw new Error('DATABASE_URL_DIRECT must be a valid PostgreSQL connection URL.');
   }
+  if (!['postgres:', 'postgresql:'].includes(parsedUrl.protocol)) {
+    throw new Error('DATABASE_URL_DIRECT must use the PostgreSQL protocol.');
+  }
+}
+
+export function validateServerConfiguration(): void {
+  validateDatabaseUrl();
 
   const trustProxyHopsRaw = process.env.TRUST_PROXY_HOPS?.trim();
   if (trustProxyHopsRaw !== undefined) {

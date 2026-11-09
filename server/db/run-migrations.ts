@@ -1,4 +1,4 @@
-import '../config.ts';
+import { validateMigrationConfiguration } from '../config.ts';
 import { closeDatabase } from './pool.ts';
 import { applyMigrations, describeMigrationFailure } from './migrate.ts';
 
@@ -6,6 +6,7 @@ let migrationError: unknown;
 let closeError: unknown;
 
 try {
+  validateMigrationConfiguration();
   await applyMigrations();
 } catch (error) {
   migrationError = error;

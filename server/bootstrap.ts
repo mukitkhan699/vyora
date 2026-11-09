@@ -13,10 +13,8 @@ export async function initializeBackend(): Promise<() => void> {
   await initAuth();
   await bootstrapSuperAdmin();
   
-  // Verify database schema and migrations on startup
+  // Verify database schema is installed and ready on startup using pooled connection
   await verifyDatabase();
-  const migrationPool = getMigrationPool();
-  await applyMigrations({ pool: migrationPool, logger: (msg) => console.info(`[migration] ${msg}`) });
   
   await cleanupAbandonedUploads();
   await cleanupExpiredRateLimits();
