@@ -33,6 +33,33 @@ export function validateServerConfiguration(): void {
     throw new Error('DATABASE_URL must use the PostgreSQL protocol.');
   }
 
+  const directDatabaseUrl = process.env.DATABASE_URL_DIRECT?.trim();
+  if (!directDatabaseUrl) throw new Error('DATABASE_URL_DIRECT is required for migrations.');
+  try {
+    new URL(directDatabaseUrl);
+  } catch {
+    throw new Error('DATABASE_URL_DIRECT must be a valid PostgreSQL connection URL.');
+  }
+
+  const trustProxyHopsRaw = process.env.TRUST_PROXY_HOPS?.trim();
+  if (trustProxyHopsRaw !== undefined) {
+    const parsed = Number.parseInt(trustProxyHopsRaw, 10);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 5) {
+      throw new Error('TRUST_PROXY_HOPS must be an integer between 0 and 5.');
+    }
+    if (parsed > 0) {
+      console.warn('[config] TRUST_PROXY_HOPS > 0 is set. Ensure all reverse proxies are trusted and overwrite X-Forwarded-For correctly. Misconfiguration enables IP spoofing.');
+    }
+  }
+
+  const rateLimitHmacSecret = process.env.RATE_LIMIT_HMAC_SECRET?.trim();
+  if (!rateLimitHmacSecret) {
+    throw new Error('RATE_LIMIT_HMAC_SECRET is required for secure IP hashing in rate limits.');
+  }
+  if (rateLimitHmacSecret.length < 32) {
+    throw new Error('RATE_LIMIT_HMAC_SECRET must be at least 32 characters.');
+  }
+
   const requiredB2Variables = [
     'B2_ENDPOINT',
     'B2_REGION',
@@ -53,6 +80,12 @@ function bool(value: string | undefined, fallback: boolean): boolean {
   return value !== 'false' && value !== '0';
 }
 
+function nonNegativeInt(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 export interface ServerConfig {
   port: number;
   appName: string;
@@ -68,6 +101,8 @@ export interface ServerConfig {
   allowMediaUploads: boolean;
   enableTelemetryPulse: boolean;
   adminOrigin: string | undefined;
+  trustProxyHops: number;
+  rateLimitHmacSecret: string;
   fileConfig: {
     uploadLimitBytes: number;
     allowedMimeTypes: string[];
@@ -95,6 +130,8 @@ export const config: ServerConfig = {
   allowMediaUploads: bool(process.env.ALLOW_MEDIA_UPLOADS, true),
   enableTelemetryPulse: true,
   adminOrigin: process.env.ADMIN_ORIGIN?.trim() || undefined,
+  trustProxyHops: nonNegativeInt(process.env.TRUST_PROXY_HOPS, 0),
+  rateLimitHmacSecret: process.env.RATE_LIMIT_HMAC_SECRET || '',
   fileConfig: {
     uploadLimitBytes: 10 * 1024 * 1024,
     allowedMimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'],

@@ -25,6 +25,7 @@ function createPool(connectionString: string): Pool {
     max: 10,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
+    statement_timeout: 30_000,
     ssl: { rejectUnauthorized: true },
   });
   newPool.on('error', () => {
@@ -56,16 +57,23 @@ export function query<Row extends QueryResultRow = QueryResultRow>(
 
 export async function withTransaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await getPool().connect();
+  let destroyClient = false;
   try {
     await client.query('BEGIN');
     const result = await work(client);
     await client.query('COMMIT');
     return result;
   } catch (error) {
-    await client.query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackError) {
+      // If rollback fails, the connection state is unknown; destroy it
+      destroyClient = true;
+      console.error('Transaction rollback failed; connection will be destroyed:', rollbackError);
+    }
     throw error;
   } finally {
-    client.release();
+    client.release(destroyClient);
   }
 }
 
@@ -78,7 +86,8 @@ export async function verifyDatabase(): Promise<void> {
        AND to_regclass('public.zunari_posts') IS NOT NULL
        AND to_regclass('public.zunari_notifications') IS NOT NULL
        AND to_regclass('public.zunari_messages') IS NOT NULL
-       AND to_regclass('public.zunari_media_assets') IS NOT NULL AS ready`,
+       AND to_regclass('public.zunari_media_assets') IS NOT NULL
+       AND to_regclass('public.zunari_rate_limits') IS NOT NULL AS ready`,
   );
   if (!schema.rows[0]?.ready) {
     throw new Error('Zunari database schema is not installed. Run the approved migration command.');

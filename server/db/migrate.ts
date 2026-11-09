@@ -9,6 +9,17 @@ import { getMigrationPool } from './pool.ts';
 const migrationsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'migrations');
 const lockId = 7_318_202_504;
 
+export interface MigrationPool {
+  connect(): Promise<PoolClient>;
+}
+
+export interface MigrationRunnerOptions {
+  migrationsDir?: string;
+  pool?: MigrationPool;
+  lockId?: number;
+  logger?: (message: string) => void;
+}
+
 class MigrationFailure extends Error {
   readonly cleanupErrors: unknown[] = [];
 
@@ -58,7 +69,7 @@ function formatDatabaseError(error: unknown, depth = 0): string {
     : redactSensitiveText(error instanceof Error ? error.message : String(error));
 }
 
-function splitSqlStatements(sql: string): string[] {
+export function splitSqlStatements(sql: string): string[] {
   const statements: string[] = [];
   let start = 0;
   let quote: "'" | '"' | null = null;
@@ -197,7 +208,11 @@ async function ensureMigrationTable(client: PoolClient): Promise<void> {
   `);
 }
 
-export async function applyMigrations(): Promise<void> {
+export async function applyMigrations(options: MigrationRunnerOptions = {}): Promise<void> {
+  const activeMigrationsDir = options.migrationsDir ?? migrationsDir;
+  const activePool = options.pool ?? getMigrationPool();
+  const activeLockId = options.lockId ?? lockId;
+  const logger = options.logger ?? ((message: string) => console.info(message));
   let client: PoolClient | undefined;
   let lockAcquired = false;
   let transactionOpen = false;
@@ -209,24 +224,28 @@ export async function applyMigrations(): Promise<void> {
   let destroyClient = false;
 
   try {
-    client = await getMigrationPool().connect();
+    client = await activePool.connect();
     stage = 'acquiring the migration advisory lock';
-    await client.query('SELECT pg_advisory_lock($1)', [lockId]);
+    await client.query('SELECT pg_advisory_lock($1)', [activeLockId]);
     lockAcquired = true;
 
     stage = 'creating or checking the migration ledger';
     await ensureMigrationTable(client);
 
     stage = 'listing migration files';
-    const files = (await readdir(migrationsDir))
+    const files = (await readdir(activeMigrationsDir))
       .filter((name) => /^\d{3}_[a-z0-9_]+\.sql$/.test(name))
       .sort();
+
+    if (files.length === 0) {
+      throw new Error(`No migration files were found in ${activeMigrationsDir}.`);
+    }
 
     for (const migrationFilename of files) {
       filename = migrationFilename;
       const version = migrationFilename.slice(0, -4);
       stage = 'reading the migration file';
-      const sql = await readFile(path.join(migrationsDir, migrationFilename), 'utf8');
+      const sql = await readFile(path.join(activeMigrationsDir, migrationFilename), 'utf8');
       const checksum = createHash('sha256').update(sql).digest('hex');
       stage = 'checking the migration ledger';
       const applied = await client.query<{ checksum: string }>(
@@ -261,7 +280,7 @@ export async function applyMigrations(): Promise<void> {
         stage = 'committing the migration transaction';
         await client.query('COMMIT');
         transactionOpen = false;
-        console.info(`Applied database migration ${version}.`);
+        logger(`Applied database migration ${version}.`);
       } catch (error) {
         let rollbackError: unknown;
         if (transactionOpen) {
@@ -294,7 +313,7 @@ export async function applyMigrations(): Promise<void> {
       try {
         if (lockAcquired && !destroyClient) {
           stage = 'releasing the migration advisory lock';
-          await client.query('SELECT pg_advisory_unlock($1)', [lockId]);
+          await client.query('SELECT pg_advisory_unlock($1)', [activeLockId]);
         }
       } catch (error) {
         destroyClient = true;

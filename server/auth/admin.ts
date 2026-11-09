@@ -121,7 +121,7 @@ export function setAdminSessionCookie(req: IncomingMessage, res: ServerResponse,
     `${cookieName}=${encodeURIComponent(session.token)}`,
     'Path=/',
     'HttpOnly',
-    'SameSite=Lax',
+    'SameSite=Strict',
     `Max-Age=${maxAge}`,
   ];
   if (secure) directives.push('Secure');
@@ -133,7 +133,7 @@ export function clearAdminSessionCookie(req: IncomingMessage, res: ServerRespons
   const cookieName = secure ? ADMIN_SECURE_COOKIE_NAME : ADMIN_COOKIE_NAME;
   res.setHeader(
     'Set-Cookie',
-    `${cookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? '; Secure' : ''}`,
+    `${cookieName}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0${secure ? '; Secure' : ''}`,
   );
 }
 
@@ -282,7 +282,7 @@ export function requirePermission(permission: keyof AdminPermissions, subPermiss
 }
 
 export async function logAdminAction(
-  adminId: string,
+  adminId: string | null,
   action: string,
   targetType: string,
   targetId: string,
@@ -328,7 +328,7 @@ export async function bootstrapSuperAdmin(): Promise<void> {
       ['super_admin', Date.now(), superAdminPublicId],
     );
     await logAdminAction(
-      'system',
+      null,
       'bootstrap.super_admin',
       'user',
       superAdminPublicId,
@@ -521,4 +521,36 @@ export async function unsuspendUser(
       ],
     );
   });
+}
+
+export async function verifyAdminPassword(adminId: string, password: string | undefined): Promise<boolean> {
+  if (!password) return false;
+  const { verifyPassword } = await import('../auth.ts');
+  const result = await query<{ password_hash: string }>(
+    'SELECT password_hash FROM zunari_users WHERE public_id = $1 AND admin_role IS NOT NULL',
+    [adminId],
+  );
+  const user = result.rows[0];
+  if (!user) return false;
+  return verifyPassword(password, user.password_hash);
+}
+
+export interface StepUpAuthResult {
+  success: boolean;
+  error?: string;
+  code?: string;
+}
+
+export async function requireStepUpAuth(
+  adminId: string,
+  password: string | undefined,
+): Promise<StepUpAuthResult> {
+  if (!password) {
+    return { success: false, error: 'Step-up authentication required. Please provide your current password.', code: 'STEP_UP_REQUIRED' };
+  }
+  const ok = await verifyAdminPassword(adminId, password);
+  if (!ok) {
+    return { success: false, error: 'Invalid password for step-up authentication.', code: 'STEP_UP_INVALID' };
+  }
+  return { success: true };
 }

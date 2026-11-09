@@ -6,6 +6,7 @@ import {
   setAuthError,
   readJsonBody,
   validateStateChangingRequest,
+  safeEqual,
 } from '../auth.ts';
 import {
   requireAdminSession,
@@ -15,6 +16,7 @@ import {
   setUserAdminRole,
   suspendUser,
   unsuspendUser,
+  verifyAdminPassword,
   type AdminRole,
   type AdminSession,
 } from '../auth/admin.ts';
@@ -28,7 +30,18 @@ import {
   getActiveAdminSessions,
   revokeAdminSession,
   revokeAllAdminSessionsForUser,
+  getAdminReports,
+  updateReportStatus,
+  updateUserVerification,
+  updateUserGold,
+  createAdminUser,
+  exportAuditLog,
+  streamAuditLogExport,
+  createUserReport,
+  createPostReport,
 } from '../db/admin.ts';
+import { normalizeAuditExportLimit } from '../db/audit-export.ts';
+import { enforceRateLimits, hashRateLimitSubject, buildReportRateLimitRules } from '../rate-limit.ts';
 import { HttpError } from '../errors.ts';
 
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
@@ -99,6 +112,19 @@ export async function handleAdminRequest(
         return true;
       }
 
+      // Rate limit admin login attempts by IP
+      const clientIp = req.socket.remoteAddress || 'unknown';
+      const ipSubject = hashRateLimitSubject(clientIp);
+      await enforceRateLimits([
+        {
+          name: 'admin-login-ip',
+          scope: 'admin:login:ip',
+          subject: ipSubject,
+          limit: 5,
+          windowMs: 15 * 60 * 1000,
+        },
+      ], { context: { identifier, path: '/api/admin/login' } });
+
       const userResult = await query<{
         id: number;
         username: string;
@@ -143,7 +169,6 @@ export async function handleAdminRequest(
         authenticated: true,
         adminRole: user.admin_role,
         permissions: adminSession.permissions,
-        csrfToken: adminSession.csrfToken,
         expiresAt: adminSession.expiresAt,
         message: 'Admin login successful.',
       });
@@ -249,6 +274,14 @@ export async function handleAdminRequest(
       const targetPublicId = decodeURIComponent(userDetailMatch[1]);
       const newRole = body.adminRole as AdminRole | null | undefined;
       const action = body.action as string | undefined;
+      const confirmPassword = body.confirmPassword as string | undefined;
+
+      // Step-up auth for sensitive user modifications
+      const stepUp = await verifyAdminPassword(adminId, confirmPassword);
+      if (!stepUp) {
+        sendError(res, 403, 'Step-up authentication required. Please provide your current password.', 'STEP_UP_REQUIRED');
+        return true;
+      }
 
       if (newRole !== undefined && newRole !== null) {
         await setUserAdminRole(adminId, targetPublicId, newRole, req);
@@ -317,11 +350,19 @@ export async function handleAdminRequest(
       const role = body.role as AdminRole;
       const permissions = body.permissions as Record<string, unknown>;
       const description = String(body.description || '');
+      const confirmPassword = body.confirmPassword as string | undefined;
 
       if (!role || !permissions) {
         sendError(res, 400, 'Role and permissions are required.', 'MISSING_FIELDS');
         return true;
       }
+
+      const stepUp = await verifyAdminPassword(adminId, confirmPassword);
+      if (!stepUp) {
+        sendError(res, 403, 'Step-up authentication required. Please provide your current password.', 'STEP_UP_REQUIRED');
+        return true;
+      }
+
       await updateAdminRolePermissions(role, permissions, description);
       sendJson(res, 200, { success: true, message: 'Permissions updated.' });
       return true;
@@ -343,6 +384,13 @@ export async function handleAdminRequest(
         sendError(res, 403, 'Insufficient permissions.', 'INSUFFICIENT_PERMISSIONS');
         return true;
       }
+      const body = await parseAdminRequest(req);
+      const confirmPassword = body.confirmPassword as string | undefined;
+      const stepUp = await verifyAdminPassword(adminId, confirmPassword);
+      if (!stepUp) {
+        sendError(res, 403, 'Step-up authentication required. Please provide your current password.', 'STEP_UP_REQUIRED');
+        return true;
+      }
       await revokeAdminSession(sessionMatch[1]);
       await logAdminAction(adminId, 'admin.session.revoke', 'admin_session', sessionMatch[1], {}, req);
       sendJson(res, 200, { success: true, message: 'Session revoked.' });
@@ -356,13 +404,321 @@ export async function handleAdminRequest(
       }
       const body = await parseAdminRequest(req);
       const targetUserId = String(body.userId || '');
+      const confirmPassword = body.confirmPassword as string | undefined;
       if (!targetUserId) {
         sendError(res, 400, 'userId is required.', 'MISSING_USER_ID');
+        return true;
+      }
+      const stepUp = await verifyAdminPassword(adminId, confirmPassword);
+      if (!stepUp) {
+        sendError(res, 403, 'Step-up authentication required. Please provide your current password.', 'STEP_UP_REQUIRED');
         return true;
       }
       await revokeAllAdminSessionsForUser(targetUserId);
       await logAdminAction(adminId, 'admin.session.revoke_all', 'user', targetUserId, {}, req);
       sendJson(res, 200, { success: true, message: 'All admin sessions revoked for user.' });
+      return true;
+    }
+
+    // Reports endpoints
+    if (pathname === '/api/admin/reports' && method === 'GET') {
+      if (!adminSession.permissions.reports.read) {
+        sendError(res, 403, 'Insufficient permissions.', 'INSUFFICIENT_PERMISSIONS');
+        return true;
+      }
+      const searchParams = url.searchParams;
+      const result = await getAdminReports({
+        limit: Math.min(Number(searchParams.get('limit') || 50), 200),
+        offset: Number(searchParams.get('offset') || 0),
+        type: (searchParams.get('type') as 'user' | 'post') || undefined,
+        status: (searchParams.get('status') as 'pending' | 'reviewed' | 'dismissed' | 'action_taken') || undefined,
+        search: searchParams.get('search') || undefined,
+        sortOrder: (searchParams.get('sortOrder') as 'asc' | 'desc') || 'desc',
+      });
+      sendJson(res, 200, result);
+      return true;
+    }
+
+    if (pathname === '/api/admin/reports' && method === 'PATCH') {
+      if (!adminSession.permissions.reports.write) {
+        sendError(res, 403, 'Insufficient permissions.', 'INSUFFICIENT_PERMISSIONS');
+        return true;
+      }
+      const body = await parseAdminRequest(req);
+      const reportId = String(body.reportId || '');
+      const status = String(body.status || '');
+      const validStatuses = ['pending', 'reviewed', 'dismissed', 'action_taken'];
+      if (!reportId || !status || !validStatuses.includes(status)) {
+        sendError(res, 400, 'reportId and valid status (pending|reviewed|dismissed|action_taken) are required.', 'INVALID_FIELDS');
+        return true;
+      }
+      const updatedReport = await updateReportStatus(
+        adminId,
+        reportId,
+        status as 'pending' | 'reviewed' | 'dismissed' | 'action_taken',
+        adminSession.username,
+        adminSession.adminRole,
+        req,
+      );
+      sendJson(res, 200, { success: true, report: updatedReport });
+      return true;
+    }
+
+    // Verification toggle endpoint
+    const userVerifyMatch = /^\/api\/admin\/users\/([^/]+)\/verify$/.exec(pathname);
+    if (userVerifyMatch && method === 'PATCH') {
+      if (!adminSession.permissions.badges.write) {
+        sendError(res, 403, 'Insufficient permissions.', 'INSUFFICIENT_PERMISSIONS');
+        return true;
+      }
+      const body = await parseAdminRequest(req);
+      const targetPublicId = decodeURIComponent(userVerifyMatch[1]);
+      const verified = body.verified === true;
+      const confirmPassword = body.confirmPassword as string | undefined;
+
+      if (typeof body.verified !== 'boolean') {
+        sendError(res, 400, 'verified (boolean) is required.', 'MISSING_FIELDS');
+        return true;
+      }
+
+      const stepUp = await verifyAdminPassword(adminId, confirmPassword);
+      if (!stepUp) {
+        sendError(res, 403, 'Step-up authentication required. Please provide your current password.', 'STEP_UP_REQUIRED');
+        return true;
+      }
+
+      const result = await updateUserVerification(
+        adminId,
+        targetPublicId,
+        verified,
+        adminSession.adminRole,
+        req,
+      );
+      sendJson(res, 200, { success: true, ...result });
+      return true;
+    }
+
+    // Gold membership toggle endpoint
+    const userGoldMatch = /^\/api\/admin\/users\/([^/]+)\/gold$/.exec(pathname);
+    if (userGoldMatch && method === 'PATCH') {
+      // Gold grant/revoke restricted to super_admin and admin only
+      // (verification_manager has badges.write for verification but not Gold)
+      if (!['super_admin', 'admin'].includes(adminSession.adminRole)) {
+        sendError(res, 403, 'Insufficient permissions to manage Gold membership.', 'INSUFFICIENT_PERMISSIONS');
+        return true;
+      }
+      const body = await parseAdminRequest(req);
+      const targetPublicId = decodeURIComponent(userGoldMatch[1]);
+      const isGold = body.isGold === true;
+      const confirmPassword = body.confirmPassword as string | undefined;
+
+      if (typeof body.isGold !== 'boolean') {
+        sendError(res, 400, 'isGold (boolean) is required.', 'MISSING_FIELDS');
+        return true;
+      }
+
+      const stepUp = await verifyAdminPassword(adminId, confirmPassword);
+      if (!stepUp) {
+        sendError(res, 403, 'Step-up authentication required. Please provide your current password.', 'STEP_UP_REQUIRED');
+        return true;
+      }
+
+      const result = await updateUserGold(
+        adminId,
+        targetPublicId,
+        isGold,
+        adminSession.adminRole,
+        req,
+      );
+      sendJson(res, 200, { success: true, ...result });
+      return true;
+    }
+
+    // Admin user creation endpoint
+    if (pathname === '/api/admin/users' && method === 'POST') {
+      if (!adminSession.permissions.admin_users.write) {
+        sendError(res, 403, 'Insufficient permissions.', 'INSUFFICIENT_PERMISSIONS');
+        return true;
+      }
+      const body = await parseAdminRequest(req);
+      const username = String(body.username || '').trim();
+      const email = String(body.email || '').trim().toLowerCase();
+      const password = String(body.password || '');
+      const name = String(body.name || '').trim() || username;
+      const adminRole = body.adminRole as AdminRole | undefined;
+      const confirmPassword = body.confirmPassword as string | undefined;
+
+      if (!username || !email || !password || !adminRole) {
+        sendError(res, 400, 'username, email, password, and adminRole are required.', 'MISSING_FIELDS');
+        return true;
+      }
+
+      const validRoles: AdminRole[] = ['super_admin', 'admin', 'moderator', 'verification_manager', 'analyst'];
+      if (!validRoles.includes(adminRole)) {
+        sendError(res, 400, `Invalid admin role. Must be one of: ${validRoles.join(', ')}.`, 'INVALID_ROLE');
+        return true;
+      }
+
+      if (password.length < 8) {
+        sendError(res, 400, 'Password must be at least 8 characters.', 'INVALID_PASSWORD');
+        return true;
+      }
+
+      // Password complexity requirements
+      if (!/[A-Z]/.test(password)) {
+        sendError(res, 400, 'Password must contain at least one uppercase letter.', 'INVALID_PASSWORD');
+        return true;
+      }
+      if (!/[a-z]/.test(password)) {
+        sendError(res, 400, 'Password must contain at least one lowercase letter.', 'INVALID_PASSWORD');
+        return true;
+      }
+      if (!/[0-9]/.test(password)) {
+        sendError(res, 400, 'Password must contain at least one number.', 'INVALID_PASSWORD');
+        return true;
+      }
+      if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)) {
+        sendError(res, 400, 'Password must contain at least one special character.', 'INVALID_PASSWORD');
+        return true;
+      }
+
+      // Reject common weak passwords
+      const commonPasswords = new Set([
+        'password123',
+        'password123!',
+        'admin123!',
+        'admin1234!',
+        'changeme1!',
+        'changeme123!',
+        'welcome1!',
+        'welcome123!',
+        'qwerty123!',
+        'qwerty1234!',
+      ]);
+      if (commonPasswords.has(password.toLowerCase())) {
+        sendError(res, 400, 'Password is too common. Please choose a stronger password.', 'INVALID_PASSWORD');
+        return true;
+      }
+
+      const emailPattern = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
+      if (!emailPattern.test(email)) {
+        sendError(res, 400, 'A valid email address is required.', 'INVALID_EMAIL');
+        return true;
+      }
+
+      const stepUp = await verifyAdminPassword(adminId, confirmPassword);
+      if (!stepUp) {
+        sendError(res, 403, 'Step-up authentication required. Please provide your current password.', 'STEP_UP_REQUIRED');
+        return true;
+      }
+
+      const result = await createAdminUser(
+        adminId,
+        adminSession.adminRole,
+        username,
+        email,
+        password,
+        name,
+        adminRole,
+        req,
+      );
+      sendJson(res, 201, { success: true, ...result });
+      return true;
+    }
+
+    // Audit log export endpoint
+    if (pathname === '/api/admin/audit-log/export' && method === 'GET') {
+      if (!adminSession.permissions.audit.read) {
+        sendError(res, 403, 'Insufficient permissions.', 'INSUFFICIENT_PERMISSIONS');
+        return true;
+      }
+      const searchParams = url.searchParams;
+      const format = (searchParams.get('format') as 'csv' | 'json') || 'json';
+      if (!['csv', 'json'].includes(format)) {
+        sendError(res, 400, 'Format must be csv or json.', 'INVALID_FORMAT');
+        return true;
+      }
+
+      // CSRF protection for audit export (GET endpoint with sensitive data)
+      const csrfToken = searchParams.get('csrfToken') || req.headers['x-csrf-token'];
+      if (!csrfToken || typeof csrfToken !== 'string' || !safeEqual(csrfToken, adminSession.csrfToken)) {
+        sendError(res, 403, 'Invalid CSRF token.', 'CSRF_INVALID');
+        return true;
+      }
+
+      // Step-up auth for audit export (password via query param for GET)
+      const confirmPassword = searchParams.get('confirmPassword') || undefined;
+      const stepUp = await verifyAdminPassword(adminId, confirmPassword);
+      if (!stepUp) {
+        sendError(res, 403, 'Step-up authentication required. Please provide your current password.', 'STEP_UP_REQUIRED');
+        return true;
+      }
+
+      const limit = normalizeAuditExportLimit(searchParams.get('limit'), 10000);
+      const useStreaming = limit > 10000;
+
+      if (useStreaming) {
+        // Streaming export for large datasets
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const filename = `audit-log-${timestamp}.${format === 'csv' ? 'csv' : 'json'}`;
+        res.statusCode = 200;
+        res.setHeader('Content-Type', format === 'csv' ? 'text/csv' : 'application/x-ndjson');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('Transfer-Encoding', 'chunked');
+
+        // Create abort signal from response close event
+        const controller = new AbortController();
+        res.on('close', () => controller.abort());
+
+        try {
+          for await (const chunk of streamAuditLogExport({
+            format,
+            adminId: searchParams.get('adminId') || undefined,
+            action: searchParams.get('action') || undefined,
+            targetType: searchParams.get('targetType') || undefined,
+            targetId: searchParams.get('targetId') || undefined,
+            startDate: searchParams.get('startDate') ? Number(searchParams.get('startDate')) : undefined,
+            endDate: searchParams.get('endDate') ? Number(searchParams.get('endDate')) : undefined,
+            limit,
+            offset: Number(searchParams.get('offset') || 0),
+            sortOrder: (searchParams.get('sortOrder') as 'asc' | 'desc') || 'desc',
+            signal: controller.signal,
+          })) {
+            if (!res.writableEnded) {
+              res.write(chunk);
+            }
+          }
+          if (!res.writableEnded) {
+            res.end();
+          }
+        } catch (streamError) {
+          console.error('Audit log streaming export failed:', streamError);
+          if (!res.writableEnded) {
+            res.destroy();
+          }
+        }
+        return true;
+      }
+
+      // Non-streaming export for smaller datasets
+      const result = await exportAuditLog({
+        format,
+        adminId: searchParams.get('adminId') || undefined,
+        action: searchParams.get('action') || undefined,
+        targetType: searchParams.get('targetType') || undefined,
+        targetId: searchParams.get('targetId') || undefined,
+        startDate: searchParams.get('startDate') ? Number(searchParams.get('startDate')) : undefined,
+        endDate: searchParams.get('endDate') ? Number(searchParams.get('endDate')) : undefined,
+        limit,
+        offset: Number(searchParams.get('offset') || 0),
+        sortOrder: (searchParams.get('sortOrder') as 'asc' | 'desc') || 'desc',
+      });
+      res.statusCode = 200;
+      res.setHeader('Content-Type', result.contentType);
+      res.setHeader('Content-Disposition', `attachment; filename="${result.filename}"`);
+      res.setHeader('Cache-Control', 'no-store');
+      res.end(result.data);
       return true;
     }
 

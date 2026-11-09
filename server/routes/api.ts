@@ -18,6 +18,12 @@ import {
   listOwnedAssets,
   type MediaPurpose,
 } from '../storage/b2.ts';
+import {
+  createUserReport,
+  createPostReport,
+} from '../db/admin.ts';
+import { enforceReportRateLimit } from '../rate-limit.ts';
+import { HttpError } from '../errors.ts';
 
 class PayloadTooLargeError extends Error {}
 
@@ -30,8 +36,8 @@ function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   res.end(body);
 }
 
-function sendError(res: ServerResponse, status: number, message: string): void {
-  sendJson(res, status, { error: message });
+function sendError(res: ServerResponse, status: number, message: string, code?: string): void {
+  sendJson(res, status, { error: message, ...(code && { code }) });
 }
 
 async function readJson(req: IncomingMessage, maxBytes = 64 * 1024): Promise<Record<string, unknown>> {
@@ -455,6 +461,67 @@ export async function handleApiRequest(
 
     if (pathname === '/api/trends' && method === 'GET') {
       sendJson(res, 200, await dbAdapter.getTrends());
+      return true;
+    }
+
+    // Report creation endpoints
+    if (pathname === '/api/reports/user' && method === 'POST') {
+      const currentUserId = await requireUserId(req, res);
+      if (!currentUserId) return true;
+      await requireSessionWithCsrf(req);
+      const body = await readJson(req);
+      const reportedUserId = typeof body.reportedUserId === 'string' ? body.reportedUserId : '';
+      const reason = typeof body.reason === 'string' ? body.reason : '';
+      const details = typeof body.details === 'string' ? body.details : null;
+      const validReasons = ['spam', 'harassment', 'hate', 'violence', 'illegal', 'misinfo', 'fake', 'other'];
+      if (!reportedUserId || !reason || !validReasons.includes(reason)) {
+        sendError(res, 400, 'reportedUserId and valid reason are required.', 'INVALID_FIELDS');
+        return true;
+      }
+      if (reportedUserId === currentUserId) {
+        sendError(res, 400, 'You cannot report yourself.', 'SELF_REPORT');
+        return true;
+      }
+      // Rate limit after validation to avoid consuming quota on invalid requests
+      await enforceReportRateLimit(req, currentUserId);
+      try {
+        const report = await createUserReport(currentUserId, reportedUserId, reason, details, req);
+        sendJson(res, 201, { success: true, report });
+      } catch (error) {
+        if (error instanceof HttpError) {
+          setAuthError(res, error);
+        } else {
+          throw error;
+        }
+      }
+      return true;
+    }
+
+    if (pathname === '/api/reports/post' && method === 'POST') {
+      const currentUserId = await requireUserId(req, res);
+      if (!currentUserId) return true;
+      await requireSessionWithCsrf(req);
+      const body = await readJson(req);
+      const postId = typeof body.postId === 'string' ? body.postId : '';
+      const reason = typeof body.reason === 'string' ? body.reason : '';
+      const details = typeof body.details === 'string' ? body.details : null;
+      const validReasons = ['spam', 'harassment', 'hate', 'violence', 'illegal', 'misinfo', 'fake', 'other'];
+      if (!postId || !reason || !validReasons.includes(reason)) {
+        sendError(res, 400, 'postId and valid reason are required.', 'INVALID_FIELDS');
+        return true;
+      }
+      // Rate limit after validation to avoid consuming quota on invalid requests
+      await enforceReportRateLimit(req, currentUserId);
+      try {
+        const report = await createPostReport(currentUserId, postId, reason, details, req);
+        sendJson(res, 201, { success: true, report });
+      } catch (error) {
+        if (error instanceof HttpError) {
+          setAuthError(res, error);
+        } else {
+          throw error;
+        }
+      }
       return true;
     }
 
