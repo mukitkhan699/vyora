@@ -61,14 +61,14 @@ export async function cleanupDeliveredOrExpiredAttachments(): Promise<CleanupRes
           "UPDATE zunari_message_attachments SET status = 'cleaned' WHERE id = $1",
           [row.id],
         );
-        // Mark media asset as deleting
+        // Mark media asset as cleaned in metadata
         await client.query(
-          "UPDATE zunari_media_assets SET status = 'deleting' WHERE id = $1",
+          "UPDATE zunari_media_assets SET status = 'cleaned' WHERE id = $1",
           [row.media_asset_id],
         );
       });
 
-      // Delete from B2
+      // Delete the actual object from Backblaze B2 storage
       try {
         await getClient().send(
           new DeleteObjectCommand({
@@ -80,11 +80,6 @@ export async function cleanupDeliveredOrExpiredAttachments(): Promise<CleanupRes
         // Safe and retryable if object was already removed or B2 is temporarily unreachable
         console.warn(`[Storage] B2 deletion warning for key ${row.object_key}:`, storageError);
       }
-
-      // Finish asset cleanup
-      await query("DELETE FROM zunari_media_assets WHERE id = $1 AND status = 'deleting'", [
-        row.media_asset_id,
-      ]);
 
       cleanedCount++;
     } catch (err) {
