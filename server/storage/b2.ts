@@ -11,7 +11,7 @@ import type { PoolClient } from 'pg';
 import { query, withTransaction } from '../db/pool.ts';
 import { HttpError, redactSensitiveText } from '../errors.ts';
 
-export type MediaPurpose = 'profile-avatar' | 'profile-cover' | 'post-image';
+export type MediaPurpose = 'profile-avatar' | 'profile-cover' | 'post-image' | 'message-attachment';
 
 export interface UploadRequest {
   ownerId: string;
@@ -45,6 +45,13 @@ const allowedTypes = new Set([
   'image/png',
   'image/gif',
   'image/webp',
+  'video/mp4',
+  'video/webm',
+  'audio/mpeg',
+  'audio/ogg',
+  'audio/wav',
+  'application/pdf',
+  'text/plain',
 ]);
 
 let client: S3Client | undefined;
@@ -106,6 +113,15 @@ export function matchesFileSignature(mimeType: string, bytes: Uint8Array): boole
   if (mimeType === 'image/webp') {
     return header.subarray(0, 4).toString('ascii') === 'RIFF' &&
       header.subarray(8, 12).toString('ascii') === 'WEBP';
+  }
+  if (mimeType === 'application/pdf') {
+    return header.length >= 4 && header.subarray(0, 4).toString('ascii') === '%PDF';
+  }
+  if (mimeType === 'text/plain') {
+    return true;
+  }
+  if (mimeType.startsWith('video/') || mimeType.startsWith('audio/')) {
+    return header.length >= 4;
   }
   return false;
 }
@@ -371,6 +387,16 @@ export async function getAuthorizedDownloadUrl(
                SELECT 1 FROM zunari_posts AS post
                WHERE '/api/files/' || asset.id = ANY(post.media_urls)
              )
+           )
+         )
+         OR (
+           EXISTS (
+             SELECT 1 FROM zunari_message_attachments ma
+             JOIN zunari_messages_v2 m ON m.id = ma.message_id
+             JOIN zunari_conversation_participants p ON p.conversation_id = m.conversation_id
+             WHERE ma.media_asset_id = asset.id
+               AND p.user_id = $2
+               AND ma.status = 'active'
            )
          )
        )`,

@@ -2,12 +2,39 @@ import { Server as HttpServer } from 'node:http';
 import { Server as SocketServer, type Socket } from 'socket.io';
 import { getSession } from './auth.ts';
 import { dbAdapter } from './db/adapter.ts';
-import { onMessage, onNotification, onSessionRevocation } from './realtime-events.ts';
+import { query } from './db/pool.ts';
+import {
+  onMessage,
+  onNotification,
+  onSessionRevocation,
+  onConversationMessage,
+  onConversationMessageEdit,
+  onConversationMessageDelete,
+  onTyping,
+  onReceipt,
+  onReaction,
+  onCallEvent,
+  publishTyping,
+  publishReceipt,
+} from './realtime-events.ts';
 
 let activeServer: SocketServer | undefined;
-let stopMessageListener: (() => void) | undefined;
-let stopNotificationListener: (() => void) | undefined;
-let stopSessionRevocationListener: (() => void) | undefined;
+let stopListeners: Array<() => void> = [];
+
+// Track online users: Map<userId, Set<socketId>>
+const onlineUserSockets = new Map<string, Set<string>>();
+
+export function isUserOnline(userId: string): boolean {
+  const sockets = onlineUserSockets.get(userId);
+  return Boolean(sockets && sockets.size > 0);
+}
+
+export function getOnlineUserIds(): string[] {
+  return Array.from(onlineUserSockets.keys()).filter((uid) => {
+    const s = onlineUserSockets.get(uid);
+    return s && s.size > 0;
+  });
+}
 
 function getConfiguredOrigin(): string | undefined {
   const appUrl = process.env.APP_URL?.trim();
@@ -89,6 +116,8 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
       };
       const socialUser = await dbAdapter.syncAuthProfile(authUser);
       socket.data.userId = socialUser.id;
+      socket.data.username = socialUser.username;
+      socket.data.name = socialUser.name;
       socket.data.authUserId = session.userId;
       socket.data.sessionTokenHash = session.tokenHash;
       next();
@@ -96,36 +125,168 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
   });
 
   io.on('connection', (socket) => {
-    const userId = socket.data.userId;
+    const userId = socket.data.userId as string | undefined;
     const authUserId = socket.data.authUserId;
     const sessionTokenHash = socket.data.sessionTokenHash;
-    if (typeof userId === 'string') socket.join(`user:${userId}`);
+    const username = socket.data.username as string | undefined;
+
+    if (typeof userId === 'string') {
+      socket.join(`user:${userId}`);
+      let userSet = onlineUserSockets.get(userId);
+      if (!userSet) {
+        userSet = new Set();
+        onlineUserSockets.set(userId, userSet);
+      }
+      userSet.add(socket.id);
+
+      // Broadcast user online if first socket
+      if (userSet.size === 1) {
+        io.emit('presence:update', { userId, isOnline: true });
+      }
+    }
     if (typeof authUserId === 'number') socket.join(`auth-user:${authUserId}`);
     if (typeof sessionTokenHash === 'string') socket.join(`session:${sessionTokenHash}`);
+
+    // Join conversation room after authorization
+    socket.on('conversation:join', (data: { conversationId: string }, ack?: (res: { success: boolean }) => void) => {
+      void (async () => {
+        if (!userId || !data?.conversationId) {
+          ack?.({ success: false });
+          return;
+        }
+        try {
+          const check = await query(
+            'SELECT 1 FROM zunari_conversation_participants WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL',
+            [data.conversationId, userId],
+          );
+          if (check.rowCount) {
+            socket.join(`conv:${data.conversationId}`);
+            ack?.({ success: true });
+          } else {
+            ack?.({ success: false });
+          }
+        } catch {
+          ack?.({ success: false });
+        }
+      })();
+    });
+
+    socket.on('conversation:leave', (data: { conversationId: string }) => {
+      if (data?.conversationId) {
+        socket.leave(`conv:${data.conversationId}`);
+      }
+    });
+
+    // Typing indicators
+    socket.on('typing:start', (data: { conversationId: string }) => {
+      if (!userId || !data?.conversationId) return;
+      publishTyping({
+        conversationId: data.conversationId,
+        userId,
+        username: username || '',
+        isTyping: true,
+      });
+    });
+
+    socket.on('typing:stop', (data: { conversationId: string }) => {
+      if (!userId || !data?.conversationId) return;
+      publishTyping({
+        conversationId: data.conversationId,
+        userId,
+        username: username || '',
+        isTyping: false,
+      });
+    });
+
+    // Online presence check
+    socket.on('presence:query', (_data: unknown, ack?: (res: { onlineUserIds: string[] }) => void) => {
+      ack?.({ onlineUserIds: getOnlineUserIds() });
+    });
+
+    // Disconnect handling
+    socket.on('disconnect', () => {
+      if (typeof userId === 'string') {
+        const userSet = onlineUserSockets.get(userId);
+        if (userSet) {
+          userSet.delete(socket.id);
+          if (userSet.size === 0) {
+            onlineUserSockets.delete(userId);
+            io.emit('presence:update', { userId, isOnline: false, lastSeen: Date.now() });
+          }
+        }
+      }
+    });
   });
 
-  stopMessageListener = onMessage((message) => {
-    io.to(`user:${message.recipientId}`).emit('message:new', { ...message, isSender: false });
-    io.to(`user:${message.senderId}`).emit('message:new', { ...message, isSender: true });
+  // Event subscribers
+  const stopLegacyMsg = onMessage((msg: any) => {
+    if (msg.recipientId) io.to(`user:${msg.recipientId}`).emit('message:new', { ...msg, isSender: false });
+    if (msg.senderId) io.to(`user:${msg.senderId}`).emit('message:new', { ...msg, isSender: true });
   });
-  stopNotificationListener = onNotification(({ recipientId, notification }) => {
+
+  const stopConvMsg = onConversationMessage(({ conversationId, message, recipientIds }) => {
+    io.to(`conv:${conversationId}`).emit('conversation:message', message);
+    for (const rId of recipientIds) {
+      io.to(`user:${rId}`).emit('conversation:message-notification', { conversationId, message });
+    }
+  });
+
+  const stopConvMsgEdit = onConversationMessageEdit(({ conversationId, message }) => {
+    io.to(`conv:${conversationId}`).emit('conversation:message-edit', message);
+  });
+
+  const stopConvMsgDelete = onConversationMessageDelete(({ conversationId, messageId }) => {
+    io.to(`conv:${conversationId}`).emit('conversation:message-delete', { conversationId, messageId });
+  });
+
+  const stopTyping = onTyping((event) => {
+    io.to(`conv:${event.conversationId}`).emit('conversation:typing', event);
+  });
+
+  const stopReceipt = onReceipt((event) => {
+    io.to(`conv:${event.conversationId}`).emit('conversation:receipt', event);
+  });
+
+  const stopReaction = onReaction((event) => {
+    io.to(`conv:${event.conversationId}`).emit('conversation:reaction', event);
+  });
+
+  const stopCall = onCallEvent((event) => {
+    // Deliver call events to participants
+    for (const rId of event.recipientIds) {
+      io.to(`user:${rId}`).emit(`call:${event.event}`, event);
+    }
+    io.to(`conv:${event.conversationId}`).emit('call:update', event);
+  });
+
+  const stopNotif = onNotification(({ recipientId, notification }) => {
     io.to(`user:${recipientId}`).emit('notification:new', notification);
   });
-  stopSessionRevocationListener = onSessionRevocation(({ tokenHash, userId }) => {
+
+  const stopSessionRev = onSessionRevocation(({ tokenHash, userId }) => {
     if (tokenHash) io.in(`session:${tokenHash}`).disconnectSockets(true);
     if (userId) io.in(`auth-user:${userId}`).disconnectSockets(true);
   });
+
+  stopListeners = [
+    stopLegacyMsg,
+    stopConvMsg,
+    stopConvMsgEdit,
+    stopConvMsgDelete,
+    stopTyping,
+    stopReceipt,
+    stopReaction,
+    stopCall,
+    stopNotif,
+    stopSessionRev,
+  ];
 
   return io;
 }
 
 export async function closeRealtimeServer(): Promise<void> {
-  stopMessageListener?.();
-  stopNotificationListener?.();
-  stopSessionRevocationListener?.();
-  stopMessageListener = undefined;
-  stopNotificationListener = undefined;
-  stopSessionRevocationListener = undefined;
+  for (const stop of stopListeners) stop();
+  stopListeners = [];
   if (!activeServer) return;
   const io = activeServer;
   activeServer = undefined;

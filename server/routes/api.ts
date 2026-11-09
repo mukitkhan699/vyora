@@ -22,6 +22,8 @@ import {
   createUserReport,
   createPostReport,
 } from '../db/admin.ts';
+import { handleMessagingRequest } from './messaging.ts';
+import { handleCallingRequest } from './calling.ts';
 import { enforceReportRateLimit } from '../rate-limit.ts';
 import { HttpError } from '../errors.ts';
 
@@ -111,6 +113,15 @@ export async function handleApiRequest(
     if (await handleAuthRequest(req, res, url)) return true;
 
     if (await handleAdminRequest(req, res, url)) return true;
+
+    const currentUserIdForMessaging = await getCurrentUserId(req);
+    if (await handleMessagingRequest(req, res, url, currentUserIdForMessaging || null, readJson, requireSessionWithCsrf)) {
+      return true;
+    }
+
+    if (await handleCallingRequest(req, res, url, currentUserIdForMessaging || null, readJson, requireSessionWithCsrf)) {
+      return true;
+    }
 
     if (pathname === '/api/auth/demo-accounts' && method === 'GET') {
       const accounts = await dbAdapter.getDemoAccounts();
