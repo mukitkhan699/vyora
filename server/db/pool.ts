@@ -91,7 +91,12 @@ export async function verifyDatabase(): Promise<void> {
        AND to_regclass('public.zunari_conversations_v2') IS NOT NULL
        AND to_regclass('public.zunari_conversation_participants') IS NOT NULL
        AND to_regclass('public.zunari_messages_v2') IS NOT NULL
-       AND to_regclass('public.zunari_call_sessions') IS NOT NULL AS ready`,
+       AND to_regclass('public.zunari_message_receipts') IS NOT NULL
+       AND to_regclass('public.zunari_message_reactions') IS NOT NULL
+       AND to_regclass('public.zunari_message_attachments') IS NOT NULL
+       AND to_regclass('public.zunari_attachment_deliveries') IS NOT NULL
+       AND to_regclass('public.zunari_call_sessions') IS NOT NULL
+       AND to_regclass('public.zunari_call_participants') IS NOT NULL AS ready`,
   );
   if (!schema.rows[0]?.ready) {
     throw new Error('Zunari database schema is not installed or pending migrations. Run the approved migration command (npm run db:migrate).');
