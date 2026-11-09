@@ -4,8 +4,7 @@ import { bootstrapSuperAdmin } from './auth/admin.ts';
 import { cleanupExpiredRateLimits } from './rate-limit.ts';
 import { cleanupAbandonedUploads, validateStorageConfiguration } from './storage/b2.ts';
 import { cleanupDeliveredOrExpiredAttachments } from './storage/attachments.ts';
-import { verifyDatabase, getMigrationPool } from './db/pool.ts';
-import { applyMigrations } from './db/migrate.ts';
+import { verifyDatabase } from './db/pool.ts';
 
 export async function initializeBackend(): Promise<() => void> {
   validateServerConfiguration();
@@ -13,10 +12,8 @@ export async function initializeBackend(): Promise<() => void> {
   await initAuth();
   await bootstrapSuperAdmin();
   
-  // Verify database schema and migrations on startup
+  // Verify database schema readiness on startup
   await verifyDatabase();
-  const migrationPool = getMigrationPool();
-  await applyMigrations({ pool: migrationPool, logger: (msg) => console.info(`[migration] ${msg}`) });
   
   await cleanupAbandonedUploads();
   await cleanupExpiredRateLimits();
