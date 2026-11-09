@@ -33,6 +33,10 @@ export function validateServerConfiguration(): void {
     throw new Error('DATABASE_URL must use the PostgreSQL protocol.');
   }
 
+  // DATABASE_URL_DIRECT is only required for explicit migration execution
+  // (via db:migrate or db:migrate:dist commands), not for normal server startup.
+  // Normal startup uses DATABASE_URL and verifies schema via verifyDatabase().
+
   const trustProxyHopsRaw = process.env.TRUST_PROXY_HOPS?.trim();
   if (trustProxyHopsRaw !== undefined) {
     const parsed = Number.parseInt(trustProxyHopsRaw, 10);

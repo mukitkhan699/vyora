@@ -817,7 +817,6 @@ export async function handleAuthRequest(
 }
 
 export async function initAuth(): Promise<void> {
-  await verifyDatabase();
 }
 
 export async function seedDemoAccounts(): Promise<void> {

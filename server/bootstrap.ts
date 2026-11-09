@@ -7,16 +7,28 @@ import { cleanupDeliveredOrExpiredAttachments } from './storage/attachments.ts';
 import { verifyDatabase } from './db/pool.ts';
 
 export async function initializeBackend(): Promise<() => void> {
+  console.info('[startup] Validating configuration...');
   validateServerConfiguration();
   validateStorageConfiguration();
+  console.info('[startup] Configuration validated.');
+
+  console.info('[startup] Initializing authentication...');
   await initAuth();
+  console.info('[startup] Authentication initialized.');
+
+  console.info('[startup] Bootstrapping super admin...');
   await bootstrapSuperAdmin();
-  
-  // Verify database schema readiness on startup
+  console.info('[startup] Super admin bootstrapped.');
+
+  console.info('[startup] Verifying database schema...');
   await verifyDatabase();
-  
+  console.info('[startup] Database schema verified.');
+
+  console.info('[startup] Cleaning up abandoned uploads...');
   await cleanupAbandonedUploads();
+  console.info('[startup] Cleaning up expired rate limits...');
   await cleanupExpiredRateLimits();
+  console.info('[startup] Cleaning up delivered or expired attachments...');
   await cleanupDeliveredOrExpiredAttachments().catch(() => {});
 
   const cleanupTimer = setInterval(() => {
