@@ -59,7 +59,11 @@ async function startDevelopmentServer(): Promise<void> {
   }
 
   const httpServer = createHttpServer(app);
+  console.info('[startup] Attaching realtime WebSocket server...');
   attachRealtimeServer(httpServer);
+  console.info('[startup] Realtime WebSocket server attached.');
+
+  console.info(`[startup] Binding server to 0.0.0.0:${port}...`);
   httpServer.listen(port, '0.0.0.0', () => {
     console.log(`[${config.appName}] Server listening on http://0.0.0.0:${port}`);
   });

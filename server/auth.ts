@@ -817,7 +817,7 @@ export async function handleAuthRequest(
 }
 
 export async function initAuth(): Promise<void> {
-  await verifyDatabase();
+  // Database schema readiness is verified by verifyDatabase() during backend initialization.
 }
 
 export async function seedDemoAccounts(): Promise<void> {

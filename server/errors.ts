@@ -4,7 +4,7 @@ export function redactSensitiveText(message: string): string {
     if (
       value &&
       value.length >= 4 &&
-      (name === 'DATABASE_URL' || /(PASSWORD|SECRET|TOKEN|KEY)/i.test(name))
+      (name === 'DATABASE_URL' || name === 'DATABASE_URL_DIRECT' || /(PASSWORD|SECRET|TOKEN|KEY)/i.test(name))
     ) {
       redacted = redacted.replaceAll(value, '[redacted]');
     }
