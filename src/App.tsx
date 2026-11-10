@@ -197,9 +197,14 @@ function MainApp() {
         <main
           className={`min-w-0 flex-1 min-h-screen border-r border-white/[0.08] w-full ${
             currentTab === 'messages'
-              ? 'max-w-none pb-0'
+              ? 'max-w-none pb-0 sm:pb-0 md:pb-0'
               : 'max-w-2xl pb-20 sm:pb-4'
           }`}
+          style={{
+            paddingBottom: currentTab === 'messages' 
+              ? 'env(safe-area-inset-bottom, 0px)' // Reserve space for MobileNav on mobile
+              : 0,
+          }}
         >
           {currentTab === 'home' && (
             <Timeline

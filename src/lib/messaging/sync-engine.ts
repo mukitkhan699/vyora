@@ -10,6 +10,7 @@ import {
   getAllConversations,
   upsertConversations,
   updateConversationSyncCursor,
+  getConversationById,
 } from './conversation-store.ts';
 import {
   getMessages,
@@ -31,8 +32,8 @@ import {
   updateSyncCursor,
   updateLastSuccessfulSync,
 } from './sync-state-store.ts';
-import { useAuth } from '../../context/AuthContext.tsx';
-import { useRealtime } from '../../context/RealtimeContext.tsx';
+// import { useAuth } from '../../context/AuthContext.tsx';
+// import { useRealtime } from '../../context/RealtimeContext.tsx';
 
 export interface SyncResult {
   conversationsSynced: number;
@@ -215,6 +216,14 @@ export function createSyncEngine(getAccountId: () => string | null): SyncEngine 
           );
           await updateSyncCursor(accountId, conversationId, String(latestMessage.createdAt));
           await updateLastSuccessfulSync(accountId, conversationId);
+          
+          // Also update the conversation with the latest message
+          const conversation = await getConversationById(accountId, conversationId);
+          if (conversation) {
+            conversation.lastMessage = latestMessage;
+            conversation.lastMessageAt = latestMessage.createdAt;
+            await upsertConversations([conversation]);
+          }
         }
 
         const pendingOutbox = await getPendingOutboxMessages(accountId);
@@ -226,6 +235,13 @@ export function createSyncEngine(getAccountId: () => string | null): SyncEngine 
 
           if (result) {
             await upsertMessages([result.message]);
+            // Update the conversation with the latest message
+            const conversation = await getConversationById(accountId, outboxMsg.conversationId);
+            if (conversation) {
+              conversation.lastMessage = result.message;
+              conversation.lastMessageAt = result.message.createdAt;
+              await upsertConversations([conversation]);
+            }
             await removeFromOutbox(outboxMsg.clientId);
             outboxProcessed++;
           } else {
@@ -258,6 +274,13 @@ export function createSyncEngine(getAccountId: () => string | null): SyncEngine 
 
         if (result) {
           await upsertMessages([result.message]);
+          // Update the conversation with the latest message
+          const conversation = await getConversationById(accountId, outboxMsg.conversationId);
+          if (conversation) {
+            conversation.lastMessage = result.message;
+            conversation.lastMessageAt = result.message.createdAt;
+            await upsertConversations([conversation]);
+          }
           await removeFromOutbox(outboxMsg.clientId);
           processed++;
         } else {

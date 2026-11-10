@@ -862,19 +862,22 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
 
       setMessages((previous) => upsertMessage(previous, response.message));
       retryAssetsRef.current.delete(clientId);
+      const updatedConversation = {
+        ...activeConversation!,
+        lastMessage: response.message,
+        lastMessageAt: toMillis(response.message.createdAt),
+      };
       setConversations((previous) =>
         sortConversations(
           previous.map((conversation) =>
             conversation.id === conversationId
-              ? {
-                  ...conversation,
-                  lastMessage: response.message,
-                  lastMessageAt: toMillis(response.message.createdAt),
-                }
+              ? updatedConversation
               : conversation,
           ),
         ),
       );
+      // Persist updated conversation to IndexedDB
+      saveConversation(updatedConversation);
     } catch (error) {
       const message = formatError(error, 'Message could not be sent.');
       addToOutbox({
@@ -1568,8 +1571,8 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
         className={`${showMobileChat ? 'flex' : 'hidden sm:flex'} flex-1 min-w-0 min-h-0 flex-col z-bg`}
         aria-label="Conversation"
         style={{ 
-          paddingBottom: isMobile 
-            ? (keyboardHeight > 0 ? keyboardHeight : 68) // 68px = MobileNav height (approx 60px + safe area)
+          paddingBottom: isMobile && keyboardHeight > 0 
+            ? keyboardHeight 
             : 0 
         }}
       >
