@@ -52,16 +52,32 @@ export const VirtualizedMessageList: React.FC<VirtualizedMessageListProps> = ({
 }) => {
   const parentRef = useRef<HTMLDivElement>(null);
   const [itemHeights, setItemHeights] = useState<Map<number, number>>(new Map());
+  const measuredIndicesRef = useRef<Set<number>>(new Set());
 
   const measureItemHeight = useCallback((index: number, element: HTMLElement | null) => {
-    if (element) {
+    if (!element) return;
+    
+    // Only measure once per index to prevent infinite loops
+    if (measuredIndicesRef.current.has(index)) return;
+    
+    const height = element.getBoundingClientRect().height;
+    // Only update if height differs from estimate
+    if (Math.abs(height - estimatedItemHeight) > 2) {
+      measuredIndicesRef.current.add(index);
       setItemHeights((prev) => {
         const next = new Map(prev);
-        next.set(index, element.getBoundingClientRect().height);
+        next.set(index, height);
         return next;
       });
+    } else {
+      measuredIndicesRef.current.add(index);
     }
-  }, []);
+  }, [estimatedItemHeight]);
+
+  // Reset measured indices when renderedMessages changes
+  useEffect(() => {
+    measuredIndicesRef.current.clear();
+  }, [renderedMessages.length]);
 
   const virtualizer = useVirtualizer({
     count: renderedMessages.length,

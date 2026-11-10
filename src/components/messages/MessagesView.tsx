@@ -1567,7 +1567,11 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
       <main
         className={`${showMobileChat ? 'flex' : 'hidden sm:flex'} flex-1 min-w-0 min-h-0 flex-col z-bg`}
         aria-label="Conversation"
-        style={{ paddingBottom: isMobile && keyboardHeight > 0 ? keyboardHeight : 0 }}
+        style={{ 
+          paddingBottom: isMobile 
+            ? (keyboardHeight > 0 ? keyboardHeight : 68) // 68px = MobileNav height (approx 60px + safe area)
+            : 0 
+        }}
       >
         {activeConversation && currentUser ? (
           <>
