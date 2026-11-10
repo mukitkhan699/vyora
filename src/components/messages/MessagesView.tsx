@@ -1,720 +1,1880 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Send,
-  Mail,
+  AlertCircle,
+  ArrowDown,
   ArrowLeft,
+  ChevronUp,
+  Loader2,
+  Mail,
+  MessageSquarePlus,
+  RefreshCw,
+  Search,
   Users,
-  Plus,
-  Phone,
-  Video,
-  Info,
-  Smile,
-  Paperclip,
+  WifiOff,
   X,
 } from 'lucide-react';
-import { User, Message, Conversation } from '../../types/index.ts';
+import type {
+  Conversation,
+  Message,
+  MessageAttachment,
+  PendingMessageAttachment,
+  User,
+} from '../../types/index.ts';
 import { api } from '../../services/api.ts';
 import { useAuth } from '../../context/AuthContext.tsx';
-import { useTheme } from '../../context/ThemeContext.tsx';
+import { useRealtime } from '../../context/RealtimeContext.tsx';
+import { useCall } from '../../context/CallContext.tsx';
+import { useToast } from '../common/ToastProvider.tsx';
 import { Avatar } from '../common/Avatar.tsx';
-import { UserBadges } from '../common/UserBadges.tsx';
-import { EmptyState } from '../common/EmptyState.tsx';
-import { io, type Socket } from 'socket.io-client';
-import { getBackendApiUrl } from '../../config/backendUrl.ts';
-import { MessageBubble } from './MessageBubble.tsx';
+import { ConfirmationDialog } from '../common/ConfirmationDialog.tsx';
+import { ImageLightbox } from '../feed/ImageLightbox.tsx';
+import { ConversationListItem } from './ConversationListItem.tsx';
+import { ConversationHeader } from './ConversationHeader.tsx';
+import { ConversationEmpty } from './ConversationEmpty.tsx';
+import { NewMessageModal } from './NewMessageModal.tsx';
 import { CreateGroupModal } from './CreateGroupModal.tsx';
 import { GroupDetailsModal } from './GroupDetailsModal.tsx';
-import { CallModal } from '../calling/CallModal.tsx';
-import { IncomingCallBanner } from '../calling/IncomingCallBanner.tsx';
+import { MessageBubble } from './MessageBubble.tsx';
+import { MessageComposer } from './MessageComposer.tsx';
+import { AttachmentPicker } from './AttachmentPicker.tsx';
+import {
+  formatDateSeparator,
+  getConversationTitle,
+  getDirectCounterpart,
+  isImageMime,
+  supportsFileType,
+} from '../../utils/messaging.ts';
 
-export const MessagesView: React.FC = () => {
+const PAGE_SIZE = 50;
+const MAX_ATTACHMENTS = 5;
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const TYPING_STOP_MS = 1800;
+
+type InboxFilter = 'all' | 'unread' | 'groups';
+
+interface LightboxState {
+  open: boolean;
+  images: string[];
+  downloadUrls: string[];
+  index: number;
+}
+
+interface RenderedMessage {
+  message: Message;
+  showDate: boolean;
+  dateLabel: string;
+  showAvatar: boolean;
+  showName: boolean;
+  isContinuation: boolean;
+}
+
+const toMillis = (value: string | number | null | undefined): number => {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === 'number') return value;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && value.trim() !== '') return numeric;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const compareMessages = (a: Message, b: Message): number =>
+  toMillis(a.createdAt) - toMillis(b.createdAt);
+
+const upsertMessage = (list: Message[], incoming: Message): Message[] => {
+  const next = [...list];
+  let index = next.findIndex((message) => message.id === incoming.id);
+  if (index < 0 && incoming.clientId) {
+    index = next.findIndex(
+      (message) => Boolean(message.clientId) && message.clientId === incoming.clientId,
+    );
+  }
+  if (index >= 0) {
+    next[index] = {
+      ...next[index],
+      ...incoming,
+      localStatus: incoming.localStatus,
+      localError: incoming.localError,
+    };
+  } else {
+    next.push(incoming);
+  }
+  return next.sort(compareMessages);
+};
+
+const mergeMessages = (current: Message[], incoming: Message[]): Message[] =>
+  incoming.reduce((list, message) => upsertMessage(list, message), current);
+
+const conversationTimestamp = (conversation: Conversation): number =>
+  conversation.lastMessageAt || toMillis(conversation.lastMessage?.createdAt);
+
+const sortConversations = (list: Conversation[]): Conversation[] =>
+  [...list].sort((a, b) => conversationTimestamp(b) - conversationTimestamp(a));
+
+const generateId = (): string => {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const formatError = (error: unknown, fallback: string): string =>
+  error instanceof Error && error.message ? error.message : fallback;
+
+const typingLabelFor = (names: string[]): string => {
+  if (names.length === 0) return '';
+  if (names.length === 1) return `${names[0]} is typing…`;
+  if (names.length === 2) return `${names[0]} and ${names[1]} are typing…`;
+  return `${names[0]} and ${names.length - 1} others are typing…`;
+};
+
+interface MessagesViewProps {
+  onOpenProfile?: (username: string) => void;
+  resetNonce?: number;
+}
+
+export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, resetNonce = 0 }) => {
   const { currentUser, allUsers } = useAuth();
-  const { theme, accentBgClass } = useTheme();
+  const { socket, connected, onlineUserIds, lastSeenByUser, reconnectNonce } = useRealtime();
+  const { startCall, isBusy: callBusy } = useCall();
+  const { showToast } = useToast();
 
-  const contacts = allUsers.filter((u) => u.id !== currentUser?.id);
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [activeConv, setActiveConv] = useState<Conversation | null>(null);
+  const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [inputText, setInputText] = useState('');
-  const [sending, setSending] = useState(false);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [replyTarget, setReplyTarget] = useState<Message | null>(null);
-  const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
-  const [typingUsers, setTypingUsers] = useState<Map<string, string>>(new Map()); // userId -> username
-  const [showMobileChat, setShowMobileChat] = useState(false);
+  const [typingUsers, setTypingUsers] = useState<Map<string, string>>(new Map());
+  const [pendingAttachments, setPendingAttachments] = useState<PendingMessageAttachment[]>([]);
+  const [showAttachments, setShowAttachments] = useState(false);
+  const [showNewMessage, setShowNewMessage] = useState(false);
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [showGroupDetails, setShowGroupDetails] = useState(false);
-  const [uploadingAttachment, setUploadingAttachment] = useState(false);
-  const [pendingAttachments, setPendingAttachments] = useState<Array<{ id: string; name: string }>>([]);
+  const [showMobileChat, setShowMobileChat] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [inboxFilter, setInboxFilter] = useState<InboxFilter>('all');
+  const [conversationsLoading, setConversationsLoading] = useState(true);
+  const [conversationsError, setConversationsError] = useState('');
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesError, setMessagesError] = useState('');
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [messagesReloadNonce, setMessagesReloadNonce] = useState(0);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [unseenBelow, setUnseenBelow] = useState(false);
+  const [groupDetailsStartAdd, setGroupDetailsStartAdd] = useState(false);
+  const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
+  const [callStarting, setCallStarting] = useState<'voice' | 'video' | null>(null);
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const [lightbox, setLightbox] = useState<LightboxState>({
+    open: false,
+    images: [],
+    downloadUrls: [],
+    index: 0,
+  });
 
-  // Active call state
-  const [activeCall, setActiveCall] = useState<{
-    callId: string;
-    roomName: string;
-    token: string;
-    livekitUrl: string;
-    type: 'voice' | 'video';
-    title: string;
-    isGroup: boolean;
-  } | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const sectionRef = useRef<HTMLElement>(null);
+  const messagesRef = useRef<Message[]>([]);
+  const activeIdRef = useRef<string | null>(null);
+  const shouldStickRef = useRef(true);
+  const prependingRef = useRef(false);
+  const previousCountRef = useRef(0);
 
-  const [incomingCall, setIncomingCall] = useState<{
-    callId: string;
-    roomName: string;
-    type: 'voice' | 'video';
-    caller: { name: string; username: string; avatarUrl: string };
-    conversationId: string;
-  } | null>(null);
+  const typingTimerRef = useRef<number | null>(null);
+  const typingActiveRef = useRef(false);
+  const typingTimeoutsRef = useRef<Map<string, number>>(new Map());
+  const readSentRef = useRef<Set<string>>(new Set());
+  const deliveredSentRef = useRef<Set<string>>(new Set());
+  const uploadControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const retryAssetsRef = useRef<Map<string, string[]>>(new Map());
+  const refreshTimerRef = useRef<number | null>(null);
+  const previousConversationIdRef = useRef<string | null>(null);
+  const reconciliationNonceRef = useRef(reconnectNonce);
+  const highlightTimerRef = useRef<number | null>(null);
+  const previousSelectedIdRef = useRef<string | null>(null);
+  const draftsLoadedRef = useRef(false);
 
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const socketRef = useRef<Socket | null>(null);
-  const typingTimeoutRef = useRef<number | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Initialize Socket.IO connection
   useEffect(() => {
-    if (!currentUser) return;
-    const socket = io(getBackendApiUrl(), { withCredentials: true });
-    socketRef.current = socket;
+    messagesRef.current = messages;
+  }, [messages]);
 
-    socket.on('connect', () => {
-      socket.emit('presence:query', {}, (res: { onlineUserIds?: string[] }) => {
-        if (res?.onlineUserIds) setOnlineUserIds(new Set(res.onlineUserIds));
-      });
-    });
+  useEffect(() => {
+    activeIdRef.current = activeConversation?.id ?? null;
+  }, [activeConversation?.id]);
 
-    socket.on('presence:update', (data: { userId: string; isOnline: boolean }) => {
-      setOnlineUserIds((prev) => {
-        const next = new Set(prev);
-        if (data.isOnline) next.add(data.userId);
-        else next.delete(data.userId);
-        return next;
-      });
-    });
+  const draftStorageKey = currentUser?.id ? `zunari:message-drafts:${currentUser.id}` : null;
 
-    socket.on('call:incoming', (event: any) => {
-      if (event.caller.id !== currentUser.id) {
-        setIncomingCall({
-          callId: event.callId,
-          roomName: event.roomName,
-          type: event.type,
-          caller: event.caller,
-          conversationId: event.conversationId,
-        });
+  useEffect(() => {
+    draftsLoadedRef.current = false;
+    if (!draftStorageKey) return;
+    try {
+      const raw = window.localStorage.getItem(draftStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          const next: Record<string, string> = {};
+          for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+            if (typeof value === 'string') next[key] = value;
+          }
+          setDrafts(next);
+        }
       }
-    });
+    } catch {
+      // Draft persistence is best-effort.
+    } finally {
+      draftsLoadedRef.current = true;
+    }
+  }, [draftStorageKey]);
 
-    socket.on('call:ended', () => {
-      setActiveCall(null);
-      setIncomingCall(null);
+  useEffect(() => {
+    if (!draftStorageKey || !draftsLoadedRef.current) return;
+    try {
+      if (Object.keys(drafts).length === 0) window.localStorage.removeItem(draftStorageKey);
+      else window.localStorage.setItem(draftStorageKey, JSON.stringify(drafts));
+    } catch {
+      // Storage can be unavailable in private browsing.
+    }
+  }, [drafts, draftStorageKey]);
+
+  useEffect(() => {
+    if (!resetNonce) return;
+    if (!window.matchMedia('(max-width: 767px)').matches) return;
+    setShowMobileChat(false);
+    setActiveConversation(null);
+  }, [resetNonce]);
+
+  useEffect(() => {
+    if (!showMobileChat || !activeConversation?.id) return;
+    if (!window.matchMedia('(max-width: 767px)').matches) return;
+    const timer = window.setTimeout(() => {
+      sectionRef.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus();
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [showMobileChat, activeConversation?.id]);
+
+  useEffect(() => {
+    if (showMobileChat) return;
+    const previousId = previousSelectedIdRef.current;
+    if (!previousId || !window.matchMedia('(max-width: 767px)').matches) return;
+    const timer = window.setTimeout(() => {
+      listRef.current
+        ?.querySelector<HTMLButtonElement>(`[data-conversation-id="${CSS.escape(previousId)}"]`)
+        ?.focus();
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [showMobileChat]);
+
+  useEffect(
+    () => () => {
+      if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
+    },
+    [],
+  );
+
+  const fetchConversations = useCallback(async (silent = false) => {
+    if (!silent) setConversationsLoading(true);
+    try {
+      const response = await api.getConversations();
+      const list = sortConversations(response.conversations || []);
+      setConversations(list);
+      setConversationsError('');
+      setActiveConversation((previous) => {
+        if (previous) {
+          return list.find((conversation) => conversation.id === previous.id) ?? null;
+        }
+        const canAutoSelect =
+          typeof window !== 'undefined' &&
+          window.matchMedia('(min-width: 768px)').matches;
+        return canAutoSelect ? list[0] ?? null : null;
+      });
+    } catch (error) {
+      if (!silent) {
+        setConversationsError(formatError(error, 'Unable to load conversations.'));
+      }
+    } finally {
+      if (!silent) setConversationsLoading(false);
+    }
+  }, []);
+
+  const scheduleConversationRefresh = useCallback(() => {
+    if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null;
+      void fetchConversations(true);
+    }, 700);
+  }, [fetchConversations]);
+
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    void fetchConversations();
+  }, [currentUser?.id, reconnectNonce, fetchConversations]);
+
+  useEffect(
+    () => () => {
+      if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current);
+    },
+    [],
+  );
+
+  const sendReceipts = useCallback(
+    (conversationId: string, type: 'delivered' | 'read', source: Message[]) => {
+      if (!currentUser?.id) return;
+      const registry = type === 'read' ? readSentRef.current : deliveredSentRef.current;
+      const ids = source
+        .filter((message) => message.senderId && message.senderId !== currentUser.id)
+        .filter((message) => !message.localStatus && !message.id.startsWith('local-'))
+        .filter((message) => {
+          if (registry.has(message.id)) return false;
+          if (type === 'read') {
+            return !message.receipts?.some(
+              (receipt) => receipt.userId === currentUser.id && receipt.readAt,
+            );
+          }
+          return !message.receipts?.some(
+            (receipt) => receipt.userId === currentUser.id && receipt.deliveredAt,
+          );
+        })
+        .map((message) => message.id);
+
+      if (ids.length === 0) return;
+      ids.forEach((id) => registry.add(id));
+      void api
+        .sendReceipts(conversationId, type, ids)
+        .then(() => {
+          if (type === 'read') {
+            setConversations((previous) =>
+              previous.map((conversation) =>
+                conversation.id === conversationId
+                  ? { ...conversation, unreadCount: 0 }
+                  : conversation,
+              ),
+            );
+          }
+        })
+        .catch(() => {
+          ids.forEach((id) => registry.delete(id));
+        });
+    },
+    [currentUser?.id],
+  );
+
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && activeIdRef.current) {
+        sendReceipts(activeIdRef.current, 'read', messagesRef.current);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [sendReceipts]);
+
+  const clearPendingAttachments = useCallback(() => {
+    uploadControllersRef.current.forEach((controller) => controller.abort());
+    uploadControllersRef.current.clear();
+    setPendingAttachments((previous) => {
+      previous.forEach((item) => {
+        if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      });
+      return [];
     });
+    setShowAttachments(false);
+  }, []);
+
+  const emitTypingStop = useCallback(
+    (conversationId?: string) => {
+      if (typingTimerRef.current !== null) {
+        window.clearTimeout(typingTimerRef.current);
+        typingTimerRef.current = null;
+      }
+      const target = conversationId || activeIdRef.current;
+      if (typingActiveRef.current && socket && target) {
+        socket.emit('typing:stop', { conversationId: target });
+      }
+      typingActiveRef.current = false;
+    },
+    [socket],
+  );
+
+  useEffect(() => {
+    if (previousConversationIdRef.current === (activeConversation?.id ?? null)) return;
+    if (previousConversationIdRef.current) {
+      emitTypingStop(previousConversationIdRef.current);
+      clearPendingAttachments();
+      setReplyTarget(null);
+      setTypingUsers(new Map());
+      retryAssetsRef.current.clear();
+      typingTimeoutsRef.current.forEach((timer) => window.clearTimeout(timer));
+      typingTimeoutsRef.current.clear();
+    }
+    previousConversationIdRef.current = activeConversation?.id ?? null;
+    if (!activeConversation?.id) setShowMobileChat(false);
+  }, [activeConversation?.id, clearPendingAttachments, emitTypingStop]);
+
+  useEffect(
+    () => () => {
+      emitTypingStop();
+      clearPendingAttachments();
+      typingTimeoutsRef.current.forEach((timer) => window.clearTimeout(timer));
+      typingTimeoutsRef.current.clear();
+    },
+    [clearPendingAttachments, emitTypingStop],
+  );
+
+  useEffect(() => {
+    if (!activeConversation || !currentUser?.id) {
+      setMessages([]);
+      setMessagesLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const conversationId = activeConversation.id;
+    readSentRef.current.clear();
+    deliveredSentRef.current.clear();
+    setMessages([]);
+    setMessagesLoading(true);
+    setMessagesError('');
+    setHasMore(true);
+    prependingRef.current = false;
+    previousCountRef.current = 0;
+    shouldStickRef.current = true;
+
+    void (async () => {
+      try {
+        const response = await api.getConversationMessages(conversationId, undefined, PAGE_SIZE);
+        if (cancelled) return;
+        const list = response.messages || [];
+        setMessages(list);
+        setHasMore(list.length >= PAGE_SIZE);
+        setMessagesLoading(false);
+        shouldStickRef.current = true;
+        window.requestAnimationFrame(() => {
+          const element = scrollRef.current;
+          if (element) element.scrollTop = element.scrollHeight;
+        });
+        sendReceipts(
+          conversationId,
+          document.visibilityState === 'visible' ? 'read' : 'delivered',
+          list,
+        );
+      } catch (error) {
+        if (!cancelled) {
+          setMessagesError(formatError(error, 'Unable to load this conversation.'));
+          setMessagesLoading(false);
+        }
+      }
+    })();
 
     return () => {
-      socket.disconnect();
-      socketRef.current = null;
+      cancelled = true;
     };
-  }, [currentUser?.id]);
-
-  // Load conversations
-  const fetchConversations = async () => {
-    try {
-      const res = await api.getConversations();
-      setConversations(res.conversations || []);
-      if (!activeConv && res.conversations?.length > 0) {
-        setActiveConv(res.conversations[0]);
-      }
-    } catch (err) {
-      console.warn('Failed to fetch conversations:', err);
-    }
-  };
+  }, [activeConversation?.id, currentUser?.id, messagesReloadNonce, sendReceipts]);
 
   useEffect(() => {
-    if (currentUser) {
-      fetchConversations();
-    }
-  }, [currentUser?.id]);
-
-  // Handle active conversation subscription & messages loading
-  useEffect(() => {
-    if (!activeConv || !currentUser) return;
-    let active = true;
-
-    const socket = socketRef.current;
-    if (socket?.connected) {
-      socket.emit('conversation:join', { conversationId: activeConv.id });
-    }
-
-    const loadMessages = async () => {
+    if (!activeConversation?.id || !currentUser?.id) return;
+    if (reconnectNonce === reconciliationNonceRef.current) return;
+    reconciliationNonceRef.current = reconnectNonce;
+    if (!connected) return;
+    let cancelled = false;
+    void (async () => {
       try {
-        const res = await api.getConversationMessages(activeConv.id);
-        if (active) {
-          setMessages(res.messages || []);
-          // Send read receipts for unread messages
-          const unreadIds = (res.messages || [])
-            .filter((m) => m.senderId !== currentUser.id)
-            .map((m) => m.id);
-          if (unreadIds.length > 0) {
-            void api.sendReceipts(activeConv.id, 'read', unreadIds);
-          }
+        const response = await api.getConversationMessages(
+          activeConversation.id,
+          undefined,
+          PAGE_SIZE,
+        );
+        if (cancelled) return;
+        const latest = response.messages || [];
+        setMessages((previous) => mergeMessages(previous, latest));
+        sendReceipts(
+          activeConversation.id,
+          document.visibilityState === 'visible' ? 'read' : 'delivered',
+          latest,
+        );
+      } catch {
+        // The socket reconnect already restored the live channel; a later event or manual reload will reconcile.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    reconnectNonce,
+    connected,
+    activeConversation?.id,
+    currentUser?.id,
+    sendReceipts,
+  ]);
+
+  useEffect(() => {
+    if (!socket || !activeConversation?.id || !currentUser?.id) return;
+    const conversationId = activeConversation.id;
+
+    const join = () => {
+      socket.emit('conversation:join', { conversationId }, (response?: { success?: boolean }) => {
+        if (response && response.success === false) {
+          showToast('You no longer have access to this conversation.', 'error');
         }
-      } catch (err) {
-        console.warn('Failed to load conversation messages:', err);
+      });
+    };
+
+    if (socket.connected) join();
+    else socket.on('connect', join);
+
+    const handleMessage = (incoming: Message) => {
+      if (incoming.conversationId && incoming.conversationId !== conversationId) return;
+      setMessages((previous) => upsertMessage(previous, incoming));
+      const isOwn = incoming.senderId === currentUser.id;
+      setConversations((previous) =>
+        sortConversations(
+          previous.map((conversation) =>
+            conversation.id === conversationId
+              ? {
+                  ...conversation,
+                  lastMessage: incoming,
+                  lastMessageAt: toMillis(incoming.createdAt),
+                  unreadCount: isOwn
+                    ? conversation.unreadCount
+                    : document.visibilityState === 'visible'
+                      ? 0
+                      : (conversation.unreadCount || 0) + 1,
+                }
+              : conversation,
+          ),
+        ),
+      );
+      if (!isOwn) {
+        if (!shouldStickRef.current) setUnseenBelow(true);
+        if (document.visibilityState === 'visible') {
+          sendReceipts(conversationId, 'read', [incoming]);
+        } else {
+          sendReceipts(conversationId, 'delivered', [incoming]);
+        }
       }
     };
 
-    loadMessages();
-
-    // Event handlers
-    const handleNewMessage = (msg: Message) => {
-      if (msg.conversationId === activeConv.id) {
-        setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
-        if (msg.senderId !== currentUser.id) {
-          void api.sendReceipts(activeConv.id, 'read', [msg.id]);
-        }
-      }
-      void fetchConversations();
-    };
-
-    const handleMessageEdit = (updatedMsg: Message) => {
-      setMessages((prev) => prev.map((m) => (m.id === updatedMsg.id ? updatedMsg : m)));
-    };
-
-    const handleMessageDelete = (data: { conversationId: string; messageId: string }) => {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === data.messageId ? { ...m, isDeleted: true, text: 'This message was deleted.' } : m,
+    const handleEdit = (updated: Message) => {
+      setMessages((previous) => upsertMessage(previous, updated));
+      setConversations((previous) =>
+        previous.map((conversation) =>
+          conversation.lastMessage?.id === updated.id
+            ? { ...conversation, lastMessage: updated }
+            : conversation,
         ),
       );
     };
 
-    const handleTyping = (event: { conversationId: string; userId: string; username: string; isTyping: boolean }) => {
-      if (event.conversationId !== activeConv.id || event.userId === currentUser.id) return;
-      setTypingUsers((prev) => {
-        const next = new Map(prev);
-        if (event.isTyping) next.set(event.userId, event.username);
+    const handleDelete = (data: { conversationId: string; messageId: string }) => {
+      setMessages((previous) =>
+        previous.map((message) =>
+          message.id === data.messageId
+            ? {
+                ...message,
+                isDeleted: true,
+                text: 'This message was deleted.',
+                attachments: [],
+                reactions: [],
+              }
+            : message,
+        ),
+      );
+      scheduleConversationRefresh();
+    };
+
+    const handleTyping = (event: {
+      conversationId: string;
+      userId: string;
+      username: string;
+      isTyping: boolean;
+    }) => {
+      if (event.conversationId !== conversationId || event.userId === currentUser.id) return;
+      const name = event.username || 'Someone';
+      setTypingUsers((previous) => {
+        const next = new Map(previous);
+        if (event.isTyping) next.set(event.userId, name);
         else next.delete(event.userId);
         return next;
       });
+      const existing = typingTimeoutsRef.current.get(event.userId);
+      if (existing) window.clearTimeout(existing);
+      if (event.isTyping) {
+        const timer = window.setTimeout(() => {
+          setTypingUsers((previous) => {
+            const next = new Map(previous);
+            next.delete(event.userId);
+            return next;
+          });
+          typingTimeoutsRef.current.delete(event.userId);
+        }, 6000);
+        typingTimeoutsRef.current.set(event.userId, timer);
+      } else {
+        typingTimeoutsRef.current.delete(event.userId);
+      }
     };
 
-    const handleReceipt = (event: { conversationId: string; userId: string; messageIds: string[]; receiptType: string }) => {
-      if (event.conversationId !== activeConv.id) return;
-      setMessages((prev) =>
-        prev.map((msg) => {
-          if (event.messageIds.includes(msg.id)) {
-            const receipts = msg.receipts || [];
-            const existing = receipts.find((r) => r.userId === event.userId);
-            const now = Date.now();
-            const updatedReceipts = existing
-              ? receipts.map((r) =>
-                  r.userId === event.userId
-                    ? { ...r, deliveredAt: r.deliveredAt || now, ...(event.receiptType === 'read' ? { readAt: now } : {}) }
-                    : r,
-                )
-              : [...receipts, { userId: event.userId, deliveredAt: now, readAt: event.receiptType === 'read' ? now : null }];
-            return { ...msg, receipts: updatedReceipts };
-          }
-          return msg;
+    const handleReceipt = (event: {
+      conversationId: string;
+      userId: string;
+      messageIds: string[];
+      receiptType: 'delivered' | 'read';
+    }) => {
+      if (event.conversationId !== conversationId) return;
+      const now = Date.now();
+      setMessages((previous) =>
+        previous.map((message) => {
+          if (!event.messageIds.includes(message.id)) return message;
+          const receipts = message.receipts || [];
+          const existing = receipts.find((receipt) => receipt.userId === event.userId);
+          const updated = existing
+            ? receipts.map((receipt) =>
+                receipt.userId === event.userId
+                  ? {
+                      ...receipt,
+                      deliveredAt: receipt.deliveredAt || now,
+                      readAt:
+                        event.receiptType === 'read' ? receipt.readAt || now : receipt.readAt,
+                    }
+                  : receipt,
+              )
+            : [
+                ...receipts,
+                {
+                  userId: event.userId,
+                  deliveredAt: now,
+                  readAt: event.receiptType === 'read' ? now : null,
+                },
+              ];
+          return { ...message, receipts: updated };
         }),
       );
     };
 
-    const handleReaction = (event: { conversationId: string; messageId: string; userId: string; emoji: string; added: boolean }) => {
-      if (event.conversationId !== activeConv.id) return;
-      setMessages((prev) =>
-        prev.map((msg) => {
-          if (msg.id === event.messageId) {
-            const reactions = msg.reactions || [];
-            const filtered = reactions.filter((r) => !(r.userId === event.userId && r.emoji === event.emoji));
-            return {
-              ...msg,
-              reactions: event.added
-                ? [...filtered, { emoji: event.emoji, userId: event.userId, createdAt: Date.now() }]
-                : filtered,
-            };
-          }
-          return msg;
+    const handleReaction = (event: {
+      conversationId: string;
+      messageId: string;
+      userId: string;
+      username: string;
+      emoji: string;
+      added: boolean;
+    }) => {
+      if (event.conversationId !== conversationId) return;
+      setMessages((previous) =>
+        previous.map((message) => {
+          if (message.id !== event.messageId) return message;
+          const reactions = (message.reactions || []).filter(
+            (reaction) => !(reaction.userId === event.userId && reaction.emoji === event.emoji),
+          );
+          return {
+            ...message,
+            reactions: event.added
+              ? [
+                  ...reactions,
+                  {
+                    emoji: event.emoji,
+                    userId: event.userId,
+                    username: event.username,
+                    createdAt: Date.now(),
+                  },
+                ]
+              : reactions,
+          };
         }),
       );
     };
 
-    socket?.on('conversation:message', handleNewMessage);
-    socket?.on('conversation:message-edit', handleMessageEdit);
-    socket?.on('conversation:message-delete', handleMessageDelete);
-    socket?.on('conversation:typing', handleTyping);
-    socket?.on('conversation:receipt', handleReceipt);
-    socket?.on('conversation:reaction', handleReaction);
+    socket.on('conversation:message', handleMessage);
+    socket.on('conversation:message-edit', handleEdit);
+    socket.on('conversation:message-delete', handleDelete);
+    socket.on('conversation:typing', handleTyping);
+    socket.on('conversation:receipt', handleReceipt);
+    socket.on('conversation:reaction', handleReaction);
 
     return () => {
-      active = false;
-      if (socket?.connected) {
-        socket.emit('conversation:leave', { conversationId: activeConv.id });
-      }
-      socket?.off('conversation:message', handleNewMessage);
-      socket?.off('conversation:message-edit', handleMessageEdit);
-      socket?.off('conversation:message-delete', handleMessageDelete);
-      socket?.off('conversation:typing', handleTyping);
-      socket?.off('conversation:receipt', handleReceipt);
-      socket?.off('conversation:reaction', handleReaction);
+      if (socket.connected) socket.emit('conversation:leave', { conversationId });
+      socket.off('connect', join);
+      socket.off('conversation:message', handleMessage);
+      socket.off('conversation:message-edit', handleEdit);
+      socket.off('conversation:message-delete', handleDelete);
+      socket.off('conversation:typing', handleTyping);
+      socket.off('conversation:receipt', handleReceipt);
+      socket.off('conversation:reaction', handleReaction);
+      typingTimeoutsRef.current.forEach((timer) => window.clearTimeout(timer));
+      typingTimeoutsRef.current.clear();
+      setTypingUsers(new Map());
     };
-  }, [activeConv?.id, currentUser?.id]);
+  }, [
+    socket,
+    activeConversation?.id,
+    currentUser?.id,
+    reconnectNonce,
+    sendReceipts,
+    scheduleConversationRefresh,
+    showToast,
+  ]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, typingUsers]);
+    if (!socket || !currentUser?.id) return;
 
-  // Handle typing emissions
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setInputText(e.target.value);
-    if (!socketRef.current || !activeConv) return;
+    const handleNotification = (payload: { conversationId: string; message: Message }) => {
+      if (!payload?.conversationId || !payload.message) return;
+      if (payload.conversationId === activeIdRef.current) {
+        scheduleConversationRefresh();
+        return;
+      }
+      setConversations((previous) => {
+        const exists = previous.some(
+          (conversation) => conversation.id === payload.conversationId,
+        );
+        if (!exists) {
+          scheduleConversationRefresh();
+          return previous;
+        }
+        return sortConversations(
+          previous.map((conversation) =>
+            conversation.id === payload.conversationId
+              ? {
+                  ...conversation,
+                  lastMessage: payload.message,
+                  lastMessageAt: toMillis(payload.message.createdAt),
+                  unreadCount:
+                    payload.message.senderId === currentUser.id
+                      ? conversation.unreadCount
+                      : (conversation.unreadCount || 0) + 1,
+                }
+              : conversation,
+          ),
+        );
+      });
+      scheduleConversationRefresh();
+    };
 
-    socketRef.current.emit('typing:start', { conversationId: activeConv.id });
-    if (typingTimeoutRef.current) window.clearTimeout(typingTimeoutRef.current);
-    typingTimeoutRef.current = window.setTimeout(() => {
-      socketRef.current?.emit('typing:stop', { conversationId: activeConv.id });
-    }, 2000);
+    const handleEdit = (message: Message) => {
+      setConversations((previous) =>
+        previous.map((conversation) =>
+          conversation.lastMessage?.id === message.id
+            ? { ...conversation, lastMessage: message }
+            : conversation,
+        ),
+      );
+    };
+
+    const handleDelete = (payload: { conversationId: string; messageId: string }) => {
+      setConversations((previous) =>
+        previous.map((conversation) =>
+          conversation.id === payload.conversationId &&
+          conversation.lastMessage?.id === payload.messageId
+            ? {
+                ...conversation,
+                lastMessage: {
+                  ...conversation.lastMessage,
+                  text: 'This message was deleted.',
+                  isDeleted: true,
+                  attachments: [],
+                },
+              }
+            : conversation,
+        ),
+      );
+      scheduleConversationRefresh();
+    };
+
+    socket.on('conversation:message-notification', handleNotification);
+    socket.on('conversation:message-edit', handleEdit);
+    socket.on('conversation:message-delete', handleDelete);
+
+    return () => {
+      socket.off('conversation:message-notification', handleNotification);
+      socket.off('conversation:message-edit', handleEdit);
+      socket.off('conversation:message-delete', handleDelete);
+    };
+  }, [socket, currentUser?.id, scheduleConversationRefresh]);
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    const previous = previousCountRef.current;
+    previousCountRef.current = messages.length;
+    if (prependingRef.current) {
+      prependingRef.current = false;
+      return;
+    }
+    if (messages.length === 0) return;
+    if (previous === 0) {
+      element.scrollTop = element.scrollHeight;
+      shouldStickRef.current = true;
+      return;
+    }
+    if (shouldStickRef.current) {
+      element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' });
+    }
+  }, [messages]);
+
+  const handleScroll = () => {
+    const element = scrollRef.current;
+    if (!element) return;
+    const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 140;
+    shouldStickRef.current = nearBottom;
+    if (nearBottom) setUnseenBelow(false);
   };
 
-  const handleSend = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if ((!inputText.trim() && pendingAttachments.length === 0) || !activeConv || sending) return;
+  const scrollToLatest = useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    element.scrollTo({ top: element.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' });
+    shouldStickRef.current = true;
+    setUnseenBelow(false);
+  }, []);
+
+  const jumpToMessage = useCallback(
+    (messageId: string) => {
+      if (!messagesRef.current.some((message) => message.id === messageId)) {
+        showToast('That message is not loaded. Load earlier messages to view it.', 'info');
+        return;
+      }
+      setHighlightedMessageId(messageId);
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      window.requestAnimationFrame(() => {
+        document.getElementById(`message-${messageId}`)?.scrollIntoView({
+          behavior: reduceMotion ? 'auto' : 'smooth',
+          block: 'center',
+        });
+      });
+      if (highlightTimerRef.current !== null) window.clearTimeout(highlightTimerRef.current);
+      highlightTimerRef.current = window.setTimeout(() => setHighlightedMessageId(null), 1800);
+    },
+    [showToast],
+  );
+
+  const handleSelectConversation = (conversation: Conversation) => {
+    previousSelectedIdRef.current = conversation.id;
+    setActiveConversation(conversation);
+    setShowMobileChat(true);
+    setShowAttachments(false);
+    setReplyTarget(null);
+    setTypingUsers(new Map());
+    setHighlightedMessageId(null);
+    setUnseenBelow(false);
+    shouldStickRef.current = true;
+    if (document.visibilityState === 'visible' && conversation.unreadCount > 0) {
+      setConversations((previous) =>
+        previous.map((item) =>
+          item.id === conversation.id ? { ...item, unreadCount: 0 } : item,
+        ),
+      );
+    }
+  };
+
+  const handleLoadOlder = async () => {
+    if (!activeConversation || loadingOlder || !hasMore || messages.length === 0) return;
+    const oldest = messages[0];
+    const element = scrollRef.current;
+    const previousHeight = element?.scrollHeight ?? 0;
+    const previousTop = element?.scrollTop ?? 0;
+    setLoadingOlder(true);
+    try {
+      const response = await api.getConversationMessages(
+        activeConversation.id,
+        oldest.id,
+        PAGE_SIZE,
+      );
+      const older = response.messages || [];
+      prependingRef.current = true;
+      setMessages((previous) => mergeMessages(previous, older));
+      setHasMore(older.length >= PAGE_SIZE);
+      const currentUserId = currentUser?.id;
+      if (currentUserId) {
+        const olderIncoming = older.filter((message) => message.senderId !== currentUserId);
+        if (olderIncoming.length > 0) {
+          sendReceipts(activeConversation.id, 'read', olderIncoming);
+        }
+      }
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          const nextElement = scrollRef.current;
+          if (nextElement) {
+            nextElement.scrollTop = nextElement.scrollHeight - previousHeight + previousTop;
+          }
+        });
+      });
+    } catch (error) {
+      showToast(formatError(error, 'Unable to load earlier messages.'), 'error');
+    } finally {
+      setLoadingOlder(false);
+    }
+  };
+
+  const handleTextChange = (value: string) => {
+    if (!activeConversation) return;
+    setDrafts((previous) => ({ ...previous, [activeConversation.id]: value }));
+    if (!value.trim()) {
+      emitTypingStop();
+      return;
+    }
+    if (!socket || !socket.connected) return;
+    if (!typingActiveRef.current) {
+      socket.emit('typing:start', { conversationId: activeConversation.id });
+      typingActiveRef.current = true;
+    }
+    if (typingTimerRef.current !== null) window.clearTimeout(typingTimerRef.current);
+    typingTimerRef.current = window.setTimeout(() => {
+      socket.emit('typing:stop', { conversationId: activeConversation.id });
+      typingActiveRef.current = false;
+      typingTimerRef.current = null;
+    }, TYPING_STOP_MS);
+  };
+
+  const handleSend = async () => {
+    if (!activeConversation || !currentUser || sendingRef.current) return;
+    if (!connected) {
+      showToast('You are offline. Reconnect to send this message.', 'info');
+      return;
+    }
+    const conversationId = activeConversation.id;
+    const text = (drafts[conversationId] || '').trim();
+    const ready = pendingAttachments.filter(
+      (item) => item.status === 'ready' && item.assetId,
+    );
+    if (pendingAttachments.some((item) => item.status !== 'ready')) {
+      showToast('Wait for uploads to finish, or remove failed attachments.', 'info');
+      setShowAttachments(true);
+      return;
+    }
+    if (!text && ready.length === 0) return;
+
+    const clientId = generateId();
+    const optimisticId = `local-${clientId}`;
+    const createdAt = Date.now();
+    const optimisticAttachments: MessageAttachment[] = ready.map((item) => ({
+      id: item.localId,
+      messageId: optimisticId,
+      mediaAssetId: item.assetId || '',
+      filename: item.name,
+      mimeType: item.mimeType,
+      byteSize: item.size,
+      status: 'active',
+      expiresAt: createdAt + 7 * 24 * 60 * 60 * 1000,
+      createdAt,
+      url: item.url || '',
+    }));
+    const reply = replyTarget;
+    const optimistic: Message = {
+      id: optimisticId,
+      conversationId,
+      senderId: currentUser.id,
+      sender: currentUser,
+      clientId,
+      text,
+      replyToMessageId: reply?.id ?? null,
+      replyToMessage: reply
+        ? {
+            id: reply.id,
+            senderId: reply.senderId ?? null,
+            senderUsername: reply.sender?.username,
+            text:
+              reply.text ||
+              (reply.attachments?.length ? 'Attachment' : 'Message'),
+          }
+        : null,
+      createdAt,
+      attachments: optimisticAttachments,
+      reactions: [],
+      receipts: [],
+      localStatus: 'sending',
+    };
+
+    if (ready.length > 0) {
+      retryAssetsRef.current.set(
+        clientId,
+        ready.map((item) => item.assetId as string),
+      );
+    }
+
+    setMessages((previous) => [...previous, optimistic]);
+    setDrafts((previous) => ({ ...previous, [conversationId]: '' }));
+    setReplyTarget(null);
+    setPendingAttachments((previous) => {
+      previous.forEach((item) => {
+        if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      });
+      return [];
+    });
+    setShowAttachments(false);
+    emitTypingStop();
+    shouldStickRef.current = true;
+    sendingRef.current = true;
+    setSending(true);
 
     try {
-      setSending(true);
-      const res = await api.sendConversationMessage(activeConv.id, {
-        text: inputText.trim(),
-        replyToMessageId: replyTarget?.id,
-        attachmentAssetIds: pendingAttachments.map((a) => a.id),
+      const response = await api.sendConversationMessage(conversationId, {
+        text,
+        clientId,
+        replyToMessageId: reply?.id,
+        attachmentAssetIds: ready.length > 0 ? ready.map((item) => item.assetId as string) : undefined,
       });
-      setMessages((prev) => (prev.some((m) => m.id === res.message.id) ? prev : [...prev, res.message]));
-      setInputText('');
-      setReplyTarget(null);
-      setPendingAttachments([]);
-      socketRef.current?.emit('typing:stop', { conversationId: activeConv.id });
-      void fetchConversations();
-    } catch (err) {
-      console.warn('Failed to send message:', err);
+      setMessages((previous) => upsertMessage(previous, response.message));
+      retryAssetsRef.current.delete(clientId);
+      setConversations((previous) =>
+        sortConversations(
+          previous.map((conversation) =>
+            conversation.id === conversationId
+              ? {
+                  ...conversation,
+                  lastMessage: response.message,
+                  lastMessageAt: toMillis(response.message.createdAt),
+                }
+              : conversation,
+          ),
+        ),
+      );
+    } catch (error) {
+      const message = formatError(error, 'Message could not be sent.');
+      setMessages((previous) =>
+        previous.map((item) =>
+          item.id === optimisticId
+            ? { ...item, localStatus: 'failed', localError: message }
+            : item,
+        ),
+      );
+      showToast(message, 'error');
     } finally {
+      sendingRef.current = false;
       setSending(false);
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    try {
-      setUploadingAttachment(true);
-      const res = await api.uploadFile(file, 'message-attachment');
-      setPendingAttachments((prev) => [...prev, { id: res.fileId, name: file.name }]);
-    } catch (err: any) {
-      alert(err?.message || 'Upload failed');
-    } finally {
-      setUploadingAttachment(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+  const handleRetry = async (message: Message) => {
+    if (!activeConversation || message.localStatus !== 'failed' || sendingRef.current) return;
+    const clientId = message.clientId || generateId();
+    if (!message.clientId) {
+      setMessages((previous) =>
+        previous.map((item) =>
+          item.id === message.id ? { ...item, clientId } : item,
+        ),
+      );
     }
+    setMessages((previous) =>
+      previous.map((item) =>
+        item.id === message.id
+          ? { ...item, localStatus: 'sending', localError: undefined }
+          : item,
+      ),
+    );
+    sendingRef.current = true;
+    setSending(true);
+    try {
+      const response = await api.sendConversationMessage(activeConversation.id, {
+        text: message.text,
+        clientId,
+        replyToMessageId: message.replyToMessageId || undefined,
+        attachmentAssetIds: retryAssetsRef.current.get(clientId),
+      });
+      setMessages((previous) => upsertMessage(previous, response.message));
+      retryAssetsRef.current.delete(clientId);
+    } catch (error) {
+      const failure = formatError(error, 'Message could not be sent.');
+      setMessages((previous) =>
+        previous.map((item) =>
+          item.id === message.id
+            ? { ...item, localStatus: 'failed', localError: failure }
+            : item,
+        ),
+      );
+      showToast(failure, 'error');
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
+    }
+  };
+
+  const handleEditMessage = async (messageId: string, text: string) => {
+    if (!activeConversation) return;
+    try {
+      const response = await api.editConversationMessage(
+        activeConversation.id,
+        messageId,
+        text,
+      );
+      setMessages((previous) => upsertMessage(previous, response.message));
+    } catch (error) {
+      showToast(formatError(error, 'Unable to edit this message.'), 'error');
+    }
+  };
+
+  const handleDeleteMessage = async (messageId: string) => {
+    if (!activeConversation) return;
+    const target = messagesRef.current.find((message) => message.id === messageId);
+    if (target?.localStatus) {
+      if (target.clientId) retryAssetsRef.current.delete(target.clientId);
+      setMessages((previous) => previous.filter((message) => message.id !== messageId));
+      showToast('Unsent message discarded.', 'info');
+      return;
+    }
+    try {
+      await api.deleteConversationMessage(activeConversation.id, messageId);
+      setMessages((previous) =>
+        previous.map((message) =>
+          message.id === messageId
+            ? {
+                ...message,
+                isDeleted: true,
+                text: 'This message was deleted.',
+                attachments: [],
+                reactions: [],
+              }
+            : message,
+        ),
+      );
+    } catch (error) {
+      showToast(formatError(error, 'Unable to delete this message.'), 'error');
+    }
+  };
+
+  const handleReaction = async (messageId: string, emoji: string) => {
+    if (!activeConversation || !currentUser) return;
+    try {
+      const response = await api.toggleMessageReaction(
+        activeConversation.id,
+        messageId,
+        emoji,
+      );
+      setMessages((previous) =>
+        previous.map((message) => {
+          if (message.id !== messageId) return message;
+          const reactions = (message.reactions || []).filter(
+            (reaction) =>
+              !(reaction.userId === currentUser.id && reaction.emoji === emoji),
+          );
+          return {
+            ...message,
+            reactions: response.added
+              ? [
+                  ...reactions,
+                  {
+                    emoji,
+                    userId: currentUser.id,
+                    username: currentUser.username,
+                    createdAt: Date.now(),
+                  },
+                ]
+              : reactions,
+          };
+        }),
+      );
+    } catch (error) {
+      showToast(formatError(error, 'Unable to update the reaction.'), 'error');
+    }
+  };
+
+  const handleCopy = async (text: string) => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand('copy');
+        document.body.removeChild(area);
+      }
+      showToast('Message copied to clipboard.', 'success');
+    } catch {
+      showToast('The message could not be copied.', 'error');
+    }
+  };
+
+  const handleOpenImage = (message: Message, attachment: MessageAttachment) => {
+    const images: Array<{ id: string; url: string }> = [];
+    messagesRef.current.forEach((item) => {
+      (item.attachments || []).forEach((candidate) => {
+        if (candidate.status === 'active' && isImageMime(candidate.mimeType) && candidate.url) {
+          images.push({
+            id: candidate.id,
+            url: api.resolveFileUrl(candidate.url),
+          });
+        }
+      });
+    });
+    const index = images.findIndex((image) => image.id === attachment.id);
+    setLightbox({
+      open: true,
+      images: images.map((image) => image.url),
+      downloadUrls: images.map((image) => image.url),
+      index: index >= 0 ? index : 0,
+    });
+  };
+
+  const handlePickFiles = (files: File[]) => {
+    if (!activeConversation) return;
+    const available = MAX_ATTACHMENTS - pendingAttachments.length;
+    if (available <= 0) {
+      showToast(`You can attach up to ${MAX_ATTACHMENTS} files per message.`, 'info');
+      return;
+    }
+    const accepted: File[] = [];
+    for (const file of files) {
+      if (accepted.length >= available) break;
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        showToast(`${file.name} is larger than 10 MB.`, 'error');
+        continue;
+      }
+      if (!supportsFileType(file.type)) {
+        showToast(`${file.name} is not a supported attachment type.`, 'error');
+        continue;
+      }
+      accepted.push(file);
+    }
+    if (accepted.length === 0) return;
+
+    const items = accepted.map<PendingMessageAttachment>((file) => ({
+      localId: generateId(),
+      file,
+      name: file.name,
+      mimeType: file.type,
+      size: file.size,
+      previewUrl: isImageMime(file.type) ? URL.createObjectURL(file) : undefined,
+      status: 'uploading',
+      progress: 0,
+    }));
+    setPendingAttachments((previous) => [...previous, ...items]);
+    items.forEach((item) => void uploadAttachment(item.localId, item.file));
+  };
+
+  const uploadAttachment = async (localId: string, file: File) => {
+    const controller = new AbortController();
+    uploadControllersRef.current.set(localId, controller);
+    try {
+      const response = await api.uploadFile(file, 'message-attachment', {
+        signal: controller.signal,
+        onProgress: (progress) => {
+          setPendingAttachments((previous) =>
+            previous.map((item) =>
+              item.localId === localId ? { ...item, progress } : item,
+            ),
+          );
+        },
+      });
+      setPendingAttachments((previous) =>
+        previous.map((item) =>
+          item.localId === localId
+            ? {
+                ...item,
+                status: 'ready',
+                progress: 100,
+                assetId: response.fileId,
+                url: response.url,
+                error: undefined,
+              }
+            : item,
+        ),
+      );
+    } catch (error) {
+      if (
+        controller.signal.aborted ||
+        (error instanceof DOMException && error.name === 'AbortError')
+      ) {
+        return;
+      }
+      const message = formatError(error, 'Upload failed.');
+      setPendingAttachments((previous) =>
+        previous.map((item) =>
+          item.localId === localId
+            ? { ...item, status: 'failed', progress: 0, error: message }
+            : item,
+        ),
+      );
+      showToast(`${file.name}: ${message}`, 'error');
+    } finally {
+      uploadControllersRef.current.delete(localId);
+    }
+  };
+
+  const handleCancelUpload = (localId: string) => {
+    uploadControllersRef.current.get(localId)?.abort();
+    uploadControllersRef.current.delete(localId);
+    setPendingAttachments((previous) => {
+      const target = previous.find((item) => item.localId === localId);
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+      return previous.filter((item) => item.localId !== localId);
+    });
+  };
+
+  const handleRetryUpload = (localId: string) => {
+    const target = pendingAttachments.find((item) => item.localId === localId);
+    if (!target || target.status !== 'failed') return;
+    setPendingAttachments((previous) =>
+      previous.map((item) =>
+        item.localId === localId
+          ? { ...item, status: 'uploading', progress: 0, error: undefined }
+          : item,
+      ),
+    );
+    void uploadAttachment(localId, target.file);
+  };
+
+  const handleRemoveAttachment = (localId: string) => {
+    uploadControllersRef.current.get(localId)?.abort();
+    uploadControllersRef.current.delete(localId);
+    setPendingAttachments((previous) => {
+      const target = previous.find((item) => item.localId === localId);
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+      return previous.filter((item) => item.localId !== localId);
+    });
   };
 
   const handleStartDirectChat = async (user: User) => {
-    try {
-      const res = await api.createConversation({ type: 'direct', recipientId: user.id });
-      setActiveConv(res.conversation);
-      setShowMobileChat(true);
-      void fetchConversations();
-    } catch (err) {
-      console.warn('Failed to create direct conversation:', err);
-    }
-  };
-
-  const handleCreateGroup = async (title: string, participantIds: string[]) => {
-    const res = await api.createConversation({ type: 'group', title, participantIds });
-    setActiveConv(res.conversation);
+    const response = await api.createConversation({ type: 'direct', recipientId: user.id });
+    setActiveConversation(response.conversation);
     setShowMobileChat(true);
-    void fetchConversations();
+    await fetchConversations(true);
   };
 
-  const handleLeaveGroup = async () => {
-    if (!activeConv || !currentUser) return;
-    try {
-      await api.removeParticipant(activeConv.id, currentUser.id);
-      setShowGroupDetails(false);
-      setActiveConv(null);
-      void fetchConversations();
-    } catch (err: any) {
-      alert(err?.message || 'Failed to leave group');
-    }
+  const handleCreateGroup = async (
+    title: string,
+    participantIds: string[],
+    avatarUrl?: string,
+  ) => {
+    const response = await api.createConversation({
+      type: 'group',
+      title,
+      participantIds,
+      avatarUrl,
+    });
+    setActiveConversation(response.conversation);
+    setShowMobileChat(true);
+    await fetchConversations(true);
+  };
+
+  const handleUpdateConversation = async (data: { title?: string; avatarUrl?: string }) => {
+    if (!activeConversation) return;
+    const response = await api.updateConversation(activeConversation.id, data);
+    setActiveConversation(response.conversation);
+    setConversations((previous) =>
+      previous.map((conversation) =>
+        conversation.id === response.conversation.id ? response.conversation : conversation,
+      ),
+    );
   };
 
   const handleAddParticipants = async (userIds: string[]) => {
-    if (!activeConv) return;
-    await api.addParticipants(activeConv.id, userIds);
-    const updated = await api.getConversation(activeConv.id);
-    setActiveConv(updated.conversation);
+    if (!activeConversation) return;
+    await api.addParticipants(activeConversation.id, userIds);
+    const response = await api.getConversation(activeConversation.id);
+    setActiveConversation(response.conversation);
+    await fetchConversations(true);
   };
 
   const handleRemoveParticipant = async (userId: string) => {
-    if (!activeConv) return;
-    await api.removeParticipant(activeConv.id, userId);
-    const updated = await api.getConversation(activeConv.id);
-    setActiveConv(updated.conversation);
+    if (!activeConversation) return;
+    await api.removeParticipant(activeConversation.id, userId);
+    const response = await api.getConversation(activeConversation.id);
+    setActiveConversation(response.conversation);
+    await fetchConversations(true);
   };
 
-  // Header metadata
-  const isGroup = activeConv?.type === 'group';
-  const otherParticipant = !isGroup
-    ? activeConv?.participants?.find((p) => p.userId !== currentUser?.id)?.user
-    : null;
-  const isDirectOnline = otherParticipant ? onlineUserIds.has(otherParticipant.id) : false;
+  const handleLeaveGroup = async () => {
+    if (!activeConversation || !currentUser) return;
+    const self = (activeConversation.participants || []).find(
+      (participant) => participant.userId === currentUser.id && !participant.leftAt,
+    );
+    if (self?.role === 'owner') {
+      setConfirmLeave(false);
+      showToast('Transfer ownership to another member before leaving this group.', 'info');
+      return;
+    }
+    await api.removeParticipant(activeConversation.id, currentUser.id);
+    setShowGroupDetails(false);
+    setConfirmLeave(false);
+    setActiveConversation(null);
+    setShowMobileChat(false);
+    showToast('You left the group.', 'success');
+    await fetchConversations(true);
+  };
 
-  const headerBg =
-    theme === 'dark'
-      ? 'bg-[#090B10]/85 border-white/[0.08]'
-      : theme === 'dim'
-        ? 'bg-[#0F172A]/85 border-neutral-700'
-        : 'bg-white/85 border-slate-200';
+  const handleConfirmLeave = async () => {
+    setLeaving(true);
+    try {
+      await handleLeaveGroup();
+    } catch (error) {
+      showToast(formatError(error, 'Unable to leave the group.'), 'error');
+    } finally {
+      setLeaving(false);
+    }
+  };
+
+  const handleMarkRead = () => {
+    if (!activeConversation) return;
+    sendReceipts(activeConversation.id, 'read', messagesRef.current);
+    setConversations((previous) =>
+      previous.map((conversation) =>
+        conversation.id === activeConversation.id
+          ? { ...conversation, unreadCount: 0 }
+          : conversation,
+      ),
+    );
+  };
+
+  const handleStartCall = async (type: 'voice' | 'video') => {
+    if (!activeConversation || !currentUser) return;
+    const isGroup = activeConversation.type === 'group';
+    const direct = getDirectCounterpart(activeConversation, currentUser.id);
+    const members = (activeConversation.participants || []).filter(
+      (participant) => !participant.leftAt,
+    ).length;
+    setCallStarting(type);
+    try {
+      await startCall({
+        conversationId: activeConversation.id,
+        type,
+        title: getConversationTitle(activeConversation, currentUser.id),
+        subtitle: direct?.username ? `@${direct.username}` : undefined,
+        avatarUrl: isGroup
+          ? activeConversation.avatarUrl || undefined
+          : direct?.avatarUrl,
+        isGroup,
+        participantCount: members,
+      });
+    } catch {
+      // CallProvider reports the failure through a toast.
+    } finally {
+      setCallStarting(null);
+    }
+  };
+
+  const contacts = useMemo(
+    () => allUsers.filter((user) => user.id !== currentUser?.id),
+    [allUsers, currentUser?.id],
+  );
+
+  const activeMembers = useMemo(
+    () =>
+      (activeConversation?.participants || []).filter(
+        (participant) => !participant.leftAt,
+      ),
+    [activeConversation?.participants],
+  );
+
+  const isGroup = activeConversation?.type === 'group';
+  const expectedRecipients = Math.max(1, activeMembers.length - 1);
+
+  const filteredConversations = useMemo(() => {
+    const term = searchQuery.trim().toLowerCase();
+    return sortConversations(
+      conversations.filter((conversation) => {
+        if (inboxFilter === 'unread' && conversation.unreadCount <= 0) return false;
+        if (inboxFilter === 'groups' && conversation.type !== 'group') return false;
+        if (!term) return true;
+        const title = getConversationTitle(conversation, currentUser?.id || '');
+        const direct = getDirectCounterpart(conversation, currentUser?.id || '');
+        const haystack = [
+          title,
+          direct?.username || '',
+          direct?.name || '',
+          conversation.lastMessage?.text || '',
+          ...(conversation.participants || []).flatMap((participant) => [
+            participant.user?.name || '',
+            participant.user?.username || '',
+          ]),
+        ]
+          .join(' ')
+          .toLowerCase();
+        return haystack.includes(term);
+      }),
+    );
+  }, [conversations, inboxFilter, searchQuery, currentUser?.id]);
+
+  const renderedMessages = useMemo<RenderedMessage[]>(() => {
+    let previousMessage: Message | null = null;
+    let previousDay = '';
+    return messages.map((message) => {
+      const day = new Date(toMillis(message.createdAt)).toDateString();
+      const showDate = day !== previousDay;
+      const sameSender = Boolean(
+        previousMessage && previousMessage.senderId === message.senderId,
+      );
+      const gap = previousMessage
+        ? toMillis(message.createdAt) - toMillis(previousMessage.createdAt)
+        : Number.POSITIVE_INFINITY;
+      const isOwn = message.senderId === currentUser?.id || Boolean(message.isSender);
+      const continuation = Boolean(!showDate && sameSender && gap < 5 * 60 * 1000);
+      const rendered: RenderedMessage = {
+        message,
+        showDate,
+        dateLabel: showDate ? formatDateSeparator(message.createdAt) : '',
+        showAvatar: !isOwn && !continuation,
+        showName: Boolean(isGroup && !isOwn && !continuation),
+        isContinuation: continuation,
+      };
+      previousMessage = message;
+      previousDay = day;
+      return rendered;
+    });
+  }, [messages, currentUser?.id, isGroup]);
+
+  const typingNames = useMemo(() => Array.from(typingUsers.values()), [typingUsers]);
+  const typingLabel = useMemo(() => typingLabelFor(typingNames), [typingNames]);
+  const unreadTotal = useMemo(
+    () => conversations.reduce((total, conversation) => total + (conversation.unreadCount || 0), 0),
+    [conversations],
+  );
+  const inputText = activeConversation ? drafts[activeConversation.id] || '' : '';
 
   return (
-    <div className="flex h-[calc(100dvh-4rem-env(safe-area-inset-bottom,0px))] min-h-0 overflow-hidden sm:h-screen">
-      {/* Left Conversations & Contacts List */}
-      <div
+    <div className="flex h-[calc(100dvh-4rem-env(safe-area-inset-bottom,0px))] max-h-[100dvh] min-h-0 overflow-hidden sm:h-[100dvh] z-bg">
+      <aside
         className={`${
           showMobileChat ? 'hidden sm:flex' : 'flex'
-        } w-full sm:w-80 md:w-88 border-r border-white/[0.08] flex-col shrink-0`}
+        } w-full sm:w-[19rem] lg:w-[21.5rem] shrink-0 flex-col min-h-0 border-r z-border z-surface`}
+        aria-label="Conversations"
       >
-        <div className={`sticky top-0 z-10 px-4 py-3 border-b ${headerBg} flex items-center justify-between`}>
-          <h1 className="text-lg font-black tracking-tight text-white">Transmissions</h1>
-          <button
-            type="button"
-            onClick={() => setShowCreateGroup(true)}
-            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-neutral-300 hover:text-white transition-colors"
-            title="Create group"
-          >
-            <Users className="w-4 h-4" />
-          </button>
-        </div>
-
-        <div className="min-h-0 overflow-y-auto divide-y divide-white/[0.06] flex-1">
-          {conversations.length === 0 ? (
-            <div className="p-4 text-center">
-              <p className="text-xs text-neutral-500 mb-3">No active transmissions.</p>
-              <span className="text-xs font-semibold text-neutral-400 block mb-2">Start with a contact:</span>
-              <div className="flex flex-col gap-1">
-                {contacts.map((u) => (
-                  <button
-                    key={u.id}
-                    onClick={() => handleStartDirectChat(u)}
-                    className="p-2 flex items-center gap-2 hover:bg-white/5 rounded-xl text-left"
-                  >
-                    <Avatar src={u.avatarUrl} name={u.name} size="sm" isOnline={onlineUserIds.has(u.id)} />
-                    <span className="text-xs text-white truncate">{u.name}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            conversations.map((conv) => {
-              const isSelected = activeConv?.id === conv.id;
-              const isGrp = conv.type === 'group';
-              const directUser = !isGrp
-                ? conv.participants?.find((p) => p.userId !== currentUser?.id)?.user
-                : null;
-              const title = isGrp ? conv.title : directUser?.name || 'Direct Message';
-              const subtitle = conv.lastMessage
-                ? conv.lastMessage.text || (conv.lastMessage.attachments?.length ? 'Sent an attachment' : '')
-                : 'No messages yet';
-              const isOnline = directUser ? onlineUserIds.has(directUser.id) : false;
-
-              return (
-                <div
-                  key={conv.id}
-                  onClick={() => {
-                    setActiveConv(conv);
-                    setShowMobileChat(true);
+        <div className="shrink-0 px-3 pt-3 pb-2 border-b z-border z-safe-top">
+          <div className="flex items-center justify-between gap-2 mb-2.5">
+            <div className="min-w-0">
+              <h1 className="text-lg font-bold z-text z-display tracking-tight">Messages</h1>
+              <p className="text-[10px] z-muted flex items-center gap-1.5 mt-0.5">
+                <span
+                  className="w-1.5 h-1.5 rounded-full"
+                  style={{
+                    backgroundColor: connected ? 'var(--z-success)' : 'var(--z-warning)',
                   }}
-                  className={`p-3.5 flex items-center gap-3 cursor-pointer transition-colors ${
-                    isSelected ? 'bg-white/[0.06]' : 'hover:bg-white/[0.03]'
-                  }`}
-                >
-                  {isGrp ? (
-                    <div className="w-10 h-10 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 font-bold text-sm shrink-0">
-                      {conv.title?.slice(0, 2).toUpperCase() || 'GP'}
-                    </div>
-                  ) : (
-                    <Avatar
-                      src={directUser?.avatarUrl || ''}
-                      name={directUser?.name || ''}
-                      size="md"
-                      isOnline={isOnline}
-                    />
-                  )}
-
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-sm truncate flex items-center gap-1 text-white">
-                        {title}
-                        {directUser && <UserBadges verified={directUser.verified} isGold={directUser.isGold} size="sm" />}
-                      </span>
-                      {conv.unreadCount > 0 && (
-                        <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-cyan-400 text-black">
-                          {conv.unreadCount}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-xs text-neutral-400 truncate mt-0.5">
-                      {subtitle}
-                    </div>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-      </div>
-
-      {/* Right Chat Thread */}
-      <div className={`${!showMobileChat ? 'hidden sm:flex' : 'flex'} flex-col flex-1 h-full min-w-0`}>
-        {activeConv ? (
-          <>
-            {/* Header */}
-            <div className={`px-3 py-2.5 sm:px-4 sm:py-3 border-b ${headerBg} flex items-center justify-between shrink-0`}>
-              <div className="flex items-center gap-3 min-w-0">
-                <button
-                  type="button"
-                  onClick={() => setShowMobileChat(false)}
-                  className="sm:hidden p-1.5 -ml-1 text-neutral-400 hover:text-white"
-                >
-                  <ArrowLeft className="w-5 h-5" />
-                </button>
-
-                {isGroup ? (
-                  <div
-                    onClick={() => setShowGroupDetails(true)}
-                    className="w-8 h-8 rounded-full bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 font-bold text-xs shrink-0 cursor-pointer"
-                  >
-                    {activeConv.title?.slice(0, 2).toUpperCase() || 'GP'}
-                  </div>
-                ) : (
-                  <Avatar
-                    src={otherParticipant?.avatarUrl || ''}
-                    name={otherParticipant?.name || ''}
-                    size="sm"
-                    isOnline={isDirectOnline}
-                  />
-                )}
-
-                <div className="min-w-0">
-                  <div className="font-bold text-sm flex items-center gap-1 text-white truncate">
-                    {isGroup ? activeConv.title : otherParticipant?.name}
-                    {otherParticipant && (
-                      <UserBadges verified={otherParticipant.verified} isGold={otherParticipant.isGold} size="sm" />
-                    )}
-                  </div>
-                  <div className="text-xs text-neutral-500 font-mono">
-                    {isGroup
-                      ? `${activeConv.participants?.filter((p) => !p.leftAt).length} members`
-                      : isDirectOnline
-                        ? 'Online'
-                        : 'Offline'}
-                  </div>
-                </div>
-              </div>
-
-              {/* Call Controls & Group Info Action */}
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      const res = await (api as any).request('/calls/initiate', {
-                        method: 'POST',
-                        body: JSON.stringify({ conversationId: activeConv.id, type: 'voice' }),
-                      });
-                      setActiveCall({
-                        callId: res.call.id,
-                        roomName: res.call.roomName,
-                        token: res.token,
-                        livekitUrl: res.livekitUrl,
-                        type: 'voice',
-                        title: isGroup ? activeConv.title || 'Group Call' : otherParticipant?.name || 'Voice Call',
-                        isGroup,
-                      });
-                    } catch (err: any) {
-                      alert(err?.message || 'Failed to start call');
-                    }
-                  }}
-                  className="p-2 text-neutral-400 hover:text-white rounded-xl hover:bg-white/5 transition-colors"
-                  title="Voice Call"
-                >
-                  <Phone className="w-4 h-4" />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      const res = await (api as any).request('/calls/initiate', {
-                        method: 'POST',
-                        body: JSON.stringify({ conversationId: activeConv.id, type: 'video' }),
-                      });
-                      setActiveCall({
-                        callId: res.call.id,
-                        roomName: res.call.roomName,
-                        token: res.token,
-                        livekitUrl: res.livekitUrl,
-                        type: 'video',
-                        title: isGroup ? activeConv.title || 'Group Call' : otherParticipant?.name || 'Video Call',
-                        isGroup,
-                      });
-                    } catch (err: any) {
-                      alert(err?.message || 'Failed to start video call');
-                    }
-                  }}
-                  className="p-2 text-neutral-400 hover:text-white rounded-xl hover:bg-white/5 transition-colors"
-                  title="Video Call"
-                >
-                  <Video className="w-4 h-4" />
-                </button>
-
-                {isGroup && (
-                  <button
-                    type="button"
-                    onClick={() => setShowGroupDetails(true)}
-                    className="p-2 text-neutral-400 hover:text-white rounded-xl hover:bg-white/5 transition-colors"
-                    title="Group information"
-                  >
-                    <Info className="w-4 h-4" />
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Messages Area */}
-            <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4 flex flex-col gap-3">
-              {messages.length === 0 ? (
-                <EmptyState
-                  icon={<Mail className="w-6 h-6 text-cyan-400" />}
-                  title="No messages yet"
-                  description="Direct and group messages are encrypted and deliver in real-time."
                 />
-              ) : (
-                messages.map((msg) => (
-                  <MessageBubble
-                    key={msg.id}
-                    message={msg}
-                    currentUserId={currentUser?.id || ''}
-                    onReply={(target) => setReplyTarget(target)}
-                    onEdit={(msgId, text) => void api.editConversationMessage(activeConv.id, msgId, text)}
-                    onDelete={(msgId) => void api.deleteConversationMessage(activeConv.id, msgId)}
-                    onReaction={(msgId, emoji) => void api.toggleMessageReaction(activeConv.id, msgId, emoji)}
-                    accentBgClass={accentBgClass}
-                  />
-                ))
-              )}
-
-              {/* Typing indicators */}
-              {typingUsers.size > 0 && (
-                <div className="text-xs text-neutral-400 italic font-mono flex items-center gap-1.5 px-2">
-                  <div className="flex gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce" />
-                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce [animation-delay:0.2s]" />
-                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-bounce [animation-delay:0.4s]" />
-                  </div>
-                  <span>
-                    {Array.from(typingUsers.values()).join(', ')} {typingUsers.size > 1 ? 'are' : 'is'} typing...
-                  </span>
-                </div>
-              )}
-
-              <div ref={messagesEndRef} />
+                {connected ? 'Realtime connected' : 'Reconnecting to realtime…'}
+                {unreadTotal > 0 ? ` · ${unreadTotal} unread` : ''}
+              </p>
             </div>
-
-            {/* Reply bar preview */}
-            {replyTarget && (
-              <div className="px-4 py-2 bg-white/[0.04] border-t border-white/10 flex items-center justify-between text-xs text-neutral-300">
-                <div className="truncate">
-                  <span className="font-semibold text-cyan-400">Replying to {replyTarget.replyToMessage?.senderUsername || 'message'}: </span>
-                  <span className="italic">{replyTarget.text}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setReplyTarget(null)}
-                  className="p-1 hover:text-white text-neutral-400"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            )}
-
-            {/* Pending attachments preview */}
-            {pendingAttachments.length > 0 && (
-              <div className="px-4 py-2 bg-white/[0.04] border-t border-white/10 flex flex-wrap gap-2 text-xs">
-                {pendingAttachments.map((att) => (
-                  <div
-                    key={att.id}
-                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-500/10 border border-cyan-500/20 text-cyan-300"
-                  >
-                    <Paperclip className="w-3.5 h-3.5" />
-                    <span className="truncate max-w-40">{att.name}</span>
-                    <button
-                      type="button"
-                      onClick={() => setPendingAttachments((prev) => prev.filter((a) => a.id !== att.id))}
-                      className="hover:text-white"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Input Bar */}
-            <form
-              onSubmit={handleSend}
-              className="shrink-0 p-2.5 sm:p-3 border-t border-white/[0.08] flex items-center gap-2 bg-[#090B10] pb-[calc(0.625rem+env(safe-area-inset-bottom,0px))] sm:pb-3"
-            >
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileUpload}
-                className="hidden"
-                accept="image/*,video/*,application/pdf"
-              />
+            <div className="flex items-center gap-1 shrink-0">
               <button
                 type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploadingAttachment}
-                className="p-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-neutral-400 hover:text-white cursor-pointer transition-colors"
-                title="Attach media"
+                onClick={() => setShowCreateGroup(true)}
+                aria-label="Create group conversation"
+                title="Create group"
+                className="w-9 h-9 rounded-xl z-secondary hover:z-text hover:z-surface-2 flex items-center justify-center z-focus z-no-tap-highlight"
               >
-                <Paperclip className="w-4 h-4" />
+                <Users className="w-4.5 h-4.5" />
               </button>
-
-              <input
-                type="text"
-                placeholder={uploadingAttachment ? 'Uploading attachment...' : 'Transmit message...'}
-                value={inputText}
-                onChange={handleInputChange}
-                className="min-w-0 flex-1 bg-white/[0.05] border border-white/10 rounded-2xl px-3 sm:px-4 py-2.5 text-sm text-white outline-none focus:border-cyan-400"
-              />
-
               <button
-                type="submit"
-                disabled={(!inputText.trim() && pendingAttachments.length === 0) || sending}
-                className={`p-2.5 rounded-xl ${accentBgClass} text-black font-bold hover:brightness-110 disabled:opacity-40 cursor-pointer transition-all shadow-xs`}
-                title="Send message"
+                type="button"
+                onClick={() => setShowNewMessage(true)}
+                aria-label="Start new conversation"
+                title="New message"
+                className="w-9 h-9 rounded-xl z-accent-bg flex items-center justify-center z-focus z-no-tap-highlight z-shadow-soft"
               >
-                <Send className="w-4 h-4" />
+                <MessageSquarePlus className="w-4.5 h-4.5" />
               </button>
-            </form>
+            </div>
+          </div>
+
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 z-muted pointer-events-none" />
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search conversations"
+              aria-label="Search conversations"
+              className="z-input w-full rounded-xl pl-9 pr-8 py-2 text-xs"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                aria-label="Clear conversation search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md z-muted hover:z-text z-focus"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1 mt-2" role="tablist" aria-label="Conversation filters">
+            {(
+              [
+                ['all', 'All'],
+                ['unread', 'Unread'],
+                ['groups', 'Groups'],
+              ] as Array<[InboxFilter, string]>
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={inboxFilter === value}
+                onClick={() => setInboxFilter(value)}
+                className={`h-7 px-2.5 rounded-lg text-[11px] font-semibold transition-colors z-focus ${
+                  inboxFilter === value
+                    ? 'z-surface-3 z-text'
+                    : 'z-muted hover:z-text hover:z-surface-2'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex-1 min-h-0 overflow-y-auto z-scroll" role="list" aria-label="Conversation list">
+          {conversationsError && conversations.length === 0 ? (
+            <div className="p-5 text-center">
+              <AlertCircle className="w-6 h-6 mx-auto mb-2" style={{ color: 'var(--z-danger)' }} />
+              <p className="text-sm font-semibold z-text">Unable to load messages</p>
+              <p className="text-xs z-muted mt-1 leading-relaxed">{conversationsError}</p>
+              <button
+                type="button"
+                onClick={() => void fetchConversations()}
+                className="mt-3 h-9 px-3 rounded-xl text-xs font-semibold z-btn-secondary inline-flex items-center gap-1.5 z-focus"
+              >
+                <RefreshCw className="w-3.5 h-3.5" /> Try again
+              </button>
+            </div>
+          ) : conversationsLoading && conversations.length === 0 ? (
+            <div className="p-3 space-y-2" aria-label="Loading conversations">
+              {[0, 1, 2, 3].map((item) => (
+                <div key={item} className="flex items-center gap-3 px-1 py-2.5">
+                  <div className="w-10 h-10 rounded-full z-skeleton shrink-0" />
+                  <div className="flex-1 space-y-1.5">
+                    <div className="h-3 w-2/3 rounded z-skeleton" />
+                    <div className="h-2.5 w-5/6 rounded z-skeleton" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : filteredConversations.length === 0 ? (
+            <div className="p-6 text-center">
+              <Mail className="w-7 h-7 z-muted mx-auto mb-2" />
+              <p className="text-sm font-semibold z-text">
+                {searchQuery
+                  ? 'No conversations found'
+                  : inboxFilter === 'unread'
+                    ? 'You are all caught up'
+                    : inboxFilter === 'groups'
+                      ? 'No group conversations yet'
+                      : 'No conversations yet'}
+              </p>
+              <p className="text-xs z-muted mt-1 leading-relaxed">
+                {searchQuery
+                  ? 'Try a different name, username, or message.'
+                  : 'Start a private conversation or create a group with the buttons above.'}
+              </p>
+              {!searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setShowNewMessage(true)}
+                  className="mt-3 h-9 px-3 rounded-xl text-xs font-semibold z-btn-primary z-focus inline-flex items-center gap-1.5"
+                >
+                  <MessageSquarePlus className="w-3.5 h-3.5" /> New message
+                </button>
+              )}
+            </div>
+          ) : (
+            filteredConversations.map((conversation) => (
+              <div role="listitem" key={conversation.id}>
+                <ConversationListItem
+                  conversation={conversation}
+                  currentUserId={currentUser?.id || ''}
+                  onlineUserIds={onlineUserIds}
+                  isSelected={activeConversation?.id === conversation.id}
+                  onSelect={handleSelectConversation}
+                />
+              </div>
+            ))
+          )}
+        </div>
+
+        {!connected && conversations.length > 0 && (
+          <div className="shrink-0 border-t z-border px-3 py-2 flex items-center gap-2 text-[10px] z-muted">
+            <WifiOff className="w-3.5 h-3.5" />
+            Offline — messages will send when the connection returns.
+          </div>
+        )}
+      </aside>
+
+      <section
+        className={`${showMobileChat ? 'flex' : 'hidden sm:flex'} flex-1 min-w-0 min-h-0 flex-col z-bg`}
+        aria-label="Conversation"
+      >
+        {activeConversation && currentUser ? (
+          <>
+            <ConversationHeader
+              conversation={activeConversation}
+              currentUserId={currentUser.id}
+              onlineUserIds={onlineUserIds}
+              lastSeenByUser={lastSeenByUser}
+              typingLabel={typingLabel || undefined}
+              callStarting={callStarting}
+              callBusy={callBusy}
+              onBack={() => {
+                setShowMobileChat(false);
+                setActiveConversation(null);
+              }}
+              onOpenDetails={() => setShowGroupDetails(true)}
+              onOpenProfile={(username) => onOpenProfile?.(username)}
+              onStartCall={(type) => void handleStartCall(type)}
+              onMarkRead={handleMarkRead}
+              onLeaveGroup={() => setConfirmLeave(true)}
+            />
+
+            <div
+              ref={scrollRef}
+              onScroll={handleScroll}
+              className="flex-1 min-h-0 overflow-y-auto z-scroll px-3 sm:px-5 py-3"
+              role="log"
+              aria-live="polite"
+              aria-relevant="additions"
+              aria-label="Messages"
+            >
+              {messagesLoading ? (
+                <div className="h-full flex items-center justify-center">
+                  <div className="flex flex-col items-center gap-2 z-muted">
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <span className="text-xs">Loading messages…</span>
+                  </div>
+                </div>
+              ) : messagesError ? (
+                <div className="h-full flex items-center justify-center">
+                  <div className="text-center max-w-xs">
+                    <AlertCircle className="w-7 h-7 mx-auto mb-2" style={{ color: 'var(--z-danger)' }} />
+                    <p className="text-sm font-semibold z-text">Unable to load messages</p>
+                    <p className="text-xs z-muted mt-1 leading-relaxed">{messagesError}</p>
+                    <button
+                      type="button"
+                      onClick={() => setMessagesReloadNonce((value) => value + 1)}
+                      className="mt-3 h-9 px-3 rounded-xl text-xs font-semibold z-btn-secondary inline-flex items-center gap-1.5 z-focus"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" /> Try again
+                    </button>
+                  </div>
+                </div>
+              ) : messages.length === 0 ? (
+                <ConversationEmpty
+                  conversation={activeConversation}
+                  currentUserId={currentUser.id}
+                  isOnline={
+                    Boolean(getDirectCounterpart(activeConversation, currentUser.id)) &&
+                    onlineUserIds.has(
+                      getDirectCounterpart(activeConversation, currentUser.id)?.id || '',
+                    )
+                  }
+                />
+              ) : (
+                <div className="max-w-3xl mx-auto w-full">
+                  {hasMore && (
+                    <div className="flex justify-center py-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleLoadOlder()}
+                        disabled={loadingOlder}
+                        className="h-8 px-3 rounded-full text-[11px] font-semibold z-surface-2 border z-border z-secondary hover:z-text inline-flex items-center gap-1.5 z-focus disabled:opacity-60"
+                      >
+                        {loadingOlder ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <ChevronUp className="w-3.5 h-3.5" />
+                        )}
+                        {loadingOlder ? 'Loading earlier messages…' : 'Load earlier messages'}
+                      </button>
+                    </div>
+                  )}
+
+                  {renderedMessages.map((rendered) => (
+                    <React.Fragment key={rendered.message.id}>
+                      {rendered.showDate && (
+                        <div className="sticky top-0 z-10 flex justify-center py-2 pointer-events-none">
+                          <span className="px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wide z-surface-2 border z-border z-muted backdrop-blur-sm">
+                            {rendered.dateLabel}
+                          </span>
+                        </div>
+                      )}
+                      <MessageBubble
+                        message={rendered.message}
+                        currentUserId={currentUser.id}
+                        isGroup={Boolean(isGroup)}
+                        expectedRecipients={expectedRecipients}
+                        showAvatar={rendered.showAvatar}
+                        showName={rendered.showName}
+                        isContinuation={rendered.isContinuation}
+                        onReply={(message) => setReplyTarget(message)}
+                        onEdit={(messageId, text) => void handleEditMessage(messageId, text)}
+                        onDelete={(messageId) => void handleDeleteMessage(messageId)}
+                        onReaction={(messageId, emoji) => void handleReaction(messageId, emoji)}
+                        onRetry={(message) => void handleRetry(message)}
+                        onCopy={(text) => void handleCopy(text)}
+                        onOpenImage={handleOpenImage}
+                      />
+                    </React.Fragment>
+                  ))}
+
+                  {!hasMore && messages.length > 0 && (
+                    <p className="text-center text-[10px] z-muted py-3">
+                      Beginning of this conversation
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {typingNames.length > 0 && (
+                <div className="max-w-3xl mx-auto w-full px-1 pt-2">
+                  <div className="inline-flex items-center gap-1.5 rounded-full z-surface-2 border z-border px-2.5 py-1">
+                    <span className="flex gap-0.5" aria-hidden="true">
+                      <span className="w-1 h-1 rounded-full z-accent-bg z-typing-dot" />
+                      <span className="w-1 h-1 rounded-full z-accent-bg z-typing-dot" style={{ animationDelay: '0.15s' }} />
+                      <span className="w-1 h-1 rounded-full z-accent-bg z-typing-dot" style={{ animationDelay: '0.3s' }} />
+                    </span>
+                    <span className="text-[10px] z-muted">{typingLabel}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <MessageComposer
+              text={inputText}
+              onTextChange={handleTextChange}
+              onSend={() => void handleSend()}
+              onOpenAttachments={() => setShowAttachments(true)}
+              pendingAttachments={pendingAttachments}
+              onRemoveAttachment={handleRemoveAttachment}
+              onRetryAttachment={handleRetryUpload}
+              replyTarget={replyTarget}
+              onCancelReply={() => setReplyTarget(null)}
+              sending={sending}
+              uploading={pendingAttachments.some((item) => item.status === 'uploading')}
+              disabled={!activeConversation}
+              connected={connected}
+              conversationName={getConversationTitle(activeConversation, currentUser.id)}
+            />
           </>
         ) : (
-          <EmptyState
-            icon={<Mail className="w-8 h-8 text-neutral-500" />}
-            title="Select a transmission"
-            description="Choose a conversation or contact to start messaging."
-          />
+          <div className="h-full flex flex-col items-center justify-center px-6 text-center">
+            <div className="w-16 h-16 rounded-2xl z-surface-2 border z-border flex items-center justify-center z-accent mb-4">
+              <Mail className="w-7 h-7" />
+            </div>
+            <h2 className="text-lg font-bold z-text z-display">Your messages</h2>
+            <p className="text-sm z-secondary mt-1.5 max-w-xs leading-relaxed">
+              Select a conversation, or start a private chat with someone new.
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowNewMessage(true)}
+              className="mt-4 h-10 px-4 rounded-xl text-sm font-semibold z-btn-primary z-focus inline-flex items-center gap-2"
+            >
+              <MessageSquarePlus className="w-4 h-4" /> New message
+            </button>
+          </div>
         )}
-      </div>
+      </section>
 
-      {/* Modals */}
+      <NewMessageModal
+        isOpen={showNewMessage}
+        contacts={contacts}
+        onClose={() => setShowNewMessage(false)}
+        onSelectUser={handleStartDirectChat}
+        onCreateGroup={() => setShowCreateGroup(true)}
+      />
+
       {showCreateGroup && (
         <CreateGroupModal
           contacts={contacts}
@@ -723,79 +1883,47 @@ export const MessagesView: React.FC = () => {
         />
       )}
 
-      {showGroupDetails && activeConv && currentUser && (
+      {showGroupDetails && activeConversation && currentUser && (
         <GroupDetailsModal
-          conversation={activeConv}
+          conversation={activeConversation}
           currentUserId={currentUser.id}
           allUsers={allUsers}
           onClose={() => setShowGroupDetails(false)}
           onLeave={handleLeaveGroup}
           onAddParticipants={handleAddParticipants}
           onRemoveParticipant={handleRemoveParticipant}
+          onUpdateConversation={handleUpdateConversation}
         />
       )}
 
-      {/* Incoming Call Notification Banner */}
-      {incomingCall && (
-        <IncomingCallBanner
-          caller={incomingCall.caller}
-          type={incomingCall.type}
-          onAccept={async () => {
-            try {
-              const res = await (api as any).request(`/calls/${incomingCall.callId}/respond`, {
-                method: 'POST',
-                body: JSON.stringify({ action: 'accept' }),
-              });
-              setActiveCall({
-                callId: incomingCall.callId,
-                roomName: incomingCall.roomName,
-                token: res.token,
-                livekitUrl: res.livekitUrl,
-                type: incomingCall.type,
-                title: incomingCall.caller.name,
-                isGroup: false,
-              });
-              setIncomingCall(null);
-            } catch (err: any) {
-              alert(err?.message || 'Failed to accept call');
-            }
-          }}
-          onReject={async () => {
-            try {
-              await (api as any).request(`/calls/${incomingCall.callId}/respond`, {
-                method: 'POST',
-                body: JSON.stringify({ action: 'reject' }),
-              });
-              setIncomingCall(null);
-            } catch (err: any) {
-              console.warn(err);
-            }
-          }}
-        />
-      )}
+      <AttachmentPicker
+        isOpen={showAttachments}
+        pending={pendingAttachments}
+        onClose={() => setShowAttachments(false)}
+        onPickFiles={handlePickFiles}
+        onCancel={handleCancelUpload}
+        onRetry={handleRetryUpload}
+        onRemove={handleRemoveAttachment}
+      />
 
-      {/* Active Call Modal */}
-      {activeCall && (
-        <CallModal
-          roomName={activeCall.roomName}
-          token={activeCall.token}
-          livekitUrl={activeCall.livekitUrl}
-          title={activeCall.title}
-          isGroup={activeCall.isGroup}
-          onEndCall={async () => {
-            try {
-              await (api as any).request(`/calls/${activeCall.callId}/end`, {
-                method: 'POST',
-                body: '{}',
-              });
-            } catch (err) {
-              console.warn(err);
-            } finally {
-              setActiveCall(null);
-            }
-          }}
-        />
-      )}
+      <ImageLightbox
+        isOpen={lightbox.open}
+        images={lightbox.images}
+        downloadUrls={lightbox.downloadUrls}
+        initialIndex={lightbox.index}
+        onClose={() => setLightbox((previous) => ({ ...previous, open: false }))}
+      />
+
+      <ConfirmationDialog
+        isOpen={confirmLeave}
+        onClose={() => setConfirmLeave(false)}
+        onConfirm={() => void handleConfirmLeave()}
+        title="Leave this group?"
+        description="You will stop receiving new messages from this group. Your existing messages stay with the conversation."
+        confirmLabel="Leave group"
+        isDestructive
+        isLoading={leaving}
+      />
     </div>
   );
 };

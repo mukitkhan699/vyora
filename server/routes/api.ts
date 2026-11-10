@@ -218,7 +218,8 @@ export async function handleApiRequest(
       if (
         purpose !== 'profile-avatar' &&
         purpose !== 'profile-cover' &&
-        purpose !== 'post-image'
+        purpose !== 'post-image' &&
+        purpose !== 'message-attachment'
       ) {
         sendError(res, 400, 'A supported upload purpose is required.');
         return true;

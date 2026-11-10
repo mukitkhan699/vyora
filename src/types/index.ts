@@ -89,6 +89,7 @@ export interface MessageReceipt {
 export interface Message {
   id: string;
   senderId?: string | null;
+  sender?: User;
   recipientId?: string;
   conversationId?: string;
   text: string;
@@ -109,6 +110,55 @@ export interface Message {
   attachments?: MessageAttachment[];
   reactions?: MessageReaction[];
   receipts?: MessageReceipt[];
+  /** Client-only optimistic send state. Never fabricated as a server delivery state. */
+  localStatus?: 'sending' | 'failed';
+  localError?: string;
+}
+
+export interface PendingMessageAttachment {
+  localId: string;
+  file: File;
+  name: string;
+  mimeType: string;
+  size: number;
+  previewUrl?: string;
+  status: 'uploading' | 'ready' | 'failed';
+  progress: number;
+  assetId?: string;
+  url?: string;
+  error?: string;
+}
+
+export interface CallSession {
+  id: string;
+  conversationId: string;
+  roomName: string;
+  type: 'voice' | 'video';
+  status: 'ringing' | 'active' | 'ended' | 'missed' | 'rejected';
+  callerId: string;
+  startedAt: number;
+  answeredAt: number | null;
+  endedAt: number | null;
+  durationSeconds: number;
+  participants: Array<{
+    userId: string;
+    status: 'invited' | 'joined' | 'left' | 'declined' | 'missed';
+    joinedAt: number | null;
+    leftAt: number | null;
+  }>;
+}
+
+export interface CallEventPayload {
+  callId: string;
+  conversationId: string;
+  roomName: string;
+  type: 'voice' | 'video';
+  status: CallSession['status'];
+  caller: { id: string; username: string; name: string; avatarUrl: string };
+  participants: Array<{ id: string; username: string; name: string; avatarUrl: string }>;
+  event: 'incoming' | 'answered' | 'rejected' | 'ended' | 'participant-joined' | 'participant-left';
+  joinedUserId?: string;
+  leftUserId?: string;
 }
 
 export interface ConversationParticipant {

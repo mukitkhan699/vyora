@@ -60,7 +60,7 @@ export const Avatar: React.FC<AvatarProps> = ({
       className={`relative inline-block shrink-0 ${onClick ? 'cursor-pointer hover:opacity-90 active:scale-95 transition-all' : ''}`}
     >
       <div
-        className={`${sizeClasses} rounded-full overflow-hidden bg-neutral-800 border border-white/10 flex items-center justify-center font-bold text-neutral-200 select-none ${className}`}
+        className={`${sizeClasses} rounded-full overflow-hidden bg-[var(--z-surface-3)] border z-border flex items-center justify-center font-bold z-secondary select-none ${className}`}
       >
         {imageSrc ? (
           <CdnImage
@@ -76,9 +76,8 @@ export const Avatar: React.FC<AvatarProps> = ({
 
       {isOnline !== undefined && (
         <span
-          className={`absolute bottom-0 right-0 rounded-full ring-2 ring-[#090B10] ${dotClasses} ${
-            isOnline ? 'bg-emerald-500' : 'bg-neutral-500'
-          }`}
+          className={`absolute bottom-0 right-0 rounded-full ring-2 ring-[var(--z-surface)] ${dotClasses}`}
+          style={{ backgroundColor: isOnline ? 'var(--z-online)' : 'var(--z-text-muted)' }}
           title={isOnline ? 'Online' : 'Offline'}
         />
       )}

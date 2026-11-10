@@ -1,4 +1,4 @@
-import { Post, User, Notification, Message, Conversation, TrendItem, AppConfig } from '../types/index.ts';
+import { Post, User, Notification, Message, Conversation, TrendItem, AppConfig, CallSession } from '../types/index.ts';
 import { getBackendApiUrl } from '../config/backendUrl.ts';
 
 export interface AuthUser extends User {
@@ -265,6 +265,10 @@ class ApiService {
   public async uploadFile(
     file: File,
     purpose: 'profile-avatar' | 'profile-cover' | 'post-image' | 'message-attachment' = 'post-image',
+    options: {
+      onProgress?: (percent: number) => void;
+      signal?: AbortSignal;
+    } = {},
   ): Promise<{
     success: boolean;
     fileId: string;
@@ -273,6 +277,10 @@ class ApiService {
     mimeType: string;
     size: number;
   }> {
+    if (options.signal?.aborted) {
+      throw new DOMException('Upload cancelled.', 'AbortError');
+    }
+
     const res = await this.request<{
       fileId: string;
       uploadUrl: string;
@@ -287,35 +295,93 @@ class ApiService {
       }),
     });
 
-    let response: Response;
+    const abortUpload = async () => {
+      try {
+        await this.request(`/uploads/${res.fileId}/abort`, {
+          method: 'POST',
+          body: '{}',
+        });
+      } catch {
+        // The server reconciliation sweep also removes abandoned uploads.
+      }
+    };
+
+    let status = 0;
+    let errorBody = '';
     try {
-      response = await fetch(res.uploadUrl, {
-        method: 'PUT',
-        headers: res.headers,
-        body: file,
-        credentials: 'omit',
-        cache: 'no-store',
+      status = await new Promise<number>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        let settled = false;
+        let abortedBySignal = false;
+
+        const settle = (fn: () => void) => {
+          if (settled) return;
+          settled = true;
+          options.signal?.removeEventListener('abort', onAbort);
+          fn();
+        };
+
+        const onAbort = () => {
+          abortedBySignal = true;
+          xhr.abort();
+        };
+
+        xhr.open('PUT', res.uploadUrl, true);
+        for (const [header, value] of Object.entries(res.headers)) {
+          xhr.setRequestHeader(header, value);
+        }
+        xhr.withCredentials = false;
+
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable && event.total > 0) {
+            options.onProgress?.(Math.min(99, Math.round((event.loaded / event.total) * 100)));
+          }
+        };
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            options.onProgress?.(100);
+            settle(() => resolve(xhr.status));
+          } else {
+            errorBody = xhr.responseText || '';
+            settle(() => resolve(xhr.status));
+          }
+        };
+
+        xhr.onerror = () => {
+          settle(() => reject(new ApiError('Network error uploading media. Check your connection.', 502)));
+        };
+
+        xhr.onabort = () => {
+          settle(() =>
+            reject(
+              new DOMException(
+                abortedBySignal ? 'Upload cancelled.' : 'Network error uploading media.',
+                abortedBySignal ? 'AbortError' : 'NetworkError',
+              ),
+            ),
+          );
+        };
+
+        xhr.ontimeout = () => {
+          settle(() => reject(new ApiError('The media upload timed out. Please try again.', 504)));
+        };
+
+        if (options.signal) options.signal.addEventListener('abort', onAbort, { once: true });
+        xhr.send(file);
       });
     } catch (networkError) {
-      await this.request(`/uploads/${res.fileId}/abort`, {
-        method: 'POST',
-        body: '{}',
-      });
+      await abortUpload();
+      if (networkError instanceof DOMException && networkError.name === 'AbortError') {
+        throw networkError;
+      }
+      if (networkError instanceof ApiError) throw networkError;
       throw new ApiError('Network error uploading media. Check your connection.', 502);
     }
 
-    if (!response.ok) {
-      let errorBody = '';
-      try {
-        errorBody = await response.text();
-      } catch {
-        // The status code still provides a safe fallback message.
-      }
-      await this.request(`/uploads/${res.fileId}/abort`, {
-        method: 'POST',
-        body: '{}',
-      });
-      throw new ApiError(describeUploadFailure(response.status, errorBody), response.status);
+    if (status < 200 || status >= 300) {
+      await abortUpload();
+      throw new ApiError(describeUploadFailure(status, errorBody), status);
     }
 
     try {
@@ -331,10 +397,7 @@ class ApiService {
         body: '{}',
       });
     } catch (error) {
-      await this.request(`/uploads/${res.fileId}/abort`, {
-        method: 'POST',
-        body: '{}',
-      });
+      await abortUpload();
       throw error;
     }
   }
@@ -351,7 +414,12 @@ class ApiService {
 
   public resolveFileUrl(urlOrPath: string): string {
     if (!urlOrPath) return '';
-    if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://') || urlOrPath.startsWith('data:')) {
+    if (
+      urlOrPath.startsWith('http://') ||
+      urlOrPath.startsWith('https://') ||
+      urlOrPath.startsWith('data:') ||
+      urlOrPath.startsWith('blob:')
+    ) {
       return urlOrPath;
     }
     const backendUrl = getBackendApiUrl();
@@ -566,6 +634,37 @@ class ApiService {
     return this.request<{ success: boolean }>(`/conversations/${conversationId}/receipts`, {
       method: 'POST',
       body: JSON.stringify({ type, messageIds }),
+    });
+  }
+
+  // Calls (existing LiveKit-backed signaling)
+  public initiateCall(
+    conversationId: string,
+    type: 'voice' | 'video',
+  ): Promise<{ call: CallSession; token: string; livekitUrl: string }> {
+    return this.request<{ call: CallSession; token: string; livekitUrl: string }>('/calls/initiate', {
+      method: 'POST',
+      body: JSON.stringify({ conversationId, type }),
+    });
+  }
+
+  public respondToCall(
+    callId: string,
+    action: 'accept' | 'reject',
+  ): Promise<{ call: CallSession; token?: string; livekitUrl?: string }> {
+    return this.request<{ call: CallSession; token?: string; livekitUrl?: string }>(
+      `/calls/${encodeURIComponent(callId)}/respond`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ action }),
+      },
+    );
+  }
+
+  public endCall(callId: string): Promise<{ call: CallSession }> {
+    return this.request<{ call: CallSession }>(`/calls/${encodeURIComponent(callId)}/end`, {
+      method: 'POST',
+      body: '{}',
     });
   }
 

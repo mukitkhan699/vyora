@@ -1,6 +1,5 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useId, useRef } from 'react';
 import { X } from 'lucide-react';
-import { useTheme } from '../../context/ThemeContext.tsx';
 
 interface ModalProps {
   isOpen: boolean;
@@ -17,56 +16,98 @@ export const Modal: React.FC<ModalProps> = ({
   children,
   maxWidth = 'max-w-xl',
 }) => {
-  const { theme } = useTheme();
   const modalRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  const titleId = useId();
 
   useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    const focusTimer = window.setTimeout(() => {
+      const focusable = modalRef.current?.querySelector<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      );
+      focusable?.focus();
+    }, 30);
+
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      const modal = modalRef.current;
+      if (!modal) return;
+      const focusInside = modal.contains(document.activeElement);
+      if (e.key === 'Escape') {
+        if (!focusInside) return;
+        e.stopPropagation();
+        onCloseRef.current();
+        return;
+      }
+      if (e.key !== 'Tab' || !focusInside) return;
+      const focusables = Array.from(
+        modal.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((el) => el.offsetParent !== null);
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
-    if (isOpen) {
-      document.body.style.overflow = 'hidden';
-      window.addEventListener('keydown', handleKeyDown);
-    }
+
+    window.addEventListener('keydown', handleKeyDown);
     return () => {
-      document.body.style.overflow = '';
+      window.clearTimeout(focusTimer);
+      document.body.style.overflow = originalOverflow;
       window.removeEventListener('keydown', handleKeyDown);
+      previousFocusRef.current?.focus?.();
     };
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
-
-  const bgModal = theme === 'light'
-    ? 'bg-white border-slate-200 text-slate-900 shadow-2xl'
-    : 'bg-[#0F131A] border-white/10 text-white shadow-[0_25px_60px_-15px_rgba(0,0,0,0.85)]';
 
   return (
     <div
       role="dialog"
       aria-modal="true"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6"
+      aria-labelledby={title ? titleId : undefined}
+      aria-label={title ? undefined : 'Dialog'}
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6"
     >
       {/* Backdrop */}
       <div
-        className="fixed inset-0 bg-black/70 backdrop-blur-md transition-opacity duration-200"
+        className="fixed inset-0 z-scrim backdrop-blur-md z-fade-enter"
         onClick={onClose}
+        aria-hidden="true"
       />
 
       {/* Modal Dialog */}
       <div
         ref={modalRef}
-        className={`relative w-full ${maxWidth} ${bgModal} border rounded-3xl overflow-hidden z-10 animate-in fade-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col`}
+        className={`relative w-full ${maxWidth} z-surface border z-border rounded-3xl overflow-hidden z-10 z-rise-enter max-h-[calc(100dvh-1.5rem-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px))] sm:max-h-[calc(100dvh-3rem-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px))] flex flex-col z-shadow`}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-white/[0.08] shrink-0">
-          <h2 className="text-base sm:text-lg font-bold tracking-tight">
+        <div className="flex items-center justify-between px-5 py-4 border-b z-border shrink-0">
+          <h2 id={titleId} className="text-base sm:text-lg font-bold tracking-tight z-text z-display">
             {title || ''}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close modal"
-            className="p-1.5 rounded-full text-neutral-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+            aria-label="Close dialog"
+            className="p-2 rounded-full z-secondary hover:z-text hover:z-surface-2 transition-colors cursor-pointer z-focus z-no-tap-highlight"
           >
             <X className="w-5 h-5" />
           </button>

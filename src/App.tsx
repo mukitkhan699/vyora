@@ -1,6 +1,9 @@
 import React, { useState, Component, ErrorInfo, ReactNode } from 'react';
 import { ThemeProvider } from './context/ThemeContext.tsx';
 import { AuthProvider, useAuth } from './context/AuthContext.tsx';
+import { RealtimeProvider } from './context/RealtimeContext.tsx';
+import { CallProvider } from './context/CallContext.tsx';
+import { ToastProvider } from './components/common/ToastProvider.tsx';
 import { Sidebar } from './components/layout/Sidebar.tsx';
 import { RightSidebar } from './components/layout/RightSidebar.tsx';
 import { MobileNav } from './components/layout/MobileNav.tsx';
@@ -155,7 +158,13 @@ function MainApp() {
             onSelectTab={setCurrentTab}
             onLogout={handleAdminLogout}
           />
-          <main className="min-w-0 flex-1 min-h-screen border-r border-white/[0.08] max-w-2xl pb-20 sm:pb-4 w-full">
+          <main
+          className={`min-w-0 flex-1 min-h-screen border-r border-white/[0.08] w-full ${
+            currentTab === 'messages'
+              ? 'max-w-none pb-0'
+              : 'max-w-2xl pb-20 sm:pb-4'
+          }`}
+        >
             <AdminRoute allowedRoles={adminRole ? [adminRole] : undefined}>
               {renderAdminContent()}
             </AdminRoute>
@@ -181,7 +190,13 @@ function MainApp() {
         />
 
         {/* Center Main Social Feed View */}
-        <main className="min-w-0 flex-1 min-h-screen border-r border-white/[0.08] max-w-2xl pb-20 sm:pb-4 w-full">
+        <main
+          className={`min-w-0 flex-1 min-h-screen border-r border-white/[0.08] w-full ${
+            currentTab === 'messages'
+              ? 'max-w-none pb-0'
+              : 'max-w-2xl pb-20 sm:pb-4'
+          }`}
+        >
           {currentTab === 'home' && (
             <Timeline
               onPostClick={handlePostClick}
@@ -218,7 +233,7 @@ function MainApp() {
           )}
 
           {currentTab === 'messages' && (
-            <MessagesView />
+            <MessagesView onOpenProfile={handleUserClick} />
           )}
 
           {currentTab === 'profile' && (
@@ -241,11 +256,13 @@ function MainApp() {
         </main>
 
         {/* Right Sidebar Widgets */}
-        <RightSidebar
-          onSearch={handleSearch}
-          onSelectTag={handleTagClick}
-          onUserClick={handleUserClick}
-        />
+        {currentTab !== 'messages' && (
+          <RightSidebar
+            onSearch={handleSearch}
+            onSelectTag={handleTagClick}
+            onUserClick={handleUserClick}
+          />
+        )}
       </div>
 
       {/* Mobile Bottom Navigation */}
@@ -303,9 +320,15 @@ export default function App() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <ErrorBoundary>
-          <AppShell />
-        </ErrorBoundary>
+        <ToastProvider>
+          <RealtimeProvider>
+            <CallProvider>
+              <ErrorBoundary>
+                <AppShell />
+              </ErrorBoundary>
+            </CallProvider>
+          </RealtimeProvider>
+        </ToastProvider>
       </AuthProvider>
     </ThemeProvider>
   );
