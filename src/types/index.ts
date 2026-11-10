@@ -111,7 +111,7 @@ export interface Message {
   reactions?: MessageReaction[];
   receipts?: MessageReceipt[];
   /** Client-only optimistic send state. Never fabricated as a server delivery state. */
-  localStatus?: 'sending' | 'failed';
+  localStatus?: 'pending' | 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
   localError?: string;
 }
 

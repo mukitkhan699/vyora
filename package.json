@@ -36,6 +36,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1163.0",
     "@google/genai": "^2.4.0",
     "@tailwindcss/vite": "^4.3.3",
+    "@tanstack/react-virtual": "^3.14.26",
     "@vitejs/plugin-react": "^6.1.1",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",

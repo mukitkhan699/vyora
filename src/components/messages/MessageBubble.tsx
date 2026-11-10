@@ -1,8 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import {
   AlertCircle,
   Check,
   CheckCheck,
+  Clock,
   Copy,
   Edit2,
   Loader2,
@@ -10,6 +11,8 @@ import {
   RotateCcw,
   Smile,
   Trash2,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import type { Message, MessageAttachment as Attachment } from '../../types/index.ts';
 import { Avatar } from '../common/Avatar.tsx';
@@ -22,6 +25,8 @@ import {
   formatMessageTime,
   getDeliveryState,
 } from '../../utils/messaging.ts';
+import { useLongPress } from '../../hooks/useLongPress.ts';
+import { useMessageActions } from '../../context/MessageActionsContext.tsx';
 
 interface MessageBubbleProps {
   message: Message;
@@ -66,6 +71,17 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(message.text);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [showActions, setShowActions] = useState(false);
+  const actionsRef = useRef<HTMLDivElement>(null);
+  const actionButtonsRef = useRef<HTMLButtonElement[]>([]);
+
+  const { activeMessageId, setActiveMessageId, registerMessage, unregisterMessage } = useMessageActions();
+  const isActive = activeMessageId === message.id;
+
+  useEffect(() => {
+    registerMessage(message.id);
+    return () => unregisterMessage(message.id);
+  }, [message.id, registerMessage, unregisterMessage]);
 
   const isSender = message.senderId === currentUserId || Boolean(message.isSender);
   const isDeleted = Boolean(message.isDeleted);
@@ -73,6 +89,53 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
   const senderName = sender?.name || (isSender ? 'You' : sender?.username || 'Member');
   const deliveryState = getDeliveryState(message, isGroup, expectedRecipients, currentUserId);
   const hasActions = !isDeleted && !isEditing && !message.localStatus;
+
+  const handleOpenActions = useCallback(() => {
+    setActiveMessageId(message.id);
+    setShowActions(true);
+    window.requestAnimationFrame(() => {
+      actionButtonsRef.current[0]?.focus();
+    });
+  }, [message.id, setActiveMessageId]);
+
+  const handleCloseActions = useCallback(() => {
+    if (isActive) {
+      setActiveMessageId(null);
+    }
+    setShowActions(false);
+  }, [isActive, setActiveMessageId]);
+
+  const { isLongPressTriggered, handlers } = useLongPress({
+    delay: 450,
+    threshold: 8,
+    onLongPress: handleOpenActions,
+    onCancel: handleCloseActions,
+  });
+
+  useEffect(() => {
+    if (!isActive) {
+      setShowActions(false);
+    }
+  }, [isActive]);
+
+  useEffect(() => {
+    const handleOutside = (event: MouseEvent) => {
+      if (isActive && actionsRef.current && !actionsRef.current.contains(event.target as Node)) {
+        handleCloseActions();
+      }
+    };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (isActive && event.key === 'Escape') {
+        handleCloseActions();
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [isActive, handleCloseActions]);
 
   const reactionGroups = useMemo(() => {
     const groups = new Map<string, { count: number; mine: boolean }>();
@@ -98,6 +161,41 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
     setIsEditing(false);
   };
 
+  const handleActionKeyDown = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const buttons = actionButtonsRef.current;
+    if (buttons.length === 0) return;
+
+    let nextIndex = index;
+    const total = buttons.length;
+
+    switch (event.key) {
+      case 'ArrowRight':
+        event.preventDefault();
+        nextIndex = index < total - 1 ? index + 1 : 0;
+        break;
+      case 'ArrowLeft':
+        event.preventDefault();
+        nextIndex = index > 0 ? index - 1 : total - 1;
+        break;
+      case 'Home':
+        event.preventDefault();
+        nextIndex = 0;
+        break;
+      case 'End':
+        event.preventDefault();
+        nextIndex = total - 1;
+        break;
+      case 'Escape':
+        event.preventDefault();
+        handleCloseActions();
+        return;
+      default:
+        return;
+    }
+
+    buttons[nextIndex]?.focus();
+  };
+
   return (
     <div
       id={`message-${message.id}`}
@@ -105,6 +203,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
       className={`group flex w-full gap-2 scroll-mt-24 ${isSender ? 'justify-end' : 'justify-start'} ${
         isContinuation ? 'mt-1' : 'mt-3'
       } z-message-enter ${highlighted ? 'z-message-highlight' : ''}`}
+      {...handlers}
     >
       {!isSender && (
         <div className="w-8 shrink-0 flex items-end pb-1">
@@ -149,28 +248,44 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
         <div className="relative max-w-full">
           {hasActions && (
             <div
+              ref={actionsRef}
               className={`absolute -top-3.5 z-20 flex items-center gap-0.5 rounded-full border z-border z-surface-2 px-1 py-0.5 z-shadow-soft transition-opacity duration-150 z-message-actions ${
                 isSender ? 'right-1' : 'left-1'
-              }`}
+              } ${isActive ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
               role="group"
               aria-label="Message actions"
               tabIndex={0}
             >
               <ActionButton
                 label="React to message"
-                onClick={() => setShowPicker((value) => !value)}
+                onClick={() => {
+                  setShowPicker((value) => !value);
+                  handleCloseActions();
+                }}
                 icon={<Smile className="w-3.5 h-3.5" />}
+                ref={(el) => { actionButtonsRef.current[0] = el as HTMLButtonElement; }}
+                onKeyDown={(e) => handleActionKeyDown(e, 0)}
               />
               <ActionButton
                 label="Reply to message"
-                onClick={() => onReply(message)}
+                onClick={() => {
+                  onReply(message);
+                  handleCloseActions();
+                }}
                 icon={<Reply className="w-3.5 h-3.5" />}
+                ref={(el) => { actionButtonsRef.current[1] = el as HTMLButtonElement; }}
+                onKeyDown={(e) => handleActionKeyDown(e, 1)}
               />
               {message.text?.trim() && (
                 <ActionButton
                   label="Copy message text"
-                  onClick={() => onCopy(message.text)}
+                  onClick={() => {
+                    onCopy(message.text);
+                    handleCloseActions();
+                  }}
                   icon={<Copy className="w-3.5 h-3.5" />}
+                  ref={(el) => { actionButtonsRef.current[2] = el as HTMLButtonElement; }}
+                  onKeyDown={(e) => handleActionKeyDown(e, 2)}
                 />
               )}
               {isSender && (
@@ -179,16 +294,24 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                   onClick={() => {
                     setIsEditing(true);
                     setEditText(message.text);
+                    handleCloseActions();
                   }}
                   icon={<Edit2 className="w-3.5 h-3.5" />}
+                  ref={(el) => { actionButtonsRef.current[3] = el as HTMLButtonElement; }}
+                  onKeyDown={(e) => handleActionKeyDown(e, 3)}
                 />
               )}
               {(isSender || canModerate) && (
                 <ActionButton
                   label={isSender ? 'Delete message' : 'Delete message for everyone'}
-                  onClick={() => setConfirmDelete(true)}
+                  onClick={() => {
+                    setConfirmDelete(true);
+                    handleCloseActions();
+                  }}
                   icon={<Trash2 className="w-3.5 h-3.5" />}
                   danger
+                  ref={(el) => { actionButtonsRef.current[4] = el as HTMLButtonElement; }}
+                  onKeyDown={(e) => handleActionKeyDown(e, 4)}
                 />
               )}
             </div>
@@ -252,7 +375,14 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                   <span>{formatMessageTime(message.createdAt)}</span>
                   {isSender && (
                     <span aria-label={deliveryLabel(deliveryState, isGroup)}>
-                      {deliveryState === 'sending' ? (
+                      {deliveryState === 'pending' ? (
+                        <>
+                          <span className="w-3.5 h-3.5 rounded-full flex items-center justify-center" style={{ backgroundColor: 'var(--z-warning)', color: 'var(--z-accent-contrast)' }}>
+                            <Clock className="w-3 h-3" aria-hidden="true" />
+                          </span>
+                          <span className="sr-only">{deliveryLabel(deliveryState, isGroup)}</span>
+                        </>
+                      ) : deliveryState === 'sending' ? (
                         <>
                           <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
                           <span className="sr-only">{deliveryLabel(deliveryState, isGroup)}</span>
@@ -270,6 +400,11 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
                       ) : deliveryState === 'delivered' ? (
                         <>
                           <CheckCheck className="w-3.5 h-3.5" aria-hidden="true" />
+                          <span className="sr-only">{deliveryLabel(deliveryState, isGroup)}</span>
+                        </>
+                      ) : deliveryState === 'sent' ? (
+                        <>
+                          <Check className="w-3.5 h-3.5" aria-hidden="true" />
                           <span className="sr-only">{deliveryLabel(deliveryState, isGroup)}</span>
                         </>
                       ) : (
@@ -367,10 +502,14 @@ const ActionButton: React.FC<{
   icon: React.ReactNode;
   onClick: () => void;
   danger?: boolean;
-}> = ({ label, icon, onClick, danger }) => (
+  ref?: React.Ref<HTMLButtonElement>;
+  onKeyDown?: (event: React.KeyboardEvent<HTMLButtonElement>) => void;
+}> = ({ label, icon, onClick, danger, ref, onKeyDown }) => (
   <button
+    ref={ref}
     type="button"
     onClick={onClick}
+    onKeyDown={onKeyDown}
     aria-label={label}
     title={label}
     className={`p-1.5 rounded-full transition-colors z-focus ${

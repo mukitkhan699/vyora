@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { User, AppConfig } from '../types/index.ts';
 import { api, AuthUser } from '../services/api.ts';
 import { adminApi, AdminUser, AdminRole, AdminPermissions } from '../services/adminApi.ts';
+import { clearAllData } from '../lib/messaging/database.ts';
 
 export interface RegisterResult {
   user: User | null;
@@ -249,6 +250,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (e) {
       console.warn('Backend logout warning:', e);
     } finally {
+      // Clear all local IndexedDB data on logout
+      try {
+        await clearAllData();
+      } catch (e) {
+        console.warn('Failed to clear local data on logout:', e);
+      }
       setCurrentUser(null);
       setUnreadNotificationsCount(0);
       setPendingVerificationEmail(null);

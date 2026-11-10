@@ -20,9 +20,12 @@ import { SettingsView } from './components/settings/SettingsView.tsx';
 import { LauncherSplash } from './components/common/LauncherSplash.tsx';
 import { LoginScreen } from './components/auth/LoginScreen.tsx';
 import { AdminRoute } from './components/admin/AdminRoute.tsx';
+import { MessageActionsProvider } from './context/MessageActionsContext.tsx';
 import { AdminDashboard } from './components/admin/AdminDashboard.tsx';
 import { AdminSidebar } from './components/admin/AdminSidebar.tsx';
 import { AuditLogView } from './components/admin/AuditLogView.tsx';
+import { OfflineIndicator } from './components/common/OfflineIndicator.tsx';
+import { useServiceWorker } from './hooks/useServiceWorker.ts';
 import { Post } from './types/index.ts';
 
 interface BaseSidebarProps {
@@ -70,6 +73,7 @@ class ErrorBoundary extends Component<{ children: ReactNode; fallback?: ReactNod
 
 function MainApp() {
   const { appConfig, isAdmin, adminRole } = useAuth();
+  useServiceWorker();
 
   const [currentTab, setCurrentTab] = useState<string>('home');
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
@@ -233,7 +237,9 @@ function MainApp() {
           )}
 
           {currentTab === 'messages' && (
-            <MessagesView onOpenProfile={handleUserClick} />
+            <MessageActionsProvider>
+              <MessagesView onOpenProfile={handleUserClick} />
+            </MessageActionsProvider>
           )}
 
           {currentTab === 'profile' && (
@@ -264,6 +270,9 @@ function MainApp() {
           />
         )}
       </div>
+
+      {/* Offline/Connection Status Indicator */}
+      <OfflineIndicator position="bottom" compact />
 
       {/* Mobile Bottom Navigation */}
       <MobileNav

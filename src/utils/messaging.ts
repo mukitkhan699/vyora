@@ -1,7 +1,7 @@
 import type { Conversation, ConversationParticipant, Message, User } from '../types/index.ts';
 import { formatBytes } from './format.ts';
 
-export type DeliveryState = 'sending' | 'failed' | 'sent' | 'delivered' | 'read';
+export type DeliveryState = 'pending' | 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
 
 export function getActiveParticipants(conversation: Conversation | null | undefined): ConversationParticipant[] {
   return (conversation?.participants || []).filter((participant) => !participant.leftAt);
@@ -118,8 +118,12 @@ export function getDeliveryState(
   expectedRecipients: number,
   currentUserId: string,
 ): DeliveryState {
+  if (message.localStatus === 'pending') return 'pending';
   if (message.localStatus === 'sending') return 'sending';
   if (message.localStatus === 'failed') return 'failed';
+  if (message.localStatus === 'sent') return 'sent';
+  if (message.localStatus === 'delivered') return 'delivered';
+  if (message.localStatus === 'read') return 'read';
   const receipts = (message.receipts || []).filter((receipt) => receipt.userId !== currentUserId);
   if (isGroup) {
     const expected = Math.max(1, expectedRecipients);
@@ -137,10 +141,14 @@ export function getDeliveryState(
 
 export function deliveryLabel(state: DeliveryState, isGroup: boolean): string {
   switch (state) {
+    case 'pending':
+      return 'Pending';
     case 'sending':
       return 'Sending';
     case 'failed':
       return 'Not sent';
+    case 'sent':
+      return 'Sent';
     case 'delivered':
       return isGroup ? 'Delivered to the group' : 'Delivered';
     case 'read':
@@ -200,4 +208,46 @@ export function supportsFileType(mime: string): boolean {
     'application/pdf',
     'text/plain',
   ].includes(mime);
+}
+
+export function toMillis(value: string | number | null | undefined): number {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === 'number') return value;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && value.trim() !== '') return numeric;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+export function upsertMessage<T extends { id: string; clientId?: string | null; createdAt: string | number; localStatus?: string; localError?: string }>(list: T[], incoming: T): T[] {
+  const next = [...list];
+  let index = next.findIndex((message) => message.id === incoming.id);
+  if (index < 0 && incoming.clientId) {
+    index = next.findIndex(
+      (message) => Boolean(message.clientId) && message.clientId === incoming.clientId,
+    );
+  }
+  if (index >= 0) {
+    next[index] = {
+      ...next[index],
+      ...incoming,
+      localStatus: incoming.localStatus,
+      localError: incoming.localError,
+    };
+  } else {
+    next.push(incoming);
+  }
+  return next.sort((a, b) => toMillis(a.createdAt) - toMillis(b.createdAt));
+}
+
+export function mergeMessages<T extends { id: string; clientId?: string | null; createdAt: string | number; localStatus?: string; localError?: string }>(current: T[], incoming: T[]): T[] {
+  return incoming.reduce((list, message) => upsertMessage(list, message), current);
+}
+
+export function conversationTimestamp(conversation: { lastMessageAt?: number; lastMessage?: { createdAt?: string | number } | null }): number {
+  return conversation.lastMessageAt || toMillis(conversation.lastMessage?.createdAt);
+}
+
+export function sortConversations<T extends { lastMessageAt?: number; lastMessage?: { createdAt?: string | number } | null }>(list: T[]): T[] {
+  return [...list].sort((a, b) => conversationTimestamp(b) - conversationTimestamp(a));
 }

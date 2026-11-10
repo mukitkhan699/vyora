@@ -2,7 +2,7 @@ import React from 'react';
 import { AlertTriangle, Download, FileText, Film, Music, Play } from 'lucide-react';
 import type { MessageAttachment as Attachment } from '../../types/index.ts';
 import { api } from '../../services/api.ts';
-import { CdnImage } from '../common/CdnImage.tsx';
+import { CachedImage } from '../common/CachedImage.tsx';
 import { describeFileSize, isAudioMime, isImageMime, isVideoMime } from '../../utils/messaging.ts';
 
 interface MessageAttachmentProps {
@@ -49,9 +49,12 @@ export const MessageAttachment: React.FC<MessageAttachmentProps> = ({
         className="mt-2 block w-full overflow-hidden rounded-xl z-focus group/img"
         aria-label={`Open image ${attachment.filename}`}
       >
-        <CdnImage
+        <CachedImage
+          assetId={attachment.mediaAssetId}
+          conversationId={attachment.messageId.split('-')[0] || ''}
           src={attachment.url}
           alt={attachment.filename}
+          contentType={attachment.mimeType}
           className="max-h-80 w-full object-contain bg-black/15 transition-transform duration-300 group-hover/img:scale-[1.01]"
         />
       </button>

@@ -302,6 +302,7 @@
     padding-left: env(safe-area-inset-left, 0px);
     padding-right: env(safe-area-inset-right, 0px);
   }
+  .pb-safe { padding-bottom: env(safe-area-inset-bottom, 0px); }
 
   .z-message-highlight {
     outline: 2px solid var(--z-accent-border);
