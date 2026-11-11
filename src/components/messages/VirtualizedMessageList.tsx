@@ -1,8 +1,7 @@
-import React, { useMemo, useRef, useCallback, useEffect, useState } from 'react';
+import React, { forwardRef, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import type { Message } from '../../types/index.ts';
+import type { Message, MessageAttachment } from '../../types/index.ts';
 import { MessageBubble } from './MessageBubble.tsx';
-import { toMillis } from '../../utils/messaging.ts';
 
 interface RenderedMessage {
   message: Message;
@@ -13,8 +12,13 @@ interface RenderedMessage {
   isContinuation: boolean;
 }
 
+export interface VirtualizedMessageListHandle {
+  scrollToMessage: (messageId: string) => void;
+}
+
 interface VirtualizedMessageListProps {
   renderedMessages: RenderedMessage[];
+  scrollRef: React.RefObject<HTMLDivElement | null>;
   currentUserId: string;
   isGroup: boolean;
   expectedRecipients: number;
@@ -24,7 +28,7 @@ interface VirtualizedMessageListProps {
   onReaction: (messageId: string, emoji: string) => void;
   onRetry: (message: Message) => void;
   onCopy: (text: string) => void;
-  onOpenImage: (message: Message, selected: any) => void;
+  onOpenImage: (message: Message, selected: MessageAttachment) => void;
   onJumpToMessage: (messageId: string) => void;
   canModerate?: boolean;
   highlightedMessageId?: string | null;
@@ -32,8 +36,12 @@ interface VirtualizedMessageListProps {
   overscan?: number;
 }
 
-export const VirtualizedMessageList: React.FC<VirtualizedMessageListProps> = ({
+export const VirtualizedMessageList = forwardRef<
+  VirtualizedMessageListHandle,
+  VirtualizedMessageListProps
+>(function VirtualizedMessageList({
   renderedMessages,
+  scrollRef,
   currentUserId,
   isGroup,
   expectedRecipients,
@@ -49,119 +57,118 @@ export const VirtualizedMessageList: React.FC<VirtualizedMessageListProps> = ({
   highlightedMessageId,
   estimatedItemHeight = 120,
   overscan = 5,
-}) => {
-  const parentRef = useRef<HTMLDivElement>(null);
-  const [itemHeights, setItemHeights] = useState<Map<number, number>>(new Map());
-  const measuredIndicesRef = useRef<Set<number>>(new Set());
+}, ref) {
+  const listRef = useRef<HTMLDivElement>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
 
-  const measureItemHeight = useCallback((index: number, element: HTMLElement | null) => {
-    if (!element) return;
-    
-    // Only measure once per index to prevent infinite loops
-    if (measuredIndicesRef.current.has(index)) return;
-    
-    const height = element.getBoundingClientRect().height;
-    // Only update if height differs from estimate
-    if (Math.abs(height - estimatedItemHeight) > 2) {
-      measuredIndicesRef.current.add(index);
-      setItemHeights((prev) => {
-        const next = new Map(prev);
-        next.set(index, height);
-        return next;
-      });
-    } else {
-      measuredIndicesRef.current.add(index);
-    }
-  }, [estimatedItemHeight]);
+  // The virtualizer scrolls with the conversation pane (which also owns the
+  // "load earlier" control), so the list offset must be accounted for.
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const scrollElement = scrollRef.current;
+    if (!list || !scrollElement) return;
 
-  // Reset measured indices when renderedMessages changes
-  useEffect(() => {
-    measuredIndicesRef.current.clear();
-  }, [renderedMessages.length]);
+    const measure = () => {
+      const offset =
+        list.getBoundingClientRect().top -
+        scrollElement.getBoundingClientRect().top +
+        scrollElement.scrollTop;
+      setScrollMargin((previous) => (Math.abs(previous - offset) > 0.5 ? offset : previous));
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(list.parentElement ?? list);
+    observer.observe(scrollElement);
+    return () => observer.disconnect();
+  }, [scrollRef, renderedMessages.length]);
 
   const virtualizer = useVirtualizer({
     count: renderedMessages.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: (index: number) => itemHeights.get(index) ?? estimatedItemHeight,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => estimatedItemHeight,
     overscan,
+    scrollMargin,
   });
 
   const virtualItems = virtualizer.getVirtualItems();
 
-  const handleScroll = useCallback(() => {
-    // Scroll handling is automatic with react-virtual
-  }, []);
+  useImperativeHandle(
+    ref,
+    () => ({
+      scrollToMessage: (messageId: string) => {
+        const index = renderedMessages.findIndex(
+          (rendered) => rendered.message.id === messageId,
+        );
+        if (index >= 0) {
+          virtualizer.scrollToIndex(index, { align: 'center' });
+        }
+      },
+    }),
+    [renderedMessages, virtualizer],
+  );
 
   return (
     <div
-      ref={parentRef}
-      onScroll={handleScroll}
+      ref={listRef}
       data-message-list
-      className="flex-1 min-h-0 overflow-y-auto z-scroll px-3 sm:px-5 py-3"
       role="log"
       aria-live="polite"
       aria-relevant="additions"
       aria-label="Messages"
       style={{
-        minHeight: 0,
-        height: '100%',
+        height: virtualizer.getTotalSize(),
+        width: '100%',
         position: 'relative',
       }}
     >
-      <div
-        style={{
-          height: virtualizer.getTotalSize(),
-          width: '100%',
-          position: 'relative',
-        }}
-      >
-        {virtualItems.map((virtualItem) => {
-          const rendered = renderedMessages[virtualItem.index];
-          const isHighlighted = highlightedMessageId === rendered.message.id;
+      {virtualItems.map((virtualItem) => {
+        const rendered = renderedMessages[virtualItem.index];
+        if (!rendered) return null;
+        const isHighlighted = highlightedMessageId === rendered.message.id;
 
-          return (
-            <div
-              key={rendered.message.id}
-              ref={(el) => measureItemHeight(virtualItem.index, el)}
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: virtualItem.size,
-                transform: `translateY(${virtualItem.start}px)`,
-              }}
-            >
-              {rendered.showDate && (
-                <div className="sticky top-0 z-10 flex justify-center py-2 pointer-events-none">
-                  <span className="px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wide z-surface-2 border z-border z-muted backdrop-blur-sm">
-                    {rendered.dateLabel}
-                  </span>
-                </div>
-              )}
-              <MessageBubble
-                message={rendered.message}
-                currentUserId={currentUserId}
-                isGroup={isGroup}
-                expectedRecipients={expectedRecipients}
-                showAvatar={rendered.showAvatar}
-                showName={rendered.showName}
-                isContinuation={rendered.isContinuation}
-                onReply={onReply}
-                onEdit={onEdit}
-                onDelete={onDelete}
-                onReaction={onReaction}
-                onRetry={onRetry}
-                onCopy={onCopy}
-                onOpenImage={onOpenImage}
-                onJumpToMessage={onJumpToMessage}
-                canModerate={canModerate}
-                highlighted={isHighlighted}
-              />
-            </div>
-          );
-        })}
-      </div>
+        return (
+          <div
+            key={rendered.message.id}
+            data-index={virtualItem.index}
+            ref={virtualizer.measureElement}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              transform: `translateY(${virtualItem.start - scrollMargin}px)`,
+            }}
+          >
+            {rendered.showDate && (
+              <div className="sticky top-0 z-10 flex justify-center py-2 pointer-events-none">
+                <span className="px-2.5 py-1 rounded-full text-[10px] font-semibold uppercase tracking-wide z-surface-2 border z-border z-muted backdrop-blur-sm">
+                  {rendered.dateLabel}
+                </span>
+              </div>
+            )}
+            <MessageBubble
+              message={rendered.message}
+              currentUserId={currentUserId}
+              isGroup={isGroup}
+              expectedRecipients={expectedRecipients}
+              showAvatar={rendered.showAvatar}
+              showName={rendered.showName}
+              isContinuation={rendered.isContinuation}
+              onReply={onReply}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              onReaction={onReaction}
+              onRetry={onRetry}
+              onCopy={onCopy}
+              onOpenImage={onOpenImage}
+              onJumpToMessage={onJumpToMessage}
+              canModerate={canModerate}
+              highlighted={isHighlighted}
+            />
+          </div>
+        );
+      })}
     </div>
   );
-};
+});

@@ -583,37 +583,6 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
   ]);
 
   useEffect(() => {
-    if (!socket || !currentUser?.id) return;
-
-    const handleNotification = (payload: { conversationId: string; message: Message }) => {
-      if (!payload?.conversationId || !payload.message) return;
-      if (payload.conversationId === activeIdRef.current) {
-        refreshConversations();
-        return;
-      }
-      refreshConversations();
-    };
-
-    const handleEdit = (message: Message) => {
-      refreshConversations();
-    };
-
-    const handleDelete = (payload: { conversationId: string; messageId: string }) => {
-      refreshConversations();
-    };
-
-    socket.on('conversation:message-notification', handleNotification);
-    socket.on('conversation:message-edit', handleEdit);
-    socket.on('conversation:message-delete', handleDelete);
-
-    return () => {
-      socket.off('conversation:message-notification', handleNotification);
-      socket.off('conversation:message-edit', handleEdit);
-      socket.off('conversation:message-delete', handleDelete);
-    };
-  }, [socket, currentUser?.id, refreshConversations]);
-
-  useEffect(() => {
     const element = scrollRef.current;
     if (!element) return;
     const previous = previousCountRef.current;
@@ -1663,6 +1632,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
 
                   <VirtualizedMessageList
                     renderedMessages={renderedMessages}
+                    scrollRef={scrollRef}
                     currentUserId={currentUser.id}
                     isGroup={Boolean(isGroup)}
                     expectedRecipients={expectedRecipients}

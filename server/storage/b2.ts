@@ -397,6 +397,7 @@ export async function getAuthorizedDownloadUrl(
              WHERE ma.media_asset_id = asset.id
                AND p.user_id = $2
                AND ma.status = 'active'
+               AND (p.left_at IS NULL OR m.created_at <= p.left_at)
            )
          )
        )`,

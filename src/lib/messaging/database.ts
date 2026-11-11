@@ -38,6 +38,10 @@ export interface StoredMessage {
   clientId: string | null;
   text: string;
   replyToMessageId: string | null;
+  /** Identity snapshot so cached history renders group names/avatars offline. */
+  sender?: StoredMessageSender;
+  /** Quoted-message snapshot so replies render offline. */
+  replyToMessage?: StoredReplyPreview | null;
   isEdited: boolean;
   editedAt: number | null;
   isDeleted: boolean;
@@ -49,6 +53,22 @@ export interface StoredMessage {
   reactions: StoredReaction[];
   receipts: StoredReceipt[];
   accountId: string;
+}
+
+export interface StoredMessageSender {
+  id: string;
+  username: string;
+  name: string;
+  avatarUrl: string;
+  verified: boolean;
+  isGold: boolean;
+}
+
+export interface StoredReplyPreview {
+  id: string;
+  senderId: string | null;
+  senderUsername?: string;
+  text: string;
 }
 
 export interface StoredAttachment {
