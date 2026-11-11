@@ -29,6 +29,20 @@ export function isUserOnline(userId: string): boolean {
   return Boolean(sockets && sockets.size > 0);
 }
 
+export function evictUserFromConversation(userId: string, conversationId: string): void {
+  if (!activeServer) return;
+  const sockets = onlineUserSockets.get(userId);
+  if (!sockets) return;
+  const room = `conv:${conversationId}`;
+  for (const socketId of sockets) {
+    const socket = activeServer.sockets.sockets.get(socketId);
+    if (!socket) continue;
+    socket.leave(room);
+    const joined = socket.data.joinedConversations;
+    if (joined instanceof Set) joined.delete(conversationId);
+  }
+}
+
 export function getOnlineUserIds(): string[] {
   return Array.from(onlineUserSockets.keys()).filter((uid) => {
     const s = onlineUserSockets.get(uid);
@@ -108,6 +122,10 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
         next(new Error('Authentication required.'));
         return;
       }
+      if (session.expiresAt <= Date.now()) {
+        next(new Error('Session expired.'));
+        return;
+      }
       const authUser = {
         id: session.userId,
         username: session.username || '',
@@ -120,16 +138,43 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
       socket.data.name = socialUser.name;
       socket.data.authUserId = session.userId;
       socket.data.sessionTokenHash = session.tokenHash;
+      socket.data.sessionExpiresAt = session.expiresAt;
       next();
     })().catch(() => next(new Error('Unable to authenticate realtime connection.')));
   });
 
   io.on('connection', (socket) => {
+    // Session validation and expiration handling
     const userId = socket.data.userId as string | undefined;
-    const authUserId = socket.data.authUserId;
     const sessionTokenHash = socket.data.sessionTokenHash;
+    const sessionExpiresAt = socket.data.sessionExpiresAt;
     const username = socket.data.username as string | undefined;
+    let expirationTimer: NodeJS.Timeout | undefined;
 
+    // Immediately disconnect if session has already expired
+    if (sessionExpiresAt && sessionExpiresAt <= Date.now()) {
+      socket.disconnect(true);
+      return;
+    }
+
+    // Set up expiration timer
+    const scheduleExpiration = () => {
+      if (!socket || socket.disconnected) return;
+      const now = Date.now();
+      const expiresIn = sessionExpiresAt ? sessionExpiresAt - now : 30 * 60 * 1000; // Default 30 minutes
+      if (expiresIn <= 0) {
+        socket.disconnect(true);
+        return;
+      }
+      expirationTimer = setTimeout(() => {
+        if (!socket || socket.disconnected) return;
+        socket.disconnect(true);
+      }, expiresIn);
+    };
+
+    scheduleExpiration();
+
+    // Join standard rooms
     if (typeof userId === 'string') {
       socket.join(`user:${userId}`);
       let userSet = onlineUserSockets.get(userId);
@@ -144,10 +189,15 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
         io.emit('presence:update', { userId, isOnline: true });
       }
     }
-    if (typeof authUserId === 'number') socket.join(`auth-user:${authUserId}`);
     if (typeof sessionTokenHash === 'string') socket.join(`session:${sessionTokenHash}`);
 
-    // Join conversation room after authorization
+    // Join conversation room after authorization. Membership is cached per
+    // socket so ephemeral events (typing) can be gated without a DB round-trip.
+    if (!(socket.data.joinedConversations instanceof Set)) {
+      socket.data.joinedConversations = new Set<string>();
+    }
+    const joinedConversations = socket.data.joinedConversations as Set<string>;
+
     socket.on('conversation:join', (data: { conversationId: string }, ack?: (res: { success: boolean }) => void) => {
       void (async () => {
         if (!userId || !data?.conversationId) {
@@ -161,6 +211,7 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
           );
           if (check.rowCount) {
             socket.join(`conv:${data.conversationId}`);
+            joinedConversations.add(data.conversationId);
             ack?.({ success: true });
           } else {
             ack?.({ success: false });
@@ -174,12 +225,21 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
     socket.on('conversation:leave', (data: { conversationId: string }) => {
       if (data?.conversationId) {
         socket.leave(`conv:${data.conversationId}`);
+        joinedConversations.delete(data.conversationId);
       }
     });
 
-    // Typing indicators
+    // Session validation helper for sensitive operations
+    const validateSession = (): boolean => {
+      if (!userId || !sessionTokenHash) return false;
+      if (sessionExpiresAt && sessionExpiresAt <= Date.now()) return false;
+      return true;
+    };
+
     socket.on('typing:start', (data: { conversationId: string }) => {
       if (!userId || !data?.conversationId) return;
+      if (!joinedConversations.has(data.conversationId)) return;
+      if (!validateSession()) return;
       publishTyping({
         conversationId: data.conversationId,
         userId,
@@ -190,6 +250,8 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
 
     socket.on('typing:stop', (data: { conversationId: string }) => {
       if (!userId || !data?.conversationId) return;
+      if (!joinedConversations.has(data.conversationId)) return;
+      if (!validateSession()) return;
       publishTyping({
         conversationId: data.conversationId,
         userId,
@@ -198,13 +260,34 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
       });
     });
 
-    // Online presence check
-    socket.on('presence:query', (_data: unknown, ack?: (res: { onlineUserIds: string[] }) => void) => {
-      ack?.({ onlineUserIds: getOnlineUserIds() });
+    socket.on('presence:query', async (_data: unknown, ack?: (res: { onlineUserIds: string[] }) => void) => {
+      if (!validateSession()) {
+        ack?.({ onlineUserIds: [] });
+        return;
+      }
+      try {
+        const requestingUserConversations = await query(
+          'SELECT DISTINCT participant_id FROM zunari_conversation_participants WHERE user_id = $1 AND left_at IS NULL',
+          [userId],
+        );
+        const authorizedUserIds = await query(
+          'SELECT DISTINCT user_id FROM zunari_conversation_participants WHERE participant_id = ANY($1) AND left_at IS NULL',
+          [requestingUserConversations.rows.map(r => r.participant_id)],
+        );
+        const filteredOnlineUserIds = getOnlineUserIds().filter(
+          userId => authorizedUserIds.rows.some(r => r.user_id === userId),
+        );
+        ack?.({ onlineUserIds: filteredOnlineUserIds });
+      } catch {
+        ack?.({ onlineUserIds: [] });
+      }
     });
 
-    // Disconnect handling
+    // Clean up timer on disconnect
     socket.on('disconnect', () => {
+      if (expirationTimer) {
+        clearTimeout(expirationTimer);
+      }
       if (typeof userId === 'string') {
         const userSet = onlineUserSockets.get(userId);
         if (userSet) {

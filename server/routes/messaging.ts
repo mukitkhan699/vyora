@@ -8,6 +8,7 @@ import {
   publishReaction,
 } from '../realtime-events.ts';
 import { HttpError } from '../errors.ts';
+import { evictUserFromConversation } from '../realtime.ts';
 
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   const body = Buffer.from(JSON.stringify(payload));
@@ -137,6 +138,8 @@ export async function handleMessagingRequest(
     await requireSessionWithCsrf(req);
     const [, conversationId, targetUserId] = removeParticipantMatch;
     const result = await messagingRepo.removeGroupParticipant(conversationId, currentUserId, targetUserId);
+    // Revoke live access immediately instead of waiting for a reconnect.
+    evictUserFromConversation(targetUserId, conversationId);
     sendJson(res, 200, result);
     return true;
   }
@@ -164,26 +167,35 @@ export async function handleMessagingRequest(
       }
       await requireSessionWithCsrf(req);
       const body = await readJson(req);
-      const message = await messagingRepo.sendMessage(currentUserId, conversationId, {
-        text: typeof body.text === 'string' ? body.text : undefined,
-        clientId: typeof body.clientId === 'string' ? body.clientId : undefined,
-        replyToMessageId: typeof body.replyToMessageId === 'string' ? body.replyToMessageId : undefined,
-        attachmentAssetIds: Array.isArray(body.attachmentAssetIds) ? body.attachmentAssetIds.map(String) : undefined,
-      });
-
-      // Notify realtime subscribers
-      const participants = await messagingRepo.getParticipants(conversationId);
-      const activeRecipientIds = participants
-        .filter((p) => !p.leftAt && p.userId !== currentUserId)
-        .map((p) => p.userId);
-
-      publishConversationMessage({
+      const { message, isDuplicate } = await messagingRepo.sendMessage(
+        currentUserId,
         conversationId,
-        message,
-        recipientIds: activeRecipientIds,
-      });
+        {
+          text: typeof body.text === 'string' ? body.text : undefined,
+          clientId: typeof body.clientId === 'string' ? body.clientId : undefined,
+          replyToMessageId:
+            typeof body.replyToMessageId === 'string' ? body.replyToMessageId : undefined,
+          attachmentAssetIds: Array.isArray(body.attachmentAssetIds)
+            ? body.attachmentAssetIds.map(String)
+            : undefined,
+        },
+      );
 
-      sendJson(res, 201, { message });
+      // A retried clientId already reached recipients; do not fan it out twice.
+      if (!isDuplicate) {
+        const participants = await messagingRepo.getParticipants(conversationId);
+        const activeRecipientIds = participants
+          .filter((p) => !p.leftAt && p.userId !== currentUserId)
+          .map((p) => p.userId);
+
+        publishConversationMessage({
+          conversationId,
+          message,
+          recipientIds: activeRecipientIds,
+        });
+      }
+
+      sendJson(res, isDuplicate ? 200 : 201, { message, duplicate: isDuplicate });
       return true;
     }
   }

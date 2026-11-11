@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { useRealtime } from '../context/RealtimeContext';
 import {
   initializeDatabase,
   clearAllAccountData,
@@ -53,14 +52,79 @@ function convertStoredConversation(stored: any): Conversation {
   };
 }
 
+function toStoredMessage(message: Message, accountId: string): StoredMessage {
+  return {
+    id: message.id,
+    conversationId: message.conversationId as string,
+    senderId: message.senderId ?? null,
+    clientId: message.clientId ?? null,
+    text: message.text,
+    replyToMessageId: message.replyToMessageId ?? null,
+    sender: message.sender
+      ? {
+          id: message.sender.id,
+          username: message.sender.username,
+          name: message.sender.name,
+          avatarUrl: message.sender.avatarUrl,
+          verified: Boolean(message.sender.verified),
+          isGold: Boolean(message.sender.isGold),
+        }
+      : undefined,
+    replyToMessage: message.replyToMessage
+      ? {
+          id: message.replyToMessage.id,
+          senderId: message.replyToMessage.senderId,
+          senderUsername: message.replyToMessage.senderUsername,
+          text: message.replyToMessage.text,
+        }
+      : null,
+    isEdited: message.isEdited ?? false,
+    editedAt: message.editedAt ?? null,
+    isDeleted: message.isDeleted ?? false,
+    deletedAt: message.deletedAt ?? null,
+    createdAt:
+      typeof message.createdAt === 'string'
+        ? new Date(message.createdAt).getTime()
+        : message.createdAt,
+    localStatus: message.localStatus,
+    localError: message.localError,
+    attachments: (message.attachments || []).map((a) => ({
+      id: a.id,
+      messageId: a.messageId,
+      mediaAssetId: a.mediaAssetId,
+      filename: a.filename,
+      mimeType: a.mimeType,
+      byteSize: a.byteSize,
+      status: a.status,
+      expiresAt: a.expiresAt,
+      createdAt: a.createdAt,
+      url: a.url,
+    })),
+    reactions: (message.reactions || []).map((r) => ({
+      emoji: r.emoji,
+      userId: r.userId,
+      username: r.username,
+      createdAt: r.createdAt,
+    })),
+    receipts: (message.receipts || []).map((r) => ({
+      userId: r.userId,
+      deliveredAt: r.deliveredAt,
+      readAt: r.readAt,
+    })),
+    accountId,
+  };
+}
+
 function convertStoredMessage(stored: any): Message {
   return {
     id: stored.id,
     conversationId: stored.conversationId,
     senderId: stored.senderId,
+    sender: stored.sender,
     clientId: stored.clientId,
     text: stored.text,
     replyToMessageId: stored.replyToMessageId,
+    replyToMessage: stored.replyToMessage ?? null,
     isEdited: stored.isEdited,
     editedAt: stored.editedAt,
     isDeleted: stored.isDeleted,
@@ -96,7 +160,6 @@ function convertStoredMessage(stored: any): Message {
 
 export function useMessagingDB() {
   const { currentUser } = useAuth();
-  const { connected } = useRealtime();
   const [dbReady, setDbReady] = useState(false);
   const [dbError, setDbError] = useState<string | null>(null);
   const syncEngineRef = useRef<ReturnType<typeof createSyncEngine> | null>(null);
@@ -130,25 +193,9 @@ export function useMessagingDB() {
     };
   }, [currentUser?.id]);
 
-  useEffect(() => {
-    if (!connected || !currentUser?.id || !syncEngineRef.current || syncInProgressRef.current) return;
-
-    const processOutbox = async () => {
-      syncInProgressRef.current = true;
-      try {
-        await syncEngineRef.current!.processOutbox();
-      } catch (error) {
-        console.error('Outbox processing failed:', error);
-      } finally {
-        syncInProgressRef.current = false;
-      }
-    };
-
-    processOutbox();
-    const interval = window.setInterval(processOutbox, 10000);
-
-    return () => window.clearInterval(interval);
-  }, [connected, currentUser?.id]);
+  // Outbox processing is intentionally centralised in `useOutbox`, which has
+  // access to the active conversation and can reconcile UI + cache. Running a
+  // second processor here caused duplicate work and inconsistent persistence.
 
   const loadConversations = useCallback(async (): Promise<Conversation[]> => {
     if (!currentUser?.id) return [];
@@ -179,6 +226,7 @@ export function useMessagingDB() {
       title: conversation.title ?? null,
       avatarUrl: conversation.avatarUrl ?? null,
       lastMessageAt: conversation.lastMessageAt ?? 0,
+      lastMessage: lastMessage ? toStoredMessage(lastMessage, currentUser.id) : null,
       createdBy: conversation.createdBy ?? null,
       participants: (conversation.participants ?? []).map((p) => ({
         userId: p.userId,
@@ -223,46 +271,7 @@ export function useMessagingDB() {
   const saveMessage = useCallback(async (message: Message): Promise<void> => {
     if (!currentUser?.id) return;
     if (!message.conversationId) return;
-    const stored: StoredMessage = {
-      id: message.id,
-      conversationId: message.conversationId,
-      senderId: message.senderId ?? null,
-      clientId: message.clientId ?? null,
-      text: message.text,
-      replyToMessageId: message.replyToMessageId ?? null,
-      isEdited: message.isEdited ?? false,
-      editedAt: message.editedAt ?? null,
-      isDeleted: message.isDeleted ?? false,
-      deletedAt: message.deletedAt ?? null,
-      createdAt: typeof message.createdAt === 'string' ? new Date(message.createdAt).getTime() : message.createdAt,
-      localStatus: message.localStatus,
-      localError: message.localError,
-      attachments: (message.attachments || []).map((a) => ({
-        id: a.id,
-        messageId: a.messageId,
-        mediaAssetId: a.mediaAssetId,
-        filename: a.filename,
-        mimeType: a.mimeType,
-        byteSize: a.byteSize,
-        status: a.status,
-        expiresAt: a.expiresAt,
-        createdAt: a.createdAt,
-        url: a.url,
-      })),
-      reactions: (message.reactions || []).map((r) => ({
-        emoji: r.emoji,
-        userId: r.userId,
-        username: r.username,
-        createdAt: r.createdAt,
-      })),
-      receipts: (message.receipts || []).map((r) => ({
-        userId: r.userId,
-        deliveredAt: r.deliveredAt,
-        readAt: r.readAt,
-      })),
-      accountId: currentUser.id,
-    };
-    await upsertMessage(stored);
+    await upsertMessage(toStoredMessage(message, currentUser.id));
   }, [currentUser?.id]);
 
   const getMessage = useCallback(async (messageId: string): Promise<Message | null> => {

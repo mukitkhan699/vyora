@@ -23,7 +23,7 @@
     "lint": "tsc --noEmit",
     "typecheck:server": "tsc -p tsconfig.server.json --noEmit",
     "typecheck:tests": "tsc -p tsconfig.test.json --noEmit",
-    "test": "node --import tsx --test server/admin-integration.test.ts server/report-rate-limit.test.ts server/audit-export.test.ts server/audit-export-stream.test.ts server/reports-moderation.test.ts server/db/migrate.test.ts server/db/startup-migration.test.ts server/storage/b2.test.ts server/profile-validation.test.ts server/post-publishing.test.ts src/utils/mediaValidation.test.ts",
+    "test": "node --import tsx --test server/admin-integration.test.ts server/report-rate-limit.test.ts server/audit-export.test.ts server/audit-export-stream.test.ts server/reports-moderation.test.ts server/db/migrate.test.ts server/db/startup-migration.test.ts server/storage/b2.test.ts server/profile-validation.test.ts server/post-publishing.test.ts server/messaging-security.test.ts src/utils/mediaValidation.test.ts src/utils/messaging.test.ts",
     "test:postgres": "RUN_POSTGRES_INTEGRATION=1 node --import tsx --test server/reports-postgres.integration.test.ts",
     "test:migrations:postgres": "RUN_POSTGRES_INTEGRATION=1 node --import tsx --test server/db/migrate-postgres.integration.test.ts",
     "db:migrate": "tsx server/db/run-migrations.ts",

@@ -55,31 +55,26 @@ export async function cleanupDeliveredOrExpiredAttachments(): Promise<CleanupRes
 
   for (const row of candidates.rows) {
     try {
+      // Delete the object first. If B2 is unreachable, leave the row active so
+      // the next cleanup run retries instead of orphaning the object forever.
+      // S3 deletes are idempotent if a previous run already removed the object.
+      await getClient().send(
+        new DeleteObjectCommand({
+          Bucket: getBucket(),
+          Key: row.object_key,
+        }),
+      );
+
       await withTransaction(async (client) => {
-        // Mark attachment as cleaned
         await client.query(
           "UPDATE zunari_message_attachments SET status = 'cleaned' WHERE id = $1",
           [row.id],
         );
-        // Mark media asset as cleaned in metadata
         await client.query(
           "UPDATE zunari_media_assets SET status = 'cleaned' WHERE id = $1",
           [row.media_asset_id],
         );
       });
-
-      // Delete the actual object from Backblaze B2 storage
-      try {
-        await getClient().send(
-          new DeleteObjectCommand({
-            Bucket: getBucket(),
-            Key: row.object_key,
-          }),
-        );
-      } catch (storageError) {
-        // Safe and retryable if object was already removed or B2 is temporarily unreachable
-        console.warn(`[Storage] B2 deletion warning for key ${row.object_key}:`, storageError);
-      }
 
       cleanedCount++;
     } catch (err) {

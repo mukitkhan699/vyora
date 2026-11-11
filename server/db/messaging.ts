@@ -478,6 +478,26 @@ export class MessagingRepository {
         [now, conversationId, targetUserId],
       );
 
+      // Keep the group manageable if the owner leaves: promote an admin first,
+      // otherwise the longest-standing remaining member.
+      if (isLeaving && target.rows[0].role === 'owner') {
+        const successor = await client.query<{ user_id: string }>(
+          `SELECT user_id FROM zunari_conversation_participants
+           WHERE conversation_id = $1 AND user_id <> $2 AND left_at IS NULL
+           ORDER BY CASE WHEN role = 'admin' THEN 0 ELSE 1 END, joined_at ASC
+           LIMIT 1`,
+          [conversationId, targetUserId],
+        );
+        if (successor.rows[0]) {
+          await client.query(
+            `UPDATE zunari_conversation_participants
+             SET role = 'owner'
+             WHERE conversation_id = $1 AND user_id = $2`,
+            [conversationId, successor.rows[0].user_id],
+          );
+        }
+      }
+
       // Reconcile pending attachment deliveries for this user
       // Recipient is removed: mark pending attachment deliveries as skipped/read to avoid blocking cleanup
       await client.query(
@@ -616,7 +636,7 @@ export class MessagingRepository {
       replyToMessageId?: string;
       attachmentAssetIds?: string[];
     },
-  ): Promise<MessageRecord> {
+  ): Promise<{ message: MessageRecord; isDuplicate: boolean }> {
     const text = (payload.text || '').trim();
     const clientId = payload.clientId?.trim() || null;
     const attachmentIds = payload.attachmentAssetIds || [];
@@ -725,8 +745,11 @@ export class MessagingRepository {
     });
 
     const [fullMsg] = await this.getMessages(conversationId, senderId, { limit: 1 });
-    const targetMsg = fullMsg && fullMsg.id === result.messageId ? fullMsg : (await this.getMessageById(result.messageId, senderId))!;
-    return targetMsg;
+    const targetMsg =
+      fullMsg && fullMsg.id === result.messageId
+        ? fullMsg
+        : (await this.getMessageById(result.messageId, senderId))!;
+    return { message: targetMsg, isDuplicate: result.isDuplicate };
   }
 
   public async getMessageById(messageId: string, currentUserId: string): Promise<MessageRecord | null> {
@@ -872,6 +895,35 @@ export class MessagingRepository {
         throw new HttpError(403, 'You are not authorized to delete this message.', 'FORBIDDEN');
       }
 
+      // Product policy: group messages can only be deleted once every active
+      // recipient has received them, preventing silent retraction of unread text.
+      const conversation = await client.query<{ type: string }>(
+        'SELECT type FROM zunari_conversations_v2 WHERE id = $1',
+        [conversationId],
+      );
+      if (conversation.rows[0]?.type === 'group') {
+        const recipients = await client.query<{ user_id: string }>(
+          `SELECT user_id FROM zunari_conversation_participants
+           WHERE conversation_id = $1 AND user_id <> $2 AND left_at IS NULL`,
+          [conversationId, msg.rows[0].sender_id],
+        );
+        const recipientIds = recipients.rows.map((row) => row.user_id);
+        if (recipientIds.length > 0) {
+          const delivered = await client.query<{ count: number }>(
+            `SELECT COUNT(*)::int AS count FROM zunari_message_receipts
+             WHERE message_id = $1 AND user_id = ANY($2::text[]) AND delivered_at IS NOT NULL`,
+            [messageId, recipientIds],
+          );
+          if ((delivered.rows[0]?.count ?? 0) < recipientIds.length) {
+            throw new HttpError(
+              409,
+              'This message can only be deleted after every recipient has received it.',
+              'DELETE_TOO_EARLY',
+            );
+          }
+        }
+      }
+
       await client.query(
         `UPDATE zunari_messages_v2
          SET is_deleted = TRUE, deleted_at = $1, text = ''
@@ -902,6 +954,14 @@ export class MessagingRepository {
       );
       if (!part.rowCount) throw new HttpError(403, 'Forbidden.', 'FORBIDDEN');
 
+      const messageCheck = await client.query(
+        'SELECT 1 FROM zunari_messages_v2 WHERE id = $1 AND conversation_id = $2',
+        [messageId, conversationId],
+      );
+      if (!messageCheck.rowCount) {
+        throw new HttpError(404, 'Message not found.', 'MESSAGE_NOT_FOUND');
+      }
+
       const existing = await client.query(
         'DELETE FROM zunari_message_reactions WHERE message_id = $1 AND user_id = $2 AND emoji = $3 RETURNING 1',
         [messageId, userId, cleanEmoji],
@@ -929,14 +989,31 @@ export class MessagingRepository {
     const now = Date.now();
 
     await withTransaction(async (client) => {
-      // Ensure user is participant
+      // Receipts must come from an active participant...
       const part = await client.query(
-        'SELECT 1 FROM zunari_conversation_participants WHERE conversation_id = $1 AND user_id = $2',
+        `SELECT 1 FROM zunari_conversation_participants
+         WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL`,
         [conversationId, userId],
       );
       if (!part.rowCount) return;
 
-      for (const msgId of messageIds) {
+      // ...and may only reference messages that actually belong to the conversation.
+      const uniqueIds = [...new Set(messageIds)];
+      const owned = await client.query<{ id: string }>(
+        `SELECT id FROM zunari_messages_v2
+         WHERE conversation_id = $1 AND id = ANY($2::text[])`,
+        [conversationId, uniqueIds],
+      );
+      if (owned.rowCount !== uniqueIds.length) {
+        throw new HttpError(
+          400,
+          'One or more receipts reference messages outside this conversation.',
+          'INVALID_MESSAGE_ID',
+        );
+      }
+      const allowedIds = owned.rows.map((row) => row.id);
+
+      for (const msgId of allowedIds) {
         if (receiptType === 'delivered') {
           await client.query(
             `INSERT INTO zunari_message_receipts (message_id, user_id, delivered_at)
@@ -973,14 +1050,21 @@ export class MessagingRepository {
         }
       }
 
-      if (receiptType === 'read' && messageIds.length > 0) {
-        const lastId = messageIds[messageIds.length - 1];
-        await client.query(
-          `UPDATE zunari_conversation_participants
-           SET last_read_message_id = $1
-           WHERE conversation_id = $2 AND user_id = $3`,
-          [lastId, conversationId, userId],
+      if (receiptType === 'read' && allowedIds.length > 0) {
+        const latest = await client.query<{ id: string }>(
+          `SELECT id FROM zunari_messages_v2
+           WHERE conversation_id = $1 AND id = ANY($2::text[])
+           ORDER BY created_at DESC LIMIT 1`,
+          [conversationId, allowedIds],
         );
+        if (latest.rows[0]) {
+          await client.query(
+            `UPDATE zunari_conversation_participants
+             SET last_read_message_id = $1
+             WHERE conversation_id = $2 AND user_id = $3`,
+            [latest.rows[0].id, conversationId, userId],
+          );
+        }
       }
     });
   }
@@ -1002,10 +1086,13 @@ export class MessagingRepository {
       deleted_at: string | number | null;
       created_at: string | number;
     }>(
-      `SELECT * FROM zunari_messages_v2
-       WHERE conversation_id = $1
-       ORDER BY created_at DESC LIMIT 1`,
-      [conversationId],
+      `SELECT m.* FROM zunari_messages_v2 m
+       JOIN zunari_conversation_participants p
+         ON p.conversation_id = m.conversation_id AND p.user_id = $2
+       WHERE m.conversation_id = $1
+         AND (p.left_at IS NULL OR m.created_at <= p.left_at)
+       ORDER BY m.created_at DESC LIMIT 1`,
+      [conversationId, currentUserId],
     );
     const r = res.rows[0];
     if (!r) return null;
@@ -1036,6 +1123,7 @@ export class MessagingRepository {
          ON p.conversation_id = m.conversation_id AND p.user_id = $2
        WHERE m.conversation_id = $1
          AND m.sender_id <> $2
+         AND (p.left_at IS NULL OR m.created_at <= p.left_at)
          AND NOT EXISTS (
            SELECT 1 FROM zunari_message_receipts r
            WHERE r.message_id = m.id AND r.user_id = $2 AND r.read_at IS NOT NULL
