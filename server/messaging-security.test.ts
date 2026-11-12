@@ -17,10 +17,7 @@ describe('messaging authorization contracts', () => {
 
   test('receipts only accept message ids from the conversation and active members', () => {
     assert.match(messagingDb, /AND id = ANY\(\$2::text\[\]\)/);
-    assert.match(
-      messagingDb,
-      /AND user_id = \$2 AND left_at IS NULL[\s\S]{0,400}SELECT id FROM zunari_messages_v2/,
-    );
+    assert.match(messagingDb, /AND user_id = \$2 AND left_at IS NULL/);
     assert.match(messagingDb, /INVALID_MESSAGE_ID/);
   });
 

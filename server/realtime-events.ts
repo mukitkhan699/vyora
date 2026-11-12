@@ -27,6 +27,7 @@ export interface RealtimeReceiptEvent {
   userId: string;
   messageIds: string[];
   receiptType: 'delivered' | 'read';
+  recipientIds?: string[];
 }
 
 export interface RealtimeReactionEvent {
@@ -36,6 +37,7 @@ export interface RealtimeReactionEvent {
   username: string;
   emoji: string;
   added: boolean;
+  recipientIds?: string[];
 }
 
 export interface RealtimeCallEvent {
