@@ -150,26 +150,35 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
     const sessionExpiresAt = socket.data.sessionExpiresAt;
     const username = socket.data.username as string | undefined;
     let expirationTimer: NodeJS.Timeout | undefined;
+    const validSessionExpiresAt =
+      typeof sessionExpiresAt === 'number' && Number.isFinite(sessionExpiresAt)
+        ? sessionExpiresAt
+        : undefined;
+    const effectiveExpiresAt = validSessionExpiresAt ?? Date.now() + 30 * 60 * 1000;
 
     // Immediately disconnect if session has already expired
-    if (sessionExpiresAt && sessionExpiresAt <= Date.now()) {
+    if (validSessionExpiresAt !== undefined && validSessionExpiresAt <= Date.now()) {
       socket.disconnect(true);
       return;
     }
 
-    // Set up expiration timer
     const scheduleExpiration = () => {
-      if (!socket || socket.disconnected) return;
-      const now = Date.now();
-      const expiresIn = sessionExpiresAt ? sessionExpiresAt - now : 30 * 60 * 1000; // Default 30 minutes
-      if (expiresIn <= 0) {
+      if (socket.disconnected) return;
+      if (expirationTimer) clearTimeout(expirationTimer);
+      expirationTimer = undefined;
+      const timeRemaining = effectiveExpiresAt - Date.now();
+
+      if (timeRemaining <= 0) {
         socket.disconnect(true);
         return;
       }
+
+      const safeDelay = Math.min(timeRemaining, 2147483647);
+
       expirationTimer = setTimeout(() => {
-        if (!socket || socket.disconnected) return;
-        socket.disconnect(true);
-      }, expiresIn);
+        expirationTimer = undefined;
+        scheduleExpiration();
+      }, safeDelay);
     };
 
     scheduleExpiration();
@@ -291,6 +300,7 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
     socket.on('disconnect', () => {
       if (expirationTimer) {
         clearTimeout(expirationTimer);
+        expirationTimer = undefined;
       }
       if (typeof userId === 'string') {
         const userSet = onlineUserSockets.get(userId);

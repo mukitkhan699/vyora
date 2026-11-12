@@ -1,0 +1,4 @@
+npm notice run react-example@0.0.0 typecheck:tests
+npm notice run react-example@0.0.0 typecheck:tests
+npm notice run tsc -p tsconfig.test.json --noEmit
+npm notice run tsc -p tsconfig.test.json --noEmit
