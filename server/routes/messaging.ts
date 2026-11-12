@@ -258,6 +258,7 @@ export async function handleMessagingRequest(
     const emoji = typeof body.emoji === 'string' ? body.emoji : '';
     const result = await messagingRepo.toggleReaction(conversationId, messageId, currentUserId, emoji);
 
+    const participants = await messagingRepo.getParticipants(conversationId);
     publishReaction({
       conversationId,
       messageId,
@@ -265,6 +266,7 @@ export async function handleMessagingRequest(
       username: '',
       emoji: result.emoji,
       added: result.added,
+      recipientIds: participants.filter((p) => !p.leftAt).map((p) => p.userId),
     });
 
     sendJson(res, 200, result);
@@ -286,11 +288,13 @@ export async function handleMessagingRequest(
 
     await messagingRepo.recordReceipts(conversationId, currentUserId, receiptType, messageIds);
 
+    const participants = await messagingRepo.getParticipants(conversationId);
     publishReceipt({
       conversationId,
       userId: currentUserId,
       messageIds,
       receiptType,
+      recipientIds: participants.filter((p) => !p.leftAt).map((p) => p.userId),
     });
 
     sendJson(res, 200, { success: true });

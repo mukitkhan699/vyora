@@ -189,6 +189,8 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
         io.emit('presence:update', { userId, isOnline: true });
       }
     }
+    const authUserId = socket.data.authUserId;
+    if (typeof authUserId === 'number') socket.join(`auth-user:${authUserId}`);
     if (typeof sessionTokenHash === 'string') socket.join(`session:${sessionTokenHash}`);
 
     // Join conversation room after authorization. Membership is cached per
@@ -266,17 +268,19 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
         return;
       }
       try {
-        const requestingUserConversations = await query(
-          'SELECT DISTINCT participant_id FROM zunari_conversation_participants WHERE user_id = $1 AND left_at IS NULL',
+        const authorizedUserIds = await query<{ user_id: string }>(
+          `SELECT DISTINCT peer.user_id
+           FROM zunari_conversation_participants me
+           JOIN zunari_conversation_participants peer
+             ON peer.conversation_id = me.conversation_id
+           WHERE me.user_id = $1
+             AND me.left_at IS NULL
+             AND peer.left_at IS NULL
+             AND peer.user_id <> $1`,
           [userId],
         );
-        const authorizedUserIds = await query(
-          'SELECT DISTINCT user_id FROM zunari_conversation_participants WHERE participant_id = ANY($1) AND left_at IS NULL',
-          [requestingUserConversations.rows.map(r => r.participant_id)],
-        );
-        const filteredOnlineUserIds = getOnlineUserIds().filter(
-          userId => authorizedUserIds.rows.some(r => r.user_id === userId),
-        );
+        const allowed = new Set(authorizedUserIds.rows.map((row) => row.user_id));
+        const filteredOnlineUserIds = getOnlineUserIds().filter((onlineId) => allowed.has(onlineId));
         ack?.({ onlineUserIds: filteredOnlineUserIds });
       } catch {
         ack?.({ onlineUserIds: [] });
@@ -314,12 +318,19 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
     }
   });
 
-  const stopConvMsgEdit = onConversationMessageEdit(({ conversationId, message }) => {
+  const stopConvMsgEdit = onConversationMessageEdit(({ conversationId, message, recipientIds }) => {
     io.to(`conv:${conversationId}`).emit('conversation:message-edit', message);
+    for (const rId of recipientIds) {
+      io.to(`user:${rId}`).emit('conversation:message-edit', message);
+    }
   });
 
-  const stopConvMsgDelete = onConversationMessageDelete(({ conversationId, messageId }) => {
-    io.to(`conv:${conversationId}`).emit('conversation:message-delete', { conversationId, messageId });
+  const stopConvMsgDelete = onConversationMessageDelete(({ conversationId, messageId, recipientIds }) => {
+    const payload = { conversationId, messageId };
+    io.to(`conv:${conversationId}`).emit('conversation:message-delete', payload);
+    for (const rId of recipientIds) {
+      io.to(`user:${rId}`).emit('conversation:message-delete', payload);
+    }
   });
 
   const stopTyping = onTyping((event) => {
@@ -327,11 +338,19 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
   });
 
   const stopReceipt = onReceipt((event) => {
-    io.to(`conv:${event.conversationId}`).emit('conversation:receipt', event);
+    const { recipientIds = [], ...payload } = event;
+    io.to(`conv:${event.conversationId}`).emit('conversation:receipt', payload);
+    for (const rId of recipientIds) {
+      io.to(`user:${rId}`).emit('conversation:receipt', payload);
+    }
   });
 
   const stopReaction = onReaction((event) => {
-    io.to(`conv:${event.conversationId}`).emit('conversation:reaction', event);
+    const { recipientIds = [], ...payload } = event;
+    io.to(`conv:${event.conversationId}`).emit('conversation:reaction', payload);
+    for (const rId of recipientIds) {
+      io.to(`user:${rId}`).emit('conversation:reaction', payload);
+    }
   });
 
   const stopCall = onCallEvent((event) => {

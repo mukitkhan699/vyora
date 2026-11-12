@@ -11,19 +11,8 @@ import {
   updateConversationSyncCursor,
   getConversationById,
 } from './conversation-store.ts';
-import {
-  getMessages,
-  upsertMessages,
-  getMessagesForSync,
-  updateMessageStatus,
-  getMessageById,
-} from './message-store.ts';
-import {
-  getSyncState,
-  upsertSyncState,
-  updateSyncCursor,
-  updateLastSuccessfulSync,
-} from './sync-state-store.ts';
+import { upsertMessages } from './message-store.ts';
+import { updateSyncCursor, updateLastSuccessfulSync } from './sync-state-store.ts';
 // import { useAuth } from '../../context/AuthContext.tsx';
 // import { useRealtime } from '../../context/RealtimeContext.tsx';
 
@@ -186,30 +175,22 @@ export function createSyncEngine(getAccountId: () => string | null): SyncEngine 
       let outboxProcessed = 0;
 
       try {
-        const syncState = await getSyncState(accountId, conversationId);
-        const cursor = syncState?.lastSyncedCursor ?? null;
+        // Always reconcile the newest page. Live delivery is handled by the
+        // socket and older history is backfilled by the UI's `before` cursor,
+        // so the sync cursor must never be treated as a timestamp.
+        const serverMessages = await fetchMessages(accountId, conversationId, undefined, 100);
+        if (serverMessages.length > 0) {
+          await upsertMessages(serverMessages);
+          messagesSynced = serverMessages.length;
 
-        const newMessages = await getMessagesForSync(accountId, conversationId, cursor);
-        const serverMessages = await fetchMessages(accountId, conversationId, cursor ?? undefined, 100);
-
-        const allMessages = [...newMessages];
-        for (const msg of serverMessages) {
-          if (!allMessages.find((m) => m.id === msg.id)) {
-            allMessages.push(msg);
-          }
-        }
-
-        if (allMessages.length > 0) {
-          await upsertMessages(allMessages);
-          messagesSynced = allMessages.length;
-
-          const latestMessage = allMessages.reduce((latest, m) =>
+          const latestMessage = serverMessages.reduce((latest, m) =>
             m.createdAt > latest.createdAt ? m : latest
           );
-          await updateSyncCursor(accountId, conversationId, String(latestMessage.createdAt));
+          // Store a message id: both `getMessagesForSync` and the API treat
+          // `before` as a message id, never as a timestamp.
+          await updateSyncCursor(accountId, conversationId, latestMessage.id);
           await updateLastSuccessfulSync(accountId, conversationId);
-          
-          // Also update the conversation with the latest message
+
           const conversation = await getConversationById(accountId, conversationId);
           if (conversation) {
             conversation.lastMessage = latestMessage;

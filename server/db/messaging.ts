@@ -84,6 +84,33 @@ export interface MessageRecord {
   receipts: MessageReceiptRecord[];
 }
 
+const MAX_MESSAGE_TEXT_LENGTH = 4000;
+const MAX_MESSAGE_ATTACHMENTS = 10;
+const MAX_GROUP_PARTICIPANTS = 100;
+const MAX_RECEIPT_MESSAGE_IDS = 100;
+
+interface MessageRow {
+  id: string;
+  conversation_id: string;
+  sender_id: string | null;
+  client_id: string | null;
+  text: string;
+  reply_to_message_id: string | null;
+  is_edited: boolean;
+  edited_at: string | number | null;
+  is_deleted: boolean;
+  deleted_at: string | number | null;
+  created_at: string | number;
+  sender_username: string | null;
+  sender_name: string | null;
+  sender_avatar_url: string | null;
+  sender_verified: boolean | null;
+  sender_is_gold: boolean | null;
+  reply_sender_id: string | null;
+  reply_sender_username: string | null;
+  reply_text: string | null;
+}
+
 export class MessagingRepository {
   public async getConversationById(
     conversationId: string,
@@ -127,7 +154,10 @@ export class MessagingRepository {
     };
   }
 
-  public async getParticipants(conversationId: string): Promise<ConversationParticipant[]> {
+  public async getParticipants(
+    conversationId: string,
+    includeLeft = false,
+  ): Promise<ConversationParticipant[]> {
     const res = await query<{
       conversation_id: string;
       user_id: string;
@@ -148,11 +178,29 @@ export class MessagingRepository {
        FROM zunari_conversation_participants p
        JOIN zunari_users u ON u.public_id = p.user_id
        WHERE p.conversation_id = $1
+         ${includeLeft ? '' : 'AND p.left_at IS NULL'}
        ORDER BY p.joined_at ASC`,
       [conversationId],
     );
 
-    return res.rows.map((r) => ({
+    return res.rows.map((r) => this.mapParticipantRow(r));
+  }
+
+  private mapParticipantRow(r: {
+    user_id: string;
+    role: 'owner' | 'admin' | 'member';
+    joined_at: string | number;
+    left_at: string | number | null;
+    last_read_message_id: string | null;
+    username: string;
+    name: string;
+    avatar_url: string;
+    verified: boolean;
+    is_gold: boolean;
+    followers_count: number;
+    following_count: number;
+  }): ConversationParticipant {
+    return {
       userId: r.user_id,
       role: r.role,
       joinedAt: Number(r.joined_at),
@@ -169,7 +217,45 @@ export class MessagingRepository {
         followingCount: Number(r.following_count),
         joinedDate: '',
       },
-    }));
+    };
+  }
+
+  private async getParticipantsForConversations(
+    conversationIds: string[],
+  ): Promise<Map<string, ConversationParticipant[]>> {
+    const map = new Map<string, ConversationParticipant[]>();
+    if (conversationIds.length === 0) return map;
+
+    const res = await query<{
+      conversation_id: string;
+      user_id: string;
+      role: 'owner' | 'admin' | 'member';
+      joined_at: string | number;
+      left_at: string | number | null;
+      last_read_message_id: string | null;
+      username: string;
+      name: string;
+      avatar_url: string;
+      verified: boolean;
+      is_gold: boolean;
+      followers_count: number;
+      following_count: number;
+    }>(
+      `SELECT p.*, u.username, u.name, u.avatar_url, u.verified, u.is_gold,
+              u.followers_count, u.following_count
+       FROM zunari_conversation_participants p
+       JOIN zunari_users u ON u.public_id = p.user_id
+       WHERE p.conversation_id = ANY($1::text[]) AND p.left_at IS NULL
+       ORDER BY p.conversation_id, p.joined_at ASC`,
+      [conversationIds],
+    );
+
+    for (const row of res.rows) {
+      const list = map.get(row.conversation_id) || [];
+      list.push(this.mapParticipantRow(row));
+      map.set(row.conversation_id, list);
+    }
+    return map;
   }
 
   public async listConversations(currentUserId: string): Promise<ConversationSummary[]> {
@@ -190,28 +276,26 @@ export class MessagingRepository {
       [currentUserId],
     );
 
-    const summaries: ConversationSummary[] = [];
-    for (const row of res.rows) {
-      const participants = await this.getParticipants(row.id);
-      const lastMessage = await this.getLastMessage(row.id, currentUserId);
-      const unreadCount = await this.getUnreadCount(row.id, currentUserId);
+    const conversationIds = res.rows.map((row) => row.id);
+    const [participantsByConversation, lastMessages, unreadCounts] = await Promise.all([
+      this.getParticipantsForConversations(conversationIds),
+      this.getLastMessagesForConversations(conversationIds, currentUserId),
+      this.getUnreadCountsForConversations(conversationIds, currentUserId),
+    ]);
 
-      summaries.push({
-        id: row.id,
-        type: row.type,
-        title: row.title,
-        avatarUrl: row.avatar_url,
-        createdBy: row.created_by,
-        lastMessageAt: Number(row.last_message_at),
-        createdAt: Number(row.created_at),
-        updatedAt: Number(row.updated_at),
-        participants,
-        lastMessage,
-        unreadCount,
-      });
-    }
-
-    return summaries;
+    return res.rows.map((row) => ({
+      id: row.id,
+      type: row.type,
+      title: row.title,
+      avatarUrl: row.avatar_url,
+      createdBy: row.created_by,
+      lastMessageAt: Number(row.last_message_at),
+      createdAt: Number(row.created_at),
+      updatedAt: Number(row.updated_at),
+      participants: participantsByConversation.get(row.id) || [],
+      lastMessage: lastMessages.get(row.id) || null,
+      unreadCount: unreadCounts.get(row.id) || 0,
+    }));
   }
 
   public async getOrCreateDirectConversation(
@@ -287,6 +371,13 @@ export class MessagingRepository {
     const uniqueParticipants = Array.from(new Set([creatorId, ...participantIds]));
     if (uniqueParticipants.length < 2) {
       throw new HttpError(400, 'A group conversation must have at least 2 participants.', 'NOT_ENOUGH_PARTICIPANTS');
+    }
+    if (uniqueParticipants.length > MAX_GROUP_PARTICIPANTS) {
+      throw new HttpError(
+        400,
+        `A group conversation cannot have more than ${MAX_GROUP_PARTICIPANTS} participants.`,
+        'TOO_MANY_PARTICIPANTS',
+      );
     }
 
     const now = Date.now();
@@ -380,6 +471,13 @@ export class MessagingRepository {
   ): Promise<ConversationParticipant[]> {
     const uniqueIds = Array.from(new Set(newParticipantIds)).filter((id) => id !== actorId);
     if (uniqueIds.length === 0) return this.getParticipants(conversationId);
+    if (uniqueIds.length > MAX_GROUP_PARTICIPANTS) {
+      throw new HttpError(
+        400,
+        `A group conversation cannot have more than ${MAX_GROUP_PARTICIPANTS} participants.`,
+        'TOO_MANY_PARTICIPANTS',
+      );
+    }
 
     const now = Date.now();
     await withTransaction(async (client) => {
@@ -409,6 +507,25 @@ export class MessagingRepository {
       );
       if (usersCheck.rowCount !== uniqueIds.length) {
         throw new HttpError(404, 'One or more users not found.', 'USER_NOT_FOUND');
+      }
+
+      const activeCount = await client.query<{ count: string }>(
+        `SELECT count(*)::text AS count FROM zunari_conversation_participants
+         WHERE conversation_id = $1 AND left_at IS NULL`,
+        [conversationId],
+      );
+      const alreadyActive = await client.query<{ user_id: string }>(
+        `SELECT user_id FROM zunari_conversation_participants
+         WHERE conversation_id = $1 AND user_id = ANY($2::text[]) AND left_at IS NULL`,
+        [conversationId, uniqueIds],
+      );
+      const additions = uniqueIds.length - (alreadyActive.rowCount || 0);
+      if (Number(activeCount.rows[0]?.count || 0) + additions > MAX_GROUP_PARTICIPANTS) {
+        throw new HttpError(
+          400,
+          `A group conversation cannot have more than ${MAX_GROUP_PARTICIPANTS} participants.`,
+          'TOO_MANY_PARTICIPANTS',
+        );
       }
 
       for (const targetId of uniqueIds) {
@@ -548,6 +665,10 @@ export class MessagingRepository {
       }
     }
 
+    // A `before` cursor must never expose messages newer than the member's
+    // departure time, otherwise a departed member could page forward past it.
+    cursorTime = Math.min(cursorTime, maxTime + 1);
+
     const messagesRes = await query<{
       id: string;
       conversation_id: string;
@@ -644,6 +765,20 @@ export class MessagingRepository {
     if (!text && attachmentIds.length === 0) {
       throw new HttpError(400, 'Message text or attachment is required.', 'EMPTY_MESSAGE');
     }
+    if (text.length > MAX_MESSAGE_TEXT_LENGTH) {
+      throw new HttpError(
+        400,
+        `Message text cannot exceed ${MAX_MESSAGE_TEXT_LENGTH} characters.`,
+        'MESSAGE_TOO_LONG',
+      );
+    }
+    if (attachmentIds.length > MAX_MESSAGE_ATTACHMENTS) {
+      throw new HttpError(
+        400,
+        `A message cannot have more than ${MAX_MESSAGE_ATTACHMENTS} attachments.`,
+        'TOO_MANY_ATTACHMENTS',
+      );
+    }
 
     const now = Date.now();
     const result = await withTransaction(async (client) => {
@@ -680,14 +815,29 @@ export class MessagingRepository {
         }
       }
 
-      // 4. Insert message
+      // 4. Insert message. A concurrent retry with the same clientId can race
+      // past the check above, so let the unique index resolve it atomically.
       const messageId = `msg_${randomUUID()}`;
-      await client.query(
+      const inserted = await client.query<{ id: string }>(
         `INSERT INTO zunari_messages_v2
            (id, conversation_id, sender_id, client_id, text, reply_to_message_id, is_edited, is_deleted, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, FALSE, FALSE, $7)`,
+         VALUES ($1, $2, $3, $4, $5, $6, FALSE, FALSE, $7)
+         ON CONFLICT (conversation_id, sender_id, client_id) WHERE client_id IS NOT NULL
+         DO NOTHING
+         RETURNING id`,
         [messageId, conversationId, senderId, clientId, text, payload.replyToMessageId || null, now],
       );
+      if (!inserted.rows[0]) {
+        const winner = await client.query<{ id: string }>(
+          `SELECT id FROM zunari_messages_v2
+           WHERE conversation_id = $1 AND sender_id = $2 AND client_id = $3`,
+          [conversationId, senderId, clientId],
+        );
+        if (winner.rows[0]) {
+          return { messageId: winner.rows[0].id, isDuplicate: true };
+        }
+        throw new Error('Failed to persist the message.');
+      }
 
       // 5. Update conversation timestamp
       await client.query(
@@ -845,6 +995,15 @@ export class MessagingRepository {
     }
     const now = Date.now();
     await withTransaction(async (client) => {
+      const membership = await client.query(
+        `SELECT 1 FROM zunari_conversation_participants
+         WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL`,
+        [conversationId, senderId],
+      );
+      if (!membership.rowCount) {
+        throw new HttpError(403, 'You are not an active member of this conversation.', 'FORBIDDEN');
+      }
+
       const msg = await client.query<{ sender_id: string; is_deleted: boolean }>(
         'SELECT sender_id, is_deleted FROM zunari_messages_v2 WHERE id = $1 AND conversation_id = $2 FOR UPDATE',
         [messageId, conversationId],
@@ -885,11 +1044,15 @@ export class MessagingRepository {
       if (msg.rows[0].is_deleted) return;
 
       const actorPart = await client.query<{ role: string }>(
-        'SELECT role FROM zunari_conversation_participants WHERE conversation_id = $1 AND user_id = $2',
+        `SELECT role FROM zunari_conversation_participants
+         WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL`,
         [conversationId, actorId],
       );
+      if (!actorPart.rows[0]) {
+        throw new HttpError(403, 'You are not an active member of this conversation.', 'FORBIDDEN');
+      }
       const isSender = msg.rows[0].sender_id === actorId;
-      const isAdminOrOwner = actorPart.rows[0] && (actorPart.rows[0].role === 'admin' || actorPart.rows[0].role === 'owner');
+      const isAdminOrOwner = actorPart.rows[0].role === 'admin' || actorPart.rows[0].role === 'owner';
 
       if (!isSender && !isAdminOrOwner) {
         throw new HttpError(403, 'You are not authorized to delete this message.', 'FORBIDDEN');
@@ -930,6 +1093,14 @@ export class MessagingRepository {
          WHERE id = $2`,
         [now, messageId],
       );
+      // Revoke access to attachments of a deleted message. Download URLs only
+      // authorize attachments whose status is still 'active'.
+      await client.query(
+        `UPDATE zunari_message_attachments
+         SET status = 'expired'
+         WHERE message_id = $1 AND status = 'active'`,
+        [messageId],
+      );
     });
     return { success: true };
   }
@@ -954,12 +1125,15 @@ export class MessagingRepository {
       );
       if (!part.rowCount) throw new HttpError(403, 'Forbidden.', 'FORBIDDEN');
 
-      const messageCheck = await client.query(
-        'SELECT 1 FROM zunari_messages_v2 WHERE id = $1 AND conversation_id = $2',
+      const messageCheck = await client.query<{ is_deleted: boolean }>(
+        'SELECT is_deleted FROM zunari_messages_v2 WHERE id = $1 AND conversation_id = $2',
         [messageId, conversationId],
       );
-      if (!messageCheck.rowCount) {
+      if (!messageCheck.rows[0]) {
         throw new HttpError(404, 'Message not found.', 'MESSAGE_NOT_FOUND');
+      }
+      if (messageCheck.rows[0].is_deleted) {
+        throw new HttpError(400, 'Deleted messages cannot be reacted to.', 'MESSAGE_DELETED');
       }
 
       const existing = await client.query(
@@ -998,9 +1172,9 @@ export class MessagingRepository {
       if (!part.rowCount) return;
 
       // ...and may only reference messages that actually belong to the conversation.
-      const uniqueIds = [...new Set(messageIds)];
-      const owned = await client.query<{ id: string }>(
-        `SELECT id FROM zunari_messages_v2
+      const uniqueIds = [...new Set(messageIds)].slice(0, MAX_RECEIPT_MESSAGE_IDS);
+      const owned = await client.query<{ id: string; is_deleted: boolean }>(
+        `SELECT id, is_deleted FROM zunari_messages_v2
          WHERE conversation_id = $1 AND id = ANY($2::text[])`,
         [conversationId, uniqueIds],
       );
@@ -1011,7 +1185,8 @@ export class MessagingRepository {
           'INVALID_MESSAGE_ID',
         );
       }
-      const allowedIds = owned.rows.map((row) => row.id);
+      // Deleted messages no longer accept delivery/read state.
+      const allowedIds = owned.rows.filter((row) => !row.is_deleted).map((row) => row.id);
 
       for (const msgId of allowedIds) {
         if (receiptType === 'delivered') {
@@ -1133,6 +1308,101 @@ export class MessagingRepository {
     return Number(res.rows[0]?.count || 0);
   }
 
+  private async getLastMessagesForConversations(
+    conversationIds: string[],
+    currentUserId: string,
+  ): Promise<Map<string, MessageRecord | null>> {
+    const map = new Map<string, MessageRecord | null>();
+    if (conversationIds.length === 0) return Promise.resolve(map);
+
+    const res = await query<{
+      conversation_id: string;
+      id: string;
+      sender_id: string | null;
+      client_id: string | null;
+      text: string;
+      reply_to_message_id: string | null;
+      is_edited: boolean;
+      edited_at: string | number | null;
+      is_deleted: boolean;
+      deleted_at: string | number | null;
+      created_at: string | number;
+    }>(
+      `SELECT m.* FROM zunari_messages_v2 m
+       JOIN zunari_conversation_participants p
+         ON p.conversation_id = m.conversation_id AND p.user_id = $2
+       WHERE m.conversation_id = ANY($1::text[])
+         AND (p.left_at IS NULL OR m.created_at <= p.left_at)
+       ORDER BY m.conversation_id, m.created_at DESC`,
+      [conversationIds, currentUserId],
+    );
+
+    // Build map with the most recent message for each conversation
+    const conversationMap = new Map<string, any>();
+    for (const row of res.rows) {
+      const existing = conversationMap.get(row.conversation_id);
+      if (!existing || new Date(row.created_at).getTime() > new Date(existing.created_at).getTime()) {
+        conversationMap.set(row.conversation_id, row);
+      }
+    }
+
+    // Convert rows to MessageRecord
+    for (const [conversationId, row] of conversationMap.entries()) {
+      const message: MessageRecord = {
+        id: row.id,
+        conversationId: row.conversation_id,
+        senderId: row.sender_id,
+        clientId: row.client_id,
+        text: row.is_deleted ? 'This message was deleted.' : row.text,
+        replyToMessageId: row.reply_to_message_id,
+        isEdited: Boolean(row.is_edited),
+        editedAt: row.edited_at ? Number(row.edited_at) : null,
+        isDeleted: Boolean(row.is_deleted),
+        deletedAt: row.deleted_at ? Number(row.deleted_at) : null,
+        createdAt: Number(row.created_at),
+        attachments: [],
+        reactions: [],
+        receipts: [],
+      };
+      map.set(conversationId, message);
+    }
+
+    return Promise.resolve(map);
+  }
+
+  private async getUnreadCountsForConversations(
+    conversationIds: string[],
+    currentUserId: string,
+  ): Promise<Map<string, number>> {
+    const map = new Map<string, number>();
+    if (conversationIds.length === 0) return Promise.resolve(map);
+
+    const res = await query<{
+      conversation_id: string;
+      count: string;
+    }>(
+      `SELECT m.conversation_id, count(*)::text AS count
+       FROM zunari_messages_v2 m
+       JOIN zunari_conversation_participants p
+         ON p.conversation_id = m.conversation_id AND p.user_id = $2
+       WHERE m.conversation_id = ANY($1::text[])
+         AND m.sender_id <> $2
+         AND (p.left_at IS NULL OR m.created_at <= p.left_at)
+         AND NOT EXISTS (
+           SELECT 1 FROM zunari_message_receipts r
+           WHERE r.message_id = m.id AND r.user_id = $2 AND r.read_at IS NOT NULL
+         )
+       GROUP BY m.conversation_id`,
+      [conversationIds, currentUserId],
+    );
+
+    for (const row of res.rows) {
+      map.set(row.conversation_id, Number(row.count || 0));
+    }
+
+    return Promise.resolve(map);
+  }
+
   private async getAttachmentsForMessages(
     messageIds: string[],
   ): Promise<Map<string, MessageAttachmentRecord[]>> {
@@ -1154,7 +1424,8 @@ export class MessagingRepository {
               asset.filename, asset.mime_type, asset.byte_size
        FROM zunari_message_attachments ma
        JOIN zunari_media_assets asset ON asset.id = ma.media_asset_id
-       WHERE ma.message_id = ANY($1::text[])`,
+       JOIN zunari_messages_v2 msg ON msg.id = ma.message_id
+       WHERE ma.message_id = ANY($1::text[]) AND msg.is_deleted = FALSE`,
       [messageIds],
     );
 

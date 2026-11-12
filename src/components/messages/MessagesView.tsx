@@ -24,7 +24,11 @@ import { api } from '../../services/api.ts';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRealtime } from '../../context/RealtimeContext.tsx';
 import { useKeyboardHeight, useKeyboardOpen } from '../../hooks/useKeyboard.ts';
-import { useOutbox } from '../../hooks/useOutbox.ts';
+import {
+  useOutboxContext,
+  OUTBOX_MESSAGE_SENT_EVENT,
+  OUTBOX_MESSAGE_FAILED_EVENT,
+} from '../../context/OutboxContext.tsx';
 import { useCacheFirstConversationsLoader, useCacheFirstMessagesLoader } from '../../hooks/useCacheFirstLoaders.ts';
 import { recordSendInitiated, recordTiming, onTiming } from '../../lib/messaging/performance.ts';
 import { useCall } from '../../context/CallContext.tsx';
@@ -177,6 +181,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
   const listRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLElement>(null);
   const messagesRef = useRef<Message[]>([]);
+  const conversationsRef = useRef<Conversation[]>([]);
   const activeIdRef = useRef<string | null>(null);
   const shouldStickRef = useRef(true);
   const prependingRef = useRef(false);
@@ -196,16 +201,19 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
   const previousSelectedIdRef = useRef<string | null>(null);
   const draftsLoadedRef = useRef(false);
 
-  const { outbox, addToOutbox, retryMessage, processOutbox } = useOutbox();
+  const { addToOutbox, retryMessage, removeFromOutbox } = useOutboxContext();
 
   const {
     loadConversations,
+    refreshConversations: fetchConversations,
     saveConversation,
   } = useCacheFirstConversationsLoader(currentUser?.id);
 
   const {
     loadMessages,
+    fetchMessages,
     saveMessage,
+    removeMessage,
     loadOlder: loadOlderMessages,
   } = useCacheFirstMessagesLoader(currentUser?.id);
 
@@ -249,19 +257,72 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
   const [hasMore, setHasMore] = useState(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
 
-  const refreshConversations = useCallback(async () => {
+  const loadInboxFromCache = useCallback(async () => {
     if (!currentUser?.id) return;
-    setConversationsLoading(true);
     try {
       const loaded = await loadConversations();
       setConversations(loaded);
+    } catch {
+      // Cache is best-effort; the network phase below can still succeed.
+    }
+  }, [currentUser?.id, loadConversations]);
+
+  const refreshConversations = useCallback(async () => {
+    if (!currentUser?.id) return;
+    setConversationsLoading(true);
+    let loadedFromCache = false;
+    try {
+      const cached = await loadConversations();
+      setConversations(cached);
+      loadedFromCache = true;
+    } catch {
+      // Keep whatever is already displayed.
+    }
+    try {
+      const server = await fetchConversations();
+      setConversations(sortConversations(server));
       setConversationsError('');
     } catch (error) {
-      setConversationsError(error instanceof Error ? error.message : 'Unable to load conversations.');
+      if (!loadedFromCache) {
+        setConversationsError(
+          error instanceof Error ? error.message : 'Unable to load conversations.',
+        );
+      }
     } finally {
       setConversationsLoading(false);
     }
-  }, [currentUser?.id, loadConversations]);
+  }, [currentUser?.id, loadConversations, fetchConversations]);
+
+  // Update the inbox locally for a live message instead of re-fetching the
+  // whole inbox on every event, then persist the updated preview.
+  const updateConversationPreview = useCallback(
+    (message: Message) => {
+      setConversations((previous) => {
+        const existing = previous.find(
+          (conversation) => conversation.id === message.conversationId,
+        );
+        if (!existing) return previous;
+        const incomingAt = toMillis(message.createdAt);
+        // Only refresh the preview when this really is the newest message; an
+        // edit/delete of an older message must not reorder the inbox.
+        if (existing.lastMessageAt && incomingAt < existing.lastMessageAt) {
+          return previous;
+        }
+        const updated: Conversation = {
+          ...existing,
+          lastMessage: message,
+          lastMessageAt: incomingAt,
+        };
+        void saveConversation(updated);
+        return sortConversations(
+          previous.map((conversation) =>
+            conversation.id === updated.id ? updated : conversation,
+          ),
+        );
+      });
+    },
+    [saveConversation],
+  );
 
   useEffect(() => {
     if (!currentUser?.id) {
@@ -270,16 +331,15 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
       return;
     }
     void refreshConversations();
-  }, [currentUser?.id, reconnectNonce, refreshConversations]);
-
-  useEffect(() => {
-    if (!connected || !currentUser?.id) return;
-    void refreshConversations();
-  }, [connected, currentUser?.id, refreshConversations]);
+  }, [currentUser?.id, connected, reconnectNonce, refreshConversations]);
 
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  useEffect(() => {
+    conversationsRef.current = conversations;
+  }, [conversations]);
 
   useEffect(() => {
     activeIdRef.current = activeConversation?.id ?? null;
@@ -417,34 +477,46 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
 
     let cancelled = false;
     const conversationId = activeConversation.id;
+    setMessages([]);
     setMessagesLoading(true);
     setMessagesError('');
 
-    // Load cached messages first
-    loadMessages(conversationId, { limit: 50 }).then((cached) => {
+    const applyMessages = (incoming: Message[]) => {
       if (cancelled) return;
-      const sorted = cached.sort((a, b) => toMillis(a.createdAt) - toMillis(b.createdAt));
-      setMessages(sorted);
-      setHasMore(sorted.length >= 50);
+      const sorted = [...incoming].sort((a, b) => toMillis(a.createdAt) - toMillis(b.createdAt));
+      setMessages((previous) => mergeMessages(previous, sorted));
+      setHasMore(sorted.length >= PAGE_SIZE);
       setMessagesLoading(false);
+      if (sorted.length > 0) {
+        sendReceipts(
+          conversationId,
+          document.visibilityState === 'visible' ? 'read' : 'delivered',
+          sorted,
+        );
+      }
+    };
 
-      // Send receipts for cached messages
-      sendReceipts(
-        conversationId,
-        document.visibilityState === 'visible' ? 'read' : 'delivered',
-        sorted
-      );
-    });
+    // Load cached messages first so the conversation opens offline.
+    loadMessages(conversationId, { limit: PAGE_SIZE })
+      .then(applyMessages)
+      .catch((error) => {
+        if (cancelled) return;
+        setMessagesError(error instanceof Error ? error.message : 'Unable to load messages.');
+        setMessagesLoading(false);
+      });
 
-    // Background sync if connected
-    if (connected) {
-      // The socket will handle live updates; we could also trigger a full sync here
-    }
+    // Always reconcile with the server: the cache can be empty or stale and
+    // may be missing messages sent from another device.
+    fetchMessages(conversationId, { limit: PAGE_SIZE })
+      .then(applyMessages)
+      .catch(() => {
+        // Offline or network failure: keep the cached view.
+      });
 
     return () => {
       cancelled = true;
     };
-  }, [activeConversation?.id, currentUser?.id, connected, loadMessages, sendReceipts]);
+  }, [activeConversation?.id, currentUser?.id, connected, loadMessages, fetchMessages, sendReceipts]);
 
   useEffect(
     () => () => {
@@ -478,8 +550,9 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
         recordTiming(incoming.clientId, 'recipientReceived');
       }
       saveMessage(incoming);
+      setMessages((previous) => upsertMessage(previous, incoming));
+      updateConversationPreview(incoming);
       const isOwn = incoming.senderId === currentUser.id;
-      refreshConversations();
       if (!isOwn) {
         if (!shouldStickRef.current) setUnseenBelow(true);
         if (document.visibilityState === 'visible') {
@@ -491,12 +564,28 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
     };
 
     const handleEdit = (updated: Message) => {
+      if (updated.conversationId && updated.conversationId !== conversationId) return;
       saveMessage(updated);
-      refreshConversations();
+      setMessages((previous) => upsertMessage(previous, updated));
+      updateConversationPreview(updated);
     };
 
     const handleDelete = (data: { conversationId: string; messageId: string }) => {
-      refreshConversations();
+      if (data.conversationId !== conversationId) return;
+      const target = messagesRef.current.find((message) => message.id === data.messageId);
+      if (!target) return;
+      const deleted: Message = {
+        ...target,
+        isDeleted: true,
+        text: 'This message was deleted.',
+        attachments: [],
+        reactions: [],
+      };
+      saveMessage(deleted);
+      setMessages((previous) =>
+        previous.map((message) => (message.id === deleted.id ? deleted : message)),
+      );
+      updateConversationPreview(deleted);
     };
 
     const handleTyping = (event: {
@@ -537,7 +626,37 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
       receiptType: 'delivered' | 'read';
     }) => {
       if (event.conversationId !== conversationId) return;
-      // Receipts are handled by the cache-first messages hook
+      const updated: Message[] = [];
+      for (const message of messagesRef.current) {
+        if (!event.messageIds.includes(message.id)) continue;
+        const receipts = [...(message.receipts || [])];
+        const index = receipts.findIndex((receipt) => receipt.userId === event.userId);
+        const timestamp = Date.now();
+        if (index >= 0) {
+          receipts[index] = {
+            ...receipts[index],
+            deliveredAt: receipts[index].deliveredAt ?? timestamp,
+            readAt:
+              event.receiptType === 'read'
+                ? receipts[index].readAt ?? timestamp
+                : receipts[index].readAt,
+          };
+        } else {
+          receipts.push({
+            userId: event.userId,
+            deliveredAt: timestamp,
+            readAt: event.receiptType === 'read' ? timestamp : null,
+          });
+        }
+        const next = { ...message, receipts };
+        updated.push(next);
+      }
+      if (updated.length === 0) return;
+      const byId = new Map(updated.map((message) => [message.id, message]));
+      setMessages((previous) =>
+        previous.map((message) => byId.get(message.id) ?? message),
+      );
+      for (const message of updated) void saveMessage(message);
     };
 
     const handleReaction = (event: {
@@ -549,7 +668,24 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
       added: boolean;
     }) => {
       if (event.conversationId !== conversationId) return;
-      // Reactions are handled by the cache-first messages hook
+      const target = messagesRef.current.find((message) => message.id === event.messageId);
+      if (!target) return;
+      const reactions = (target.reactions || []).filter(
+        (reaction) => !(reaction.userId === event.userId && reaction.emoji === event.emoji),
+      );
+      if (event.added) {
+        reactions.push({
+          emoji: event.emoji,
+          userId: event.userId,
+          username: event.username,
+          createdAt: Date.now(),
+        });
+      }
+      const updated: Message = { ...target, reactions };
+      setMessages((previous) =>
+        previous.map((message) => (message.id === updated.id ? updated : message)),
+      );
+      void saveMessage(updated);
     };
 
     socket.on('conversation:message', handleMessage);
@@ -578,9 +714,110 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
     currentUser?.id,
     reconnectNonce,
     sendReceipts,
-    refreshConversations,
+    updateConversationPreview,
     showToast,
   ]);
+
+  // Notifications for conversations that are not currently open. The server
+  // only sends these to the user room, so this listener must be global.
+  useEffect(() => {
+    if (!socket || !currentUser?.id) return;
+    const handleNotification = (payload: { conversationId?: string; message?: Message }) => {
+      const incoming = payload?.message;
+      const conversationId = payload?.conversationId || incoming?.conversationId;
+      if (!incoming || !conversationId) return;
+      if (incoming.conversationId && incoming.conversationId !== conversationId) return;
+      void saveMessage(incoming);
+      if (activeIdRef.current === conversationId) {
+        setMessages((previous) => upsertMessage(previous, incoming));
+        if (incoming.senderId !== currentUser.id && document.visibilityState === 'visible') {
+          sendReceipts(conversationId, 'read', [incoming]);
+        }
+      }
+      updateConversationPreview(incoming);
+      if (!conversationsRef.current.some((conversation) => conversation.id === conversationId)) {
+        void refreshConversations();
+      }
+    };
+    // Keep inactive conversation previews/cache in step with edits and deletes.
+    // The active conversation already handles these via its own listeners.
+    const handleInactiveEdit = (updated: Message) => {
+      if (!updated?.conversationId) return;
+      if (updated.conversationId === activeIdRef.current) return;
+      void saveMessage(updated);
+      updateConversationPreview(updated);
+    };
+    const handleInactiveDelete = (data: { conversationId?: string; messageId?: string }) => {
+      if (!data?.conversationId || !data.messageId) return;
+      if (data.conversationId === activeIdRef.current) return;
+      const conversation = conversationsRef.current.find(
+        (item) => item.id === data.conversationId,
+      );
+      if (!conversation?.lastMessage || conversation.lastMessage.id !== data.messageId) return;
+      const deleted: Message = {
+        ...conversation.lastMessage,
+        isDeleted: true,
+        text: 'This message was deleted.',
+        attachments: [],
+        reactions: [],
+      };
+      void saveMessage(deleted);
+      updateConversationPreview(deleted);
+    };
+    socket.on('conversation:message-notification', handleNotification);
+    socket.on('conversation:message-edit', handleInactiveEdit);
+    socket.on('conversation:message-delete', handleInactiveDelete);
+    return () => {
+      socket.off('conversation:message-notification', handleNotification);
+      socket.off('conversation:message-edit', handleInactiveEdit);
+      socket.off('conversation:message-delete', handleInactiveDelete);
+    };
+  }, [
+    socket,
+    currentUser?.id,
+    saveMessage,
+    sendReceipts,
+    updateConversationPreview,
+    refreshConversations,
+  ]);
+
+  // Reconcile background outbox deliveries with the open conversation. The
+  // processor lives above this component, so it can keep sending while this
+  // view is unmounted.
+  useEffect(() => {
+    const handleSent = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: Message; clientId?: string }>).detail;
+      if (!detail?.message) return;
+      const sent = detail.message;
+      if (sent.conversationId && sent.conversationId === activeIdRef.current) {
+        setMessages((previous) =>
+          upsertMessage(
+            previous.filter((message) => message.id !== `local-${detail.clientId}`),
+            sent,
+          ),
+        );
+      }
+      updateConversationPreview(sent);
+      if (detail.clientId) retryAssetsRef.current.delete(detail.clientId);
+    };
+    const handleFailed = (event: Event) => {
+      const detail = (event as CustomEvent<{ clientId?: string; error?: string }>).detail;
+      if (!detail?.clientId) return;
+      setMessages((previous) =>
+        previous.map((message) =>
+          message.clientId === detail.clientId
+            ? { ...message, localStatus: 'failed', localError: detail.error }
+            : message,
+        ),
+      );
+    };
+    window.addEventListener(OUTBOX_MESSAGE_SENT_EVENT, handleSent);
+    window.addEventListener(OUTBOX_MESSAGE_FAILED_EVENT, handleFailed);
+    return () => {
+      window.removeEventListener(OUTBOX_MESSAGE_SENT_EVENT, handleSent);
+      window.removeEventListener(OUTBOX_MESSAGE_FAILED_EVENT, handleFailed);
+    };
+  }, [updateConversationPreview]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -656,36 +893,80 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
 
   const reloadMessages = useCallback(() => {
     if (!activeConversation?.id) return;
+    const conversationId = activeConversation.id;
     setMessagesLoading(true);
     setMessagesError('');
-    loadMessages(activeConversation.id, { limit: 50 }).then((cached) => {
-      const sorted = cached.sort((a, b) => toMillis(a.createdAt) - toMillis(b.createdAt));
-      setMessages(sorted);
-      setHasMore(sorted.length >= 50);
+    loadMessages(conversationId, { limit: PAGE_SIZE }).then((cached) => {
+      const sorted = [...cached].sort((a, b) => toMillis(a.createdAt) - toMillis(b.createdAt));
+      setMessages((previous) => mergeMessages(previous, sorted));
+      setHasMore(sorted.length >= PAGE_SIZE);
       setMessagesLoading(false);
     }).catch((error) => {
       setMessagesError(error instanceof Error ? error.message : 'Unable to load messages.');
       setMessagesLoading(false);
     });
-  }, [activeConversation?.id, loadMessages]);
+    void fetchMessages(conversationId, { limit: PAGE_SIZE })
+      .then((server) => {
+        const sorted = [...server].sort((a, b) => toMillis(a.createdAt) - toMillis(b.createdAt));
+        setMessages((previous) => mergeMessages(previous, sorted));
+        setHasMore(sorted.length >= PAGE_SIZE);
+        setMessagesLoading(false);
+        if (sorted.length > 0) {
+          sendReceipts(
+            conversationId,
+            document.visibilityState === 'visible' ? 'read' : 'delivered',
+            sorted,
+          );
+        }
+      })
+      .catch(() => {
+        // Offline: the cache load above is the fallback.
+      });
+  }, [activeConversation?.id, loadMessages, fetchMessages, sendReceipts]);
+
+  // Background sync writes straight to IndexedDB. Re-read the cache when it
+  // completes so the inbox and open conversation reflect the synced data.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleSyncComplete = () => {
+      void loadInboxFromCache();
+      if (activeConversation?.id) reloadMessages();
+    };
+    window.addEventListener('zunari:messaging-synchronized', handleSyncComplete);
+    return () =>
+      window.removeEventListener('zunari:messaging-synchronized', handleSyncComplete);
+  }, [activeConversation?.id, loadInboxFromCache, reloadMessages]);
 
   const handleLoadOlder = useCallback(async () => {
     if (!activeConversation || loadingOlder || !hasMore || messages.length === 0) return;
-    const oldest = messages[0];
+    const cursorMessage = messages.find((message) => !message.id.startsWith('local-'));
+    if (!cursorMessage) {
+      setHasMore(false);
+      return;
+    }
     const element = scrollRef.current;
     const previousHeight = element?.scrollHeight ?? 0;
     const previousTop = element?.scrollTop ?? 0;
     setLoadingOlder(true);
 
     try {
-      const older = await loadOlderMessages(activeConversation.id, oldest.id, 50);
+      let older: Message[];
+      try {
+        // The server page is authoritative and also backfills the cache.
+        older = await fetchMessages(activeConversation.id, {
+          before: cursorMessage.id,
+          limit: PAGE_SIZE,
+        });
+      } catch {
+        older = await loadOlderMessages(activeConversation.id, cursorMessage.id, PAGE_SIZE);
+      }
       if (older.length === 0) {
         setHasMore(false);
         return;
       }
-      const sorted = older.sort((a, b) => toMillis(a.createdAt) - toMillis(b.createdAt));
+      const sorted = [...older].sort((a, b) => toMillis(a.createdAt) - toMillis(b.createdAt));
       setMessages((previous) => mergeMessages(previous, sorted));
-      setHasMore(sorted.length >= 50);
+      setHasMore(sorted.length >= PAGE_SIZE);
 
       if (element) {
         window.requestAnimationFrame(() => {
@@ -699,7 +980,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
     } finally {
       setLoadingOlder(false);
     }
-  }, [activeConversation?.id, loadingOlder, hasMore, messages.length, messages[0]?.id, loadOlderMessages, showToast]);
+  }, [activeConversation?.id, loadingOlder, hasMore, messages, fetchMessages, loadOlderMessages, showToast]);
 
   const handleTextChange = (value: string) => {
     if (!activeConversation) return;
@@ -806,6 +1087,14 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
         replyToMessageId: reply?.id,
         attachmentAssetIds: ready.length > 0 ? ready.map((item) => item.assetId as string) : undefined,
       });
+      // Persist the optimistic message and conversation preview so a refresh
+      // while offline does not silently drop the queued message.
+      await saveMessage(optimistic);
+      await saveConversation({
+        ...activeConversation,
+        lastMessage: optimistic,
+        lastMessageAt: createdAt,
+      });
       setMessages((previous) =>
         previous.map((item) =>
           item.id === optimisticId ? { ...item, localStatus: 'pending', localError: undefined } : item,
@@ -830,6 +1119,8 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
       recordTiming(clientId, 'databaseCommitted');
 
       setMessages((previous) => upsertMessage(previous, response.message));
+      await saveMessage(response.message);
+      await removeMessage(optimisticId);
       retryAssetsRef.current.delete(clientId);
       const updatedConversation = {
         ...activeConversation!,
@@ -845,8 +1136,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
           ),
         ),
       );
-      // Persist updated conversation to IndexedDB
-      saveConversation(updatedConversation);
+      await saveConversation(updatedConversation);
     } catch (error) {
       const message = formatError(error, 'Message could not be sent.');
       addToOutbox({
@@ -856,11 +1146,15 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
         replyToMessageId: reply?.id,
         attachmentAssetIds: ready.length > 0 ? ready.map((item) => item.assetId as string) : undefined,
       });
+      const failedOptimistic: Message = {
+        ...optimistic,
+        localStatus: 'failed',
+        localError: message,
+      };
+      await saveMessage(failedOptimistic);
       setMessages((previous) =>
         previous.map((item) =>
-          item.id === optimisticId
-            ? { ...item, localStatus: 'failed', localError: message }
-            : item,
+          item.id === optimisticId ? failedOptimistic : item,
         ),
       );
       showToast(message, 'error');
@@ -870,69 +1164,37 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
     }
   };
 
+  // Requeue through the single outbox processor instead of racing a second
+  // direct API call. This prevents a manual retry from double-sending.
   const handleRetry = async (message: Message) => {
-    if (!activeConversation || message.localStatus !== 'failed' || sendingRef.current) return;
+    if (!activeConversation || message.localStatus !== 'failed') return;
     const clientId = message.clientId || generateId();
-    if (!message.clientId) {
-      setMessages((previous) =>
-        previous.map((item) =>
-          item.id === message.id ? { ...item, clientId } : item,
-        ),
-      );
-    }
+    const attachmentAssetIds =
+      retryAssetsRef.current.get(clientId) ??
+      (message.attachments || []).map((attachment) => attachment.mediaAssetId);
+
+    const pending: Message = {
+      ...message,
+      clientId,
+      localStatus: 'pending',
+      localError: undefined,
+    };
     setMessages((previous) =>
-      previous.map((item) =>
-        item.id === message.id
-          ? { ...item, localStatus: 'sending', localError: undefined }
-          : item,
-      ),
+      previous.map((item) => (item.id === message.id ? pending : item)),
     );
-    sendingRef.current = true;
-    setSending(true);
+    await saveMessage(pending);
+
+    addToOutbox({
+      clientId,
+      conversationId: activeConversation.id,
+      text: message.text,
+      replyToMessageId: message.replyToMessageId || undefined,
+      attachmentAssetIds: attachmentAssetIds.length > 0 ? attachmentAssetIds : undefined,
+    });
+    retryMessage(clientId);
 
     if (!connected) {
-      retryMessage(clientId);
-      setMessages((previous) =>
-        previous.map((item) =>
-          item.id === message.id
-            ? { ...item, localStatus: 'pending', localError: undefined }
-            : item,
-        ),
-      );
       showToast('Retry queued. Will send when reconnected.', 'info');
-      sendingRef.current = false;
-      setSending(false);
-      return;
-    }
-
-    recordSendInitiated(clientId, activeConversation.id);
-
-    try {
-      const response = await api.sendConversationMessage(activeConversation.id, {
-        text: message.text,
-        clientId,
-        replyToMessageId: message.replyToMessageId || undefined,
-        attachmentAssetIds: retryAssetsRef.current.get(clientId),
-      });
-      recordTiming(clientId, 'serverReceived');
-      recordTiming(clientId, 'databaseCommitted');
-
-      setMessages((previous) => upsertMessage(previous, response.message));
-      retryAssetsRef.current.delete(clientId);
-    } catch (error) {
-      const failure = formatError(error, 'Message could not be sent.');
-      retryMessage(clientId);
-      setMessages((previous) =>
-        previous.map((item) =>
-          item.id === message.id
-            ? { ...item, localStatus: 'failed', localError: failure }
-            : item,
-        ),
-      );
-      showToast(failure, 'error');
-    } finally {
-      sendingRef.current = false;
-      setSending(false);
     }
   };
 
@@ -945,6 +1207,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
         text,
       );
       setMessages((previous) => upsertMessage(previous, response.message));
+      await saveMessage(response.message);
     } catch (error) {
       showToast(formatError(error, 'Unable to edit this message.'), 'error');
     }
@@ -954,17 +1217,30 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
     if (!activeConversation) return;
     const target = messagesRef.current.find((message) => message.id === messageId);
     if (target?.localStatus) {
-      if (target.clientId) retryAssetsRef.current.delete(target.clientId);
+      if (target.clientId) {
+        retryAssetsRef.current.delete(target.clientId);
+        removeFromOutbox(target.clientId);
+      }
+      await removeMessage(messageId);
       setMessages((previous) => previous.filter((message) => message.id !== messageId));
       showToast('Unsent message discarded.', 'info');
       return;
     }
     try {
       await api.deleteConversationMessage(activeConversation.id, messageId);
+      const deletedMessage: Message | undefined = target
+        ? {
+            ...target,
+            isDeleted: true,
+            text: 'This message was deleted.',
+            attachments: [],
+            reactions: [],
+          }
+        : undefined;
       setMessages((previous) =>
         previous.map((message) =>
           message.id === messageId
-            ? {
+            ? deletedMessage ?? {
                 ...message,
                 isDeleted: true,
                 text: 'This message was deleted.',
@@ -974,6 +1250,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
             : message,
         ),
       );
+      if (deletedMessage) await saveMessage(deletedMessage);
     } catch (error) {
       showToast(formatError(error, 'Unable to delete this message.'), 'error');
     }
@@ -987,29 +1264,30 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
         messageId,
         emoji,
       );
-      setMessages((previous) =>
-        previous.map((message) => {
-          if (message.id !== messageId) return message;
-          const reactions = (message.reactions || []).filter(
-            (reaction) =>
-              !(reaction.userId === currentUser.id && reaction.emoji === emoji),
-          );
-          return {
-            ...message,
-            reactions: response.added
-              ? [
-                  ...reactions,
-                  {
-                    emoji,
-                    userId: currentUser.id,
-                    username: currentUser.username,
-                    createdAt: Date.now(),
-                  },
-                ]
-              : reactions,
-          };
-        }),
+      const target = messagesRef.current.find((message) => message.id === messageId);
+      if (!target) return;
+      const reactions = (target.reactions || []).filter(
+        (reaction) =>
+          !(reaction.userId === currentUser.id && reaction.emoji === emoji),
       );
+      const updated: Message = {
+        ...target,
+        reactions: response.added
+          ? [
+              ...reactions,
+              {
+                emoji,
+                userId: currentUser.id,
+                username: currentUser.username,
+                createdAt: Date.now(),
+              },
+            ]
+          : reactions,
+      };
+      setMessages((previous) =>
+        previous.map((message) => (message.id === messageId ? updated : message)),
+      );
+      await saveMessage(updated);
     } catch (error) {
       showToast(formatError(error, 'Unable to update the reaction.'), 'error');
     }

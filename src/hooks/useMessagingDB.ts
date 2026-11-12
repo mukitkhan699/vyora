@@ -340,6 +340,9 @@ export function useMessagingDB() {
       return await syncEngineRef.current.syncAll();
     } finally {
       syncInProgressRef.current = false;
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new Event('zunari:messaging-synchronized'));
+      }
     }
   }, []);
 

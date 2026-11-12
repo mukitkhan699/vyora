@@ -21,6 +21,7 @@ import { LauncherSplash } from './components/common/LauncherSplash.tsx';
 import { LoginScreen } from './components/auth/LoginScreen.tsx';
 import { AdminRoute } from './components/admin/AdminRoute.tsx';
 import { MessageActionsProvider } from './context/MessageActionsContext.tsx';
+import { OutboxProvider } from './context/OutboxContext.tsx';
 import { AdminDashboard } from './components/admin/AdminDashboard.tsx';
 import { AdminSidebar } from './components/admin/AdminSidebar.tsx';
 import { AuditLogView } from './components/admin/AuditLogView.tsx';
@@ -335,13 +336,15 @@ export default function App() {
     <ThemeProvider>
       <AuthProvider>
         <ToastProvider>
-          <RealtimeProvider>
-            <CallProvider>
-              <ErrorBoundary>
-                <AppShell />
-              </ErrorBoundary>
-            </CallProvider>
-          </RealtimeProvider>
+          <OutboxProvider>
+            <RealtimeProvider>
+              <CallProvider>
+                <ErrorBoundary>
+                  <AppShell />
+                </ErrorBoundary>
+              </CallProvider>
+            </RealtimeProvider>
+          </OutboxProvider>
         </ToastProvider>
       </AuthProvider>
     </ThemeProvider>
