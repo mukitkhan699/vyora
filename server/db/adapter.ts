@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { QueryResultRow } from 'pg';
-import type { Message, Notification, Post, TrendItem, User } from '../../src/types/index.ts';
+import type { Notification, Post, TrendItem, User } from '../../src/types/index.ts';
 import { HttpError } from '../errors.ts';
-import { normalizeWebsiteUrl } from '../profile-validation.ts';
-import { publishMessage, publishNotification } from '../realtime-events.ts';
+import { buildProfileUpdates, normalizeAppMediaUrl } from '../profile-validation.ts';
+import { publishNotification } from '../realtime-events.ts';
 import { INITIAL_MESSAGES, INITIAL_NOTIFICATIONS, INITIAL_POSTS, INITIAL_TRENDS, INITIAL_USERS } from './store.ts';
 import { query, withTransaction } from './pool.ts';
 import { makeAssetPublicIfOwned } from '../storage/b2.ts';
+import { MAX_POST_MEDIA } from '../../src/utils/postMedia.ts';
 
 interface UserRow extends QueryResultRow {
   id: number;
@@ -147,16 +148,6 @@ function userFromRow(row: UserRow): User {
         year: 'numeric',
       })}`,
   };
-}
-
-function normalizeAppMediaUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    if (/^\/api\/files\/file_[a-f0-9-]{36}$/i.test(parsed.pathname)) return parsed.pathname;
-  } catch {
-    // Relative media references are already in the API's stable format.
-  }
-  return url;
 }
 
 function postAuthor(row: PostRow): User {
@@ -459,33 +450,7 @@ export class DatabaseAdapter {
   }
 
   public async updateProfile(userId: string, data: Partial<User>): Promise<User> {
-    const patch: Array<[keyof User, string]> = [
-      ['name', 'name'],
-      ['avatarUrl', 'avatar_url'],
-      ['bannerUrl', 'banner_url'],
-      ['bio', 'bio'],
-      ['location', 'location'],
-      ['website', 'website'],
-    ];
-    const updates: Array<[string, string | null]> = [];
-    for (const [property, column] of patch) {
-      const rawValue = data[property];
-      if (rawValue === undefined) continue;
-      if (typeof rawValue !== 'string') {
-        throw new HttpError(400, `Invalid ${property} value.`, 'INVALID_PROFILE');
-      }
-      const value =
-        property === 'avatarUrl' || property === 'bannerUrl'
-          ? normalizeAppMediaUrl(rawValue)
-          : property === 'website'
-            ? normalizeWebsiteUrl(rawValue) || ''
-            : rawValue;
-      const max = property === 'bio' ? 500 : property === 'website' ? 2048 : 120;
-      if (value.length > max) {
-        throw new HttpError(400, `${property} is too long.`, 'INVALID_PROFILE');
-      }
-      updates.push([column, column === 'avatar_url' ? value : value || null]);
-    }
+    const updates = buildProfileUpdates(data);
 
     if (updates.length) {
       const result = await withTransaction(async (connection) => {
@@ -584,6 +549,13 @@ export class DatabaseAdapter {
     quotePostId?: string,
   ): Promise<Post> {
     const normalizedMediaUrls = (mediaUrls || []).map(normalizeAppMediaUrl);
+    if (normalizedMediaUrls.length > MAX_POST_MEDIA) {
+      throw new HttpError(
+        400,
+        `A maximum of ${MAX_POST_MEDIA} media attachments are allowed per post.`,
+        'TOO_MANY_MEDIA',
+      );
+    }
     const postId = `post_${randomUUID()}`;
     const createdAt = Date.now();
     const pollId = pollOptions && pollOptions.length >= 2 ? `poll_${randomUUID()}` : null;
@@ -953,85 +925,6 @@ export class DatabaseAdapter {
       [userId],
     );
     return true;
-  }
-
-  public async getMessages(userId: string, otherUserId: string): Promise<Message[]> {
-    if (userId === otherUserId) return [];
-    const [participantA, participantB] = [userId, otherUserId].sort();
-    const result = await query<{
-      id: string;
-      sender_id: string;
-      recipient_id: string;
-      text: string;
-      created_at: number | string;
-    }>(
-      `SELECT message.id, message.sender_id, message.recipient_id, message.text, message.created_at
-       FROM zunari_messages message
-       JOIN zunari_conversations conversation ON conversation.id = message.conversation_id
-       WHERE conversation.participant_a_id = $1 AND conversation.participant_b_id = $2
-         AND (message.sender_id = $3 OR message.recipient_id = $3)
-       ORDER BY message.created_at ASC`,
-      [participantA, participantB, userId],
-    );
-    return result.rows.map((message) => ({
-      id: message.id,
-      senderId: message.sender_id,
-      recipientId: message.recipient_id,
-      text: message.text,
-      createdAt: new Date(Number(message.created_at)).toISOString(),
-      isSender: message.sender_id === userId,
-    }));
-  }
-
-  public async sendMessage(
-    senderId: string,
-    recipientId: string,
-    text: string,
-  ): Promise<Message> {
-    if (senderId === recipientId) {
-      throw new HttpError(400, 'You cannot message yourself.', 'INVALID_RECIPIENT');
-    }
-    const [participantA, participantB] = [senderId, recipientId].sort();
-    const createdAt = Date.now();
-    const message = await withTransaction(async (connection) => {
-      const users = await connection.query(
-        'SELECT public_id FROM zunari_users WHERE public_id = ANY($1::text[])',
-        [[senderId, recipientId]],
-      );
-      if (users.rowCount !== 2) throw new HttpError(404, 'Recipient not found.', 'USER_NOT_FOUND');
-      const conversationId = `conversation_${participantA}_${participantB}`;
-      const conversation = await connection.query<{ id: string }>(
-        `INSERT INTO zunari_conversations (id, participant_a_id, participant_b_id, created_at)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (participant_a_id, participant_b_id)
-         DO UPDATE SET participant_a_id = EXCLUDED.participant_a_id
-         RETURNING id`,
-        [conversationId, participantA, participantB, createdAt],
-      );
-      const inserted = await connection.query<{
-        id: string;
-        sender_id: string;
-        recipient_id: string;
-        text: string;
-        created_at: number | string;
-      }>(
-        `INSERT INTO zunari_messages (id, conversation_id, sender_id, recipient_id, text, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, sender_id, recipient_id, text, created_at`,
-        [randomUUID(), conversation.rows[0].id, senderId, recipientId, text, createdAt],
-      );
-      const row = inserted.rows[0];
-      return {
-        id: row.id,
-        senderId: row.sender_id,
-        recipientId: row.recipient_id,
-        text: row.text,
-        createdAt: new Date(Number(row.created_at)).toISOString(),
-        isSender: true,
-      };
-    });
-    publishMessage({ ...message, isSender: false });
-    return message;
   }
 
   public async getTrends(): Promise<TrendItem[]> {

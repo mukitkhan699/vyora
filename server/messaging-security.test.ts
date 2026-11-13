@@ -34,10 +34,31 @@ describe('messaging authorization contracts', () => {
     );
   });
 
-  test('duplicate clientId retries are acknowledged without a second fan-out', () => {
+  test('duplicate clientId retries are acknowledged without creating another outbox event', () => {
     assert.match(messagingDb, /isDuplicate: boolean/);
-    assert.match(messagingRoutes, /if \(!isDuplicate\)/);
+    assert.match(
+      messagingDb,
+      /if \(existing\.rows\[0\]\) \{\s+return \{ messageId: existing\.rows\[0\]\.id, isDuplicate: true \};/,
+    );
+    assert.match(
+      messagingDb,
+      /return \{ messageId: winner\.rows\[0\]\.id, isDuplicate: true \};[\s\S]*?await enqueueOutboxEvent/,
+    );
+    assert.doesNotMatch(messagingRoutes, /publishConversationMessage\s*\(/);
     assert.match(messagingRoutes, /duplicate: isDuplicate/);
+  });
+
+  test('message edits serialize authorization and enqueue delivery under the conversation lock', () => {
+    assert.match(
+      messagingDb,
+      /lockConversationForMembershipChange\(client, conversationId\);[\s\S]{0,250}SELECT membership_epoch FROM zunari_conversation_participants/,
+    );
+    assert.match(messagingDb, /eventType: 'conversation\.message\.edit'/);
+    assert.doesNotMatch(messagingRoutes, /publishConversationMessageEdit/);
+    assert.doesNotMatch(
+      realtime,
+      /io\.to\(`conv:\$\{conversationId\}`\)\.emit\('conversation:message-edit'/,
+    );
   });
 
   test('departed members cannot fetch attachments sent after they left', () => {

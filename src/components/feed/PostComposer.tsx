@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useSyncExternalStore } from 'react';
 import { 
   Image as ImageIcon,
   BarChart2, 
@@ -17,6 +17,13 @@ import { CdnImage } from '../common/CdnImage.tsx';
 import { Button } from '../common/Button.tsx';
 import { api } from '../../services/api.ts';
 import { IMAGE_ACCEPT_ATTRIBUTE, validateImageFile } from '../../utils/mediaValidation.ts';
+import {
+  MAX_POST_MEDIA,
+  POST_MEDIA_LIMIT_MESSAGE,
+  PostMediaAttachments,
+  addPostMediaFile,
+  removePostMediaAttachment,
+} from '../../utils/postMedia.ts';
 import { Post } from '../../types/index.ts';
 
 interface PostComposerProps {
@@ -40,13 +47,21 @@ export const PostComposer: React.FC<PostComposerProps> = ({
   const { theme, accentTextClass, accentBgClass } = useTheme();
 
   const [content, setContent] = useState('');
-  const [mediaUrls, setMediaUrls] = useState<string[]>([]);
+  const [mediaStore] = useState(() => new PostMediaAttachments());
+  const mediaSnapshot = useSyncExternalStore(
+    mediaStore.subscribe,
+    mediaStore.getSnapshot,
+    mediaStore.getSnapshot,
+  );
+  const mediaUrls = mediaSnapshot.attachments.map((attachment) => attachment.url);
+  const pendingMediaCount = mediaSnapshot.pendingCount;
+  const isUploading = pendingMediaCount > 0;
+  const isMediaLimitReached = mediaSnapshot.remainingSlots === 0;
   const [showPoll, setShowPoll] = useState(false);
   const [pollOptions, setPollOptions] = useState<string[]>(['', '']);
   const [showMediaPrompt, setShowMediaPrompt] = useState(false);
   const [mediaUrlInput, setMediaUrlInput] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [backendMediaPresets, setBackendMediaPresets] = useState<string[]>([]);
 
@@ -71,33 +86,43 @@ export const PostComposer: React.FC<PostComposerProps> = ({
   const strokeDashoffset = 100 - progressPercent;
 
   const handleAddMediaUrl = () => {
-    if (mediaUrlInput.trim()) {
-      setMediaUrls(prev => [...prev, mediaUrlInput.trim()]);
-      setMediaUrlInput('');
-      setShowMediaPrompt(false);
+    const url = mediaUrlInput.trim();
+    if (!url) return;
+    if (!mediaStore.addAttachment(url, 'url')) {
+      alert(POST_MEDIA_LIMIT_MESSAGE);
+      return;
     }
+    setMediaUrlInput('');
+    setShowMediaPrompt(false);
+  };
+
+  const handleAddPreset = (url: string) => {
+    if (!mediaStore.addAttachment(url, 'preset')) {
+      alert(POST_MEDIA_LIMIT_MESSAGE);
+      return;
+    }
+    setShowMediaPrompt(false);
+  };
+
+  const handleRemoveMedia = (index: number) => {
+    void removePostMediaAttachment(mediaStore, index, (fileId) => api.deleteFile(fileId));
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const validationError = validateImageFile(file);
-    if (validationError) {
-      alert(validationError);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-      return;
-    }
-
     try {
-      setIsUploading(true);
-      const res = await api.uploadFile(file, 'post-image');
-      setMediaUrls(prev => [...prev, res.url]);
+      const result = await addPostMediaFile(mediaStore, file, {
+        validateFile: validateImageFile,
+        uploadFile: (selectedFile) => api.uploadFile(selectedFile, 'post-image'),
+      });
+      if (!result.ok) {
+        alert(result.error);
+        return;
+      }
       setShowMediaPrompt(false);
-    } catch (err: any) {
-      alert(err.message || 'File upload failed');
     } finally {
-      setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -123,7 +148,14 @@ export const PostComposer: React.FC<PostComposerProps> = ({
   };
 
   const handleSubmit = async () => {
-    if ((!content.trim() && mediaUrls.length === 0) || isOverLimit || isSubmitting) return;
+    const currentSnapshot = mediaStore.getSnapshot();
+    const currentMediaUrls = currentSnapshot.attachments.map((attachment) => attachment.url);
+    if (
+      (!content.trim() && currentMediaUrls.length === 0) ||
+      isOverLimit ||
+      isSubmitting ||
+      currentSnapshot.pendingCount > 0
+    ) return;
 
     try {
       setIsSubmitting(true);
@@ -133,14 +165,14 @@ export const PostComposer: React.FC<PostComposerProps> = ({
 
       const newPost = await api.createPost({
         content: content.trim(),
-        mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
+        mediaUrls: currentMediaUrls.length > 0 ? currentMediaUrls : undefined,
         pollOptions: filteredPollOptions && filteredPollOptions.length >= 2 ? filteredPollOptions : undefined,
         replyToId,
         quotePostId,
       });
 
       setContent('');
-      setMediaUrls([]);
+      mediaStore.clear();
       setShowPoll(false);
       setPollOptions(['', '']);
 
@@ -186,7 +218,7 @@ export const PostComposer: React.FC<PostComposerProps> = ({
                 {url && <CdnImage src={url} alt="Attached media" className="w-full h-full object-cover" />}
                 <button
                   type="button"
-                  onClick={() => setMediaUrls(prev => prev.filter((_, i) => i !== index))}
+                  onClick={() => handleRemoveMedia(index)}
                   className="absolute top-2 right-2 bg-black/70 hover:bg-black text-white p-1.5 rounded-full transition-colors cursor-pointer"
                   title="Remove attachment"
                 >
@@ -201,7 +233,12 @@ export const PostComposer: React.FC<PostComposerProps> = ({
         {showMediaPrompt && (
           <div className="p-3.5 my-2 bg-[#121722] border border-white/10 rounded-2xl flex flex-col gap-2.5 animate-in fade-in duration-150">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-neutral-200 font-semibold">Attach media</span>
+              <div className="flex items-baseline gap-2">
+                <span className="text-xs text-neutral-200 font-semibold">Attach media</span>
+                <span className={`text-[10px] font-mono ${isMediaLimitReached ? 'text-amber-400' : 'text-neutral-500'}`}>
+                  {mediaUrls.length}/{MAX_POST_MEDIA} images
+                </span>
+              </div>
               <button
                 type="button"
                 onClick={() => setShowMediaPrompt(false)}
@@ -217,10 +254,10 @@ export const PostComposer: React.FC<PostComposerProps> = ({
                 size="sm"
                 variant="outline"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={isUploading}
+                disabled={isUploading || isMediaLimitReached}
                 icon={<UploadCloud className="w-3.5 h-3.5 text-cyan-400" />}
               >
-                {isUploading ? 'Uploading...' : 'Upload Image'}
+                {isUploading ? 'Uploading...' : isMediaLimitReached ? 'Limit reached' : 'Upload Image'}
               </Button>
               <span className="text-[11px] text-neutral-400">Direct upload or paste a link below</span>
             </div>
@@ -231,9 +268,10 @@ export const PostComposer: React.FC<PostComposerProps> = ({
                 value={mediaUrlInput}
                 onChange={(e) => setMediaUrlInput(e.target.value)}
                 placeholder="https://images.unsplash.com/..."
-                className="flex-1 bg-black/50 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white outline-none focus:border-cyan-400"
+                disabled={isMediaLimitReached}
+                className="flex-1 bg-black/50 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white outline-none focus:border-cyan-400 disabled:opacity-50"
               />
-              <Button size="sm" onClick={handleAddMediaUrl}>Add Link</Button>
+              <Button size="sm" onClick={handleAddMediaUrl} disabled={isMediaLimitReached}>Add Link</Button>
             </div>
 
             {backendMediaPresets.length > 0 && (
@@ -243,11 +281,9 @@ export const PostComposer: React.FC<PostComposerProps> = ({
                   <button
                     key={i}
                     type="button"
-                    onClick={() => {
-                      setMediaUrls(prev => [...prev, presetUrl]);
-                      setShowMediaPrompt(false);
-                    }}
-                    className="text-cyan-400 hover:underline cursor-pointer"
+                    onClick={() => handleAddPreset(presetUrl)}
+                    disabled={isMediaLimitReached}
+                    className="text-cyan-400 hover:underline cursor-pointer disabled:opacity-40 disabled:no-underline"
                   >
                     Preset {i + 1}
                   </button>
@@ -343,7 +379,7 @@ export const PostComposer: React.FC<PostComposerProps> = ({
               type="button"
               onClick={() => setShowMediaPrompt(!showMediaPrompt)}
               className="p-2 rounded-xl hover:bg-cyan-400/10 transition-colors cursor-pointer"
-              title="Add image"
+              title={`Add image (${mediaUrls.length}/${MAX_POST_MEDIA})`}
             >
               <ImageIcon className="w-5 h-5" />
             </button>
@@ -408,7 +444,7 @@ export const PostComposer: React.FC<PostComposerProps> = ({
 
             <Button
               size="sm"
-              disabled={(!content.trim() && mediaUrls.length === 0) || isOverLimit || isSubmitting}
+              disabled={(!content.trim() && mediaUrls.length === 0) || isOverLimit || isSubmitting || pendingMediaCount > 0}
               isLoading={isSubmitting}
               onClick={handleSubmit}
               className="px-5 font-bold"

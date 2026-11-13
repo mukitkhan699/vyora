@@ -6,7 +6,7 @@ import { cleanupAbandonedUploads, validateStorageConfiguration } from './storage
 import { cleanupDeliveredOrExpiredAttachments } from './storage/attachments.ts';
 import { verifyDatabase } from './db/pool.ts';
 
-export async function initializeBackend(): Promise<() => void> {
+export async function initializeBackend(): Promise<() => Promise<void>> {
   console.info('[startup] Validating configuration...');
   validateServerConfiguration();
   validateStorageConfiguration();
@@ -41,5 +41,7 @@ export async function initializeBackend(): Promise<() => void> {
     });
   }, 15 * 60 * 1000);
   cleanupTimer.unref();
-  return () => clearInterval(cleanupTimer);
+  return async () => {
+    clearInterval(cleanupTimer);
+  };
 }

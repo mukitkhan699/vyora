@@ -54,6 +54,26 @@ Abandoned or incomplete uploads are cleaned up by the server.
 
 ## Realtime messages
 
-Socket.IO authenticates with the existing session cookie. Message records are committed
-before recipient events are emitted. The HTTP message API remains available for initial
-history and as a reconnect fallback.
+Socket.IO authenticates with the existing session cookie. Message records and their
+realtime outbox events commit in the same PostgreSQL transaction. Dispatch is at-least-once:
+a crash after Socket.IO emission but before outbox acknowledgement can produce a duplicate.
+Consumers can deduplicate using the trailing `{ eventId }` Socket.IO argument; existing event
+names and first-argument payloads are unchanged.
+
+Before a conversation message is emitted, the dispatcher takes a PostgreSQL `FOR KEY SHARE`
+lock on its conversation row, intersects the event's original recipient and membership-epoch
+snapshot with current active members, then synchronously emits to those users' rooms and
+acknowledges the outbox row in the same transaction. Membership changes take the conflicting
+`FOR UPDATE` lock (also enforced by a participant-table trigger). If dispatch locks first,
+publication precedes the removal commit; if removal locks first, dispatch sees the removal
+and does not emit to that member. Rejoined or newly added members do not receive older events.
+The Socket.IO publication itself is synchronous; no network request is awaited while the
+authorization lock is held.
+
+Apply migrations 007 and 008 before starting code that uses the durable realtime outbox.
+Pending pre-epoch conversation events cannot be safely authorized and are acknowledged
+without publication; the dispatcher logs this condition. Retired legacy direct-message
+routes return HTTP 410. Unpublished `message.new` outbox rows are marked dead-lettered with
+a retirement reason when claimed; the row and legacy message history are preserved. Existing
+published and dead-lettered rows are left unchanged. The conversation HTTP API remains
+available for initial history and as a reconnect fallback.

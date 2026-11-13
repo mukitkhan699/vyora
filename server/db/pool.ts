@@ -1,7 +1,9 @@
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg';
+import { getRealtimeDatabaseUrl } from '../config.ts';
 
 let pool: Pool | undefined;
 let migrationPool: Pool | undefined;
+let realtimeAdapterPool: Pool | undefined;
 
 function getDatabaseUrl(): string {
   const connectionString = process.env.DATABASE_URL?.trim();
@@ -48,6 +50,13 @@ export function getMigrationPool(): Pool {
   return migrationPool;
 }
 
+export function getRealtimeAdapterPool(): Pool {
+  if (!realtimeAdapterPool) {
+    realtimeAdapterPool = createPool(getRealtimeDatabaseUrl());
+  }
+  return realtimeAdapterPool;
+}
+
 export function query<Row extends QueryResultRow = QueryResultRow>(
   text: string,
   values?: unknown[],
@@ -87,7 +96,15 @@ export async function verifyDatabase(): Promise<void> {
        AND to_regclass('public.zunari_notifications') IS NOT NULL
        AND to_regclass('public.zunari_messages') IS NOT NULL
        AND to_regclass('public.zunari_media_assets') IS NOT NULL
-       AND to_regclass('public.zunari_rate_limits') IS NOT NULL AS ready`,
+       AND to_regclass('public.zunari_rate_limits') IS NOT NULL
+       AND to_regclass('public.zunari_realtime_event_outbox') IS NOT NULL
+       AND to_regclass('public.socket_io_attachments') IS NOT NULL
+       AND EXISTS (
+         SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND table_name = 'zunari_conversation_participants'
+           AND column_name = 'membership_epoch'
+       ) AS ready`,
   );
   if (!schema.rows[0]?.ready) {
     throw new Error('Zunari database schema is not installed. Run the approved migration command.');
@@ -95,11 +112,12 @@ export async function verifyDatabase(): Promise<void> {
 }
 
 export async function closeDatabase(): Promise<void> {
-  const activePools = [pool, migrationPool].filter((activePool): activePool is Pool =>
-    Boolean(activePool),
+  const activePools = [pool, migrationPool, realtimeAdapterPool].filter(
+    (activePool): activePool is Pool => Boolean(activePool),
   );
   pool = undefined;
   migrationPool = undefined;
+  realtimeAdapterPool = undefined;
   const results = await Promise.allSettled(activePools.map((activePool) => activePool.end()));
   const failures = results.flatMap((result) =>
     result.status === 'rejected' ? [result.reason] : [],

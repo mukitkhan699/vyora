@@ -251,3 +251,138 @@ export function conversationTimestamp(conversation: { lastMessageAt?: number; la
 export function sortConversations<T extends { lastMessageAt?: number; lastMessage?: { createdAt?: string | number } | null }>(list: T[]): T[] {
   return [...list].sort((a, b) => conversationTimestamp(b) - conversationTimestamp(a));
 }
+
+export const MAX_TRACKED_REALTIME_EVENT_IDS = 1000;
+
+export interface BoundedEventIdSet {
+  has: (id: string) => boolean;
+  add: (id: string) => void;
+}
+
+export function createBoundedEventIdSet(limit: number): BoundedEventIdSet {
+  const ids = new Set<string>();
+  return {
+    has: (id) => ids.has(id),
+    add: (id) => {
+      if (ids.has(id)) return;
+      ids.add(id);
+      if (ids.size > limit) {
+        const oldest = ids.values().next().value;
+        if (typeof oldest === 'string') ids.delete(oldest);
+      }
+    },
+  };
+}
+
+export function claimRealtimeEvent(set: BoundedEventIdSet, eventId?: string): boolean {
+  if (!eventId) return true;
+  if (set.has(eventId)) return false;
+  set.add(eventId);
+  return true;
+}
+
+export type RealtimeMessageTimingEvent = 'recipientEventPublished' | 'recipientReceived';
+
+export interface RealtimeMessageEventContext {
+  conversationId: string;
+  currentUserId: string;
+  shouldStick: boolean;
+  visible: boolean;
+}
+
+export interface RealtimeMessageEventHandlers {
+  recordTiming: (clientId: string, event: RealtimeMessageTimingEvent) => void;
+  saveMessage: (message: Message) => void;
+  upsertMessage: (message: Message) => void;
+  updateConversationPreview: (message: Message) => void;
+  setUnseenBelow: () => void;
+  sendReceipts: (
+    conversationId: string,
+    type: 'delivered' | 'read',
+    messages: Message[],
+  ) => void;
+}
+
+export function applyRealtimeMessageEvent(
+  incoming: Message,
+  metadata: { eventId?: string } | undefined,
+  messageEventIds: BoundedEventIdSet,
+  context: RealtimeMessageEventContext,
+  handlers: RealtimeMessageEventHandlers,
+  counterpartNotificationEventIds?: BoundedEventIdSet,
+): boolean {
+  if (incoming.conversationId && incoming.conversationId !== context.conversationId) return false;
+  const eventId = typeof metadata?.eventId === 'string' ? metadata.eventId : undefined;
+  if (!claimRealtimeEvent(messageEventIds, eventId)) return false;
+  const notificationAlreadyProcessed = Boolean(
+    eventId && counterpartNotificationEventIds?.has(eventId),
+  );
+  if (incoming.clientId) {
+    handlers.recordTiming(incoming.clientId, 'recipientEventPublished');
+    handlers.recordTiming(incoming.clientId, 'recipientReceived');
+  }
+  if (!notificationAlreadyProcessed) handlers.saveMessage(incoming);
+  handlers.upsertMessage(incoming);
+  if (!notificationAlreadyProcessed) handlers.updateConversationPreview(incoming);
+  const isOwn = incoming.senderId === context.currentUserId;
+  if (!isOwn) {
+    if (!context.shouldStick) handlers.setUnseenBelow();
+    handlers.sendReceipts(context.conversationId, context.visible ? 'read' : 'delivered', [incoming]);
+  }
+  return true;
+}
+
+export interface RealtimeMessageNotificationPayload {
+  conversationId?: string;
+  message?: Message;
+}
+
+export interface RealtimeMessageNotificationContext {
+  activeConversationId: string | null;
+  currentUserId: string;
+  visible: boolean;
+  conversationKnown: boolean;
+}
+
+export interface RealtimeMessageNotificationHandlers {
+  saveMessage: (message: Message) => void;
+  upsertActiveMessage: (message: Message) => void;
+  sendReceipts: (
+    conversationId: string,
+    type: 'delivered' | 'read',
+    messages: Message[],
+  ) => void;
+  updateConversationPreview: (message: Message) => void;
+  refreshConversations: () => void;
+}
+
+export function applyRealtimeMessageNotification(
+  payload: RealtimeMessageNotificationPayload | undefined,
+  metadata: { eventId?: string } | undefined,
+  notificationEventIds: BoundedEventIdSet,
+  context: RealtimeMessageNotificationContext,
+  handlers: RealtimeMessageNotificationHandlers,
+  counterpartMessageEventIds?: BoundedEventIdSet,
+): boolean {
+  const incoming = payload?.message;
+  const conversationId = payload?.conversationId || incoming?.conversationId;
+  if (!incoming || !conversationId) return false;
+  if (incoming.conversationId && incoming.conversationId !== conversationId) return false;
+  const eventId = typeof metadata?.eventId === 'string' ? metadata.eventId : undefined;
+  const firstNotification = claimRealtimeEvent(notificationEventIds, eventId);
+  const messageAlreadyProcessed = Boolean(
+    eventId && counterpartMessageEventIds?.has(eventId),
+  );
+  if (firstNotification && !messageAlreadyProcessed) {
+    handlers.saveMessage(incoming);
+    if (context.activeConversationId === conversationId) {
+      handlers.upsertActiveMessage(incoming);
+      if (incoming.senderId !== context.currentUserId && context.visible) {
+        handlers.sendReceipts(conversationId, 'read', [incoming]);
+      }
+    }
+    handlers.updateConversationPreview(incoming);
+  }
+  if (!context.conversationKnown) handlers.refreshConversations();
+  return firstNotification;
+}

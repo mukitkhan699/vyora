@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { dbAdapter } from './db/adapter.ts';
+import { HttpError } from './errors.ts';
+import { MAX_POST_MEDIA } from '../src/utils/postMedia.ts';
 
 test('post publishing rules and validations', () => {
   // Test character limit validation
@@ -10,18 +13,29 @@ test('post publishing rules and validations', () => {
   assert.strictEqual(validContent.length <= maxPostLength, true);
   assert.strictEqual(invalidContent.length <= maxPostLength, false);
 
-  // Test media count limit validation (max 4 per post)
-  const validMedia = ['img1.png', 'img2.png', 'img3.png', 'img4.png'];
-  const invalidMedia = ['img1.png', 'img2.png', 'img3.png', 'img4.png', 'img5.png'];
-  assert.strictEqual(validMedia.length <= 4, true);
-  assert.strictEqual(invalidMedia.length <= 4, false);
-
   // Test engagement counters clamp to non-negative (GREATEST(0, count - 1))
   const decrement = (val: number) => Math.max(0, val - 1);
   assert.strictEqual(decrement(5), 4);
   assert.strictEqual(decrement(1), 0);
   assert.strictEqual(decrement(0), 0);
   assert.strictEqual(decrement(-1), 0);
+});
+
+test('dbAdapter.createPost rejects more than four media URLs before persistence', async () => {
+  const mediaUrls = Array.from(
+    { length: MAX_POST_MEDIA + 1 },
+    (_, index) => `/api/files/file_${index}`,
+  );
+
+  await assert.rejects(
+    () => dbAdapter.createPost('user_test', 'Too many images', mediaUrls),
+    (error: unknown) => (
+      error instanceof HttpError &&
+      error.status === 400 &&
+      error.code === 'TOO_MANY_MEDIA' &&
+      /maximum of 4 media attachments/i.test(error.message)
+    ),
+  );
 });
 
 test('unlimited post publishing applies equally to regular and gold accounts', () => {

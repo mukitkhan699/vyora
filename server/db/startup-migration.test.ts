@@ -11,7 +11,7 @@ const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, '..', '..');
 
 describe('Server configuration and migration connection separation', () => {
-  test('validateServerConfiguration succeeds with DATABASE_URL alone and without DATABASE_URL_DIRECT', () => {
+  test('server configuration requires a direct DATABASE_URL_DIRECT for realtime', () => {
     const originalEnv = { ...process.env };
     try {
       process.env.DATABASE_URL = 'postgresql://user:pass@pooler.neon.tech/neondb?sslmode=require';
@@ -23,9 +23,21 @@ describe('Server configuration and migration connection separation', () => {
       process.env.B2_KEY_ID = 'test-key-id';
       process.env.B2_APPLICATION_KEY = 'test-app-key';
 
-      assert.doesNotThrow(() => {
-        validateServerConfiguration();
-      });
+      assert.throws(
+        () => validateServerConfiguration(),
+        /DATABASE_URL_DIRECT is required for PostgreSQL realtime/,
+      );
+
+      process.env.DATABASE_URL_DIRECT =
+        'postgresql://test:test@ep-direct.us-east-1.aws.neon.tech/neondb';
+      assert.doesNotThrow(() => validateServerConfiguration());
+
+      process.env.DATABASE_URL_DIRECT =
+        'postgresql://test:test@ep-example-pooler.us-east-1.aws.neon.tech/neondb';
+      assert.throws(
+        () => validateServerConfiguration(),
+        /must use a direct PostgreSQL connection/,
+      );
     } finally {
       process.env = originalEnv;
     }

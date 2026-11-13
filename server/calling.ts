@@ -1,11 +1,39 @@
-import { AccessToken, WebhookReceiver } from 'livekit-server-sdk';
+import { AccessToken, WebhookEvent, WebhookReceiver } from 'livekit-server-sdk';
 import { randomUUID } from 'node:crypto';
 import { query, withTransaction } from './db/pool.ts';
 import { messagingRepo } from './db/messaging.ts';
 import { publishCallEvent } from './realtime-events.ts';
 import { HttpError } from './errors.ts';
+import { getLiveKitConfiguration } from './config.ts';
 
 const MAX_GROUP_CALL_PARTICIPANTS = 8;
+
+interface CallingServiceDependencies {
+  query: typeof query;
+  withTransaction: typeof withTransaction;
+  messagingRepo: typeof messagingRepo;
+  publishCallEvent: typeof publishCallEvent;
+}
+
+interface CallSessionRow {
+  id: string;
+  conversation_id: string;
+  room_name: string;
+  type: 'voice' | 'video';
+  status: CallSessionDetails['status'];
+  caller_id: string;
+  started_at: string | number;
+  answered_at: string | number | null;
+  ended_at: string | number | null;
+  duration_seconds: number;
+}
+
+interface CallParticipantRow {
+  user_id: string;
+  status: CallSessionDetails['participants'][number]['status'];
+  joined_at: string | number | null;
+  left_at: string | number | null;
+}
 
 export interface CallSessionDetails {
   id: string;
@@ -26,20 +54,24 @@ export interface CallSessionDetails {
   }>;
 }
 
-function getLiveKitCredentials() {
-  const apiKey = process.env.LIVEKIT_API_KEY?.trim() || 'devkey';
-  const apiSecret = process.env.LIVEKIT_API_SECRET?.trim() || 'secret_secret_secret_secret_secret_32char';
-  const url = process.env.LIVEKIT_URL?.trim() || 'wss://demo.livekit.cloud';
-  return { apiKey, apiSecret, url };
-}
-
 export class CallingService {
-  public async generateToken(
+  private readonly dependencies: CallingServiceDependencies;
+
+  constructor(dependencies: Partial<CallingServiceDependencies> = {}) {
+    this.dependencies = {
+      query: dependencies.query ?? query,
+      withTransaction: dependencies.withTransaction ?? withTransaction,
+      messagingRepo: dependencies.messagingRepo ?? messagingRepo,
+      publishCallEvent: dependencies.publishCallEvent ?? publishCallEvent,
+    };
+  }
+
+  private async generateToken(
     userId: string,
     username: string,
     roomName: string,
   ): Promise<{ token: string; url: string }> {
-    const { apiKey, apiSecret, url } = getLiveKitCredentials();
+    const { apiKey, apiSecret, url } = getLiveKitConfiguration();
 
     const at = new AccessToken(apiKey, apiSecret, {
       identity: userId,
@@ -65,16 +97,19 @@ export class CallingService {
     conversationId: string,
     type: 'voice' | 'video',
   ): Promise<{ call: CallSessionDetails; token: string; livekitUrl: string }> {
-    const conv = await messagingRepo.getConversationById(conversationId, callerId);
+    const conv = await this.dependencies.messagingRepo.getConversationById(conversationId, callerId);
     if (!conv) {
       throw new HttpError(404, 'Conversation not found.', 'CONVERSATION_NOT_FOUND');
     }
 
-    const participants = conv.participants.filter((p) => !p.leftAt);
-    if (participants.length < 2) {
+    const activeParticipants = conv.participants.filter((p) => !p.leftAt);
+    if (!activeParticipants.some((participant) => participant.userId === callerId)) {
+      throw new HttpError(404, 'Conversation not found.', 'CONVERSATION_NOT_FOUND');
+    }
+    if (activeParticipants.length < 2) {
       throw new HttpError(400, 'Conversation must have at least 2 active participants.', 'INVALID_PARTICIPANTS');
     }
-    if (conv.type === 'group' && participants.length > MAX_GROUP_CALL_PARTICIPANTS) {
+    if (conv.type === 'group' && activeParticipants.length > MAX_GROUP_CALL_PARTICIPANTS) {
       throw new HttpError(
         400,
         `Group calling is limited to a maximum of ${MAX_GROUP_CALL_PARTICIPANTS} participants.`,
@@ -86,7 +121,29 @@ export class CallingService {
     const roomName = `room_${callId}`;
     const now = Date.now();
 
-    await withTransaction(async (client) => {
+    const initiation = await this.dependencies.withTransaction(async (client) => {
+      const membershipResult = await client.query<{ user_id: string }>(
+        `SELECT user_id FROM zunari_conversation_participants
+         WHERE conversation_id = $1 AND left_at IS NULL
+         FOR SHARE`,
+        [conversationId],
+      );
+      const activeUserIds = new Set(membershipResult.rows.map((participant) => participant.user_id));
+      const participants = activeParticipants.filter((participant) => activeUserIds.has(participant.userId));
+      if (!activeUserIds.has(callerId)) {
+        throw new HttpError(404, 'Conversation not found.', 'CONVERSATION_NOT_FOUND');
+      }
+      if (participants.length < 2) {
+        throw new HttpError(400, 'Conversation must have at least 2 active participants.', 'INVALID_PARTICIPANTS');
+      }
+
+      const callerUser = conv.participants.find((p) => p.userId === callerId)?.user;
+      const callerToken = await this.generateToken(
+        callerId,
+        callerUser?.username || callerId,
+        roomName,
+      );
+
       await client.query(
         `INSERT INTO zunari_call_sessions
            (id, conversation_id, room_name, type, status, caller_id, started_at, duration_seconds)
@@ -104,13 +161,16 @@ export class CallingService {
           [callId, p.userId, initialStatus, joinedAt],
         );
       }
+      return { participants, callerToken };
     });
 
     const callerUser = conv.participants.find((p) => p.userId === callerId)?.user;
-    const recipientIds = participants.filter((p) => p.userId !== callerId).map((p) => p.userId);
+    const recipientIds = initiation.participants
+      .filter((p) => p.userId !== callerId)
+      .map((p) => p.userId);
 
     // Emit incoming call event via Socket.IO
-    publishCallEvent({
+    this.dependencies.publishCallEvent({
       callId,
       conversationId,
       roomName,
@@ -122,7 +182,7 @@ export class CallingService {
         name: callerUser?.name || '',
         avatarUrl: callerUser?.avatarUrl || '',
       },
-      participants: participants.map((p) => ({
+      participants: initiation.participants.map((p) => ({
         id: p.userId,
         username: p.user?.username || '',
         name: p.user?.name || '',
@@ -132,13 +192,12 @@ export class CallingService {
       recipientIds,
     });
 
-    const callerToken = await this.generateToken(callerId, callerUser?.username || callerId, roomName);
     const callDetails = await this.getCallById(callId);
 
     return {
       call: callDetails!,
-      token: callerToken.token,
-      livekitUrl: callerToken.url,
+      token: initiation.callerToken.token,
+      livekitUrl: initiation.callerToken.url,
     };
   }
 
@@ -147,13 +206,53 @@ export class CallingService {
     callId: string,
     action: 'accept' | 'reject',
   ): Promise<{ call: CallSessionDetails; token?: string; livekitUrl?: string }> {
-    const call = await this.getCallById(callId);
-    if (!call) throw new HttpError(404, 'Call not found.', 'CALL_NOT_FOUND');
-    if (call.status === 'ended') throw new HttpError(400, 'Call has already ended.', 'CALL_ENDED');
-
     const now = Date.now();
-    await withTransaction(async (client) => {
-      if (action === 'accept') {
+    const call = await this.dependencies.withTransaction(async (client) => {
+      const callResult = await client.query<CallSessionRow>(
+        'SELECT * FROM zunari_call_sessions WHERE id = $1 FOR UPDATE',
+        [callId],
+      );
+      const callRow = callResult.rows[0];
+      if (!callRow) throw this.callNotFound();
+
+      const participantResult = await client.query<CallParticipantRow>(
+        `SELECT user_id, status, joined_at, left_at
+         FROM zunari_call_participants
+         WHERE call_id = $1 AND user_id = $2
+         FOR UPDATE`,
+        [callId, userId],
+      );
+      const participant = participantResult.rows[0];
+      if (!participant) throw this.callNotFound();
+
+      const membership = await client.query<{ username: string | null }>(
+        `SELECT u.username
+         FROM zunari_conversation_participants cp
+         JOIN zunari_users u ON u.public_id = cp.user_id
+         WHERE cp.conversation_id = $1 AND cp.user_id = $2 AND cp.left_at IS NULL
+         FOR SHARE OF cp`,
+        [callRow.conversation_id, userId],
+      );
+      if (!membership.rowCount) throw this.callNotFound();
+
+      const participantRows = await client.query<CallParticipantRow>(
+        `SELECT user_id, status, joined_at, left_at
+         FROM zunari_call_participants
+         WHERE call_id = $1`,
+        [callId],
+      );
+      const authorizedCall = this.mapCall(callRow, participantRows.rows);
+      this.assertCallRespondAllowed(authorizedCall, participant, action);
+      const tokenRes =
+        action === 'accept'
+          ? await this.generateToken(
+              userId,
+              membership.rows[0]?.username || userId,
+              authorizedCall.roomName,
+            )
+          : null;
+
+      if (action === 'accept' && participant.status === 'invited') {
         await client.query(
           `UPDATE zunari_call_participants
            SET status = 'joined', joined_at = $1
@@ -166,40 +265,58 @@ export class CallingService {
            WHERE id = $2`,
           [now, callId],
         );
-      } else {
+        participant.status = 'joined';
+        participant.joined_at = now;
+        const updatedParticipant = authorizedCall.participants.find((entry) => entry.userId === userId);
+        if (updatedParticipant) {
+          updatedParticipant.status = 'joined';
+          updatedParticipant.joinedAt = now;
+        }
+        authorizedCall.status = 'active';
+        authorizedCall.answeredAt ??= now;
+      } else if (action === 'reject') {
         await client.query(
           `UPDATE zunari_call_participants
            SET status = 'declined', left_at = $1
            WHERE call_id = $2 AND user_id = $3`,
           [now, callId, userId],
         );
-        // If 1:1 and rejected, mark session as rejected
-        const participants = await client.query<{ user_id: string; status: string }>(
-          'SELECT user_id, status FROM zunari_call_participants WHERE call_id = $1',
-          [callId],
-        );
-        if (participants.rows.length === 2) {
+        participant.status = 'declined';
+        participant.left_at = now;
+        const updatedParticipant = authorizedCall.participants.find((entry) => entry.userId === userId);
+        if (updatedParticipant) {
+          updatedParticipant.status = 'declined';
+          updatedParticipant.leftAt = now;
+        }
+        if (authorizedCall.participants.length === 2) {
           await client.query(
             `UPDATE zunari_call_sessions SET status = 'rejected', ended_at = $1 WHERE id = $2`,
             [now, callId],
           );
+          authorizedCall.status = 'rejected';
+          authorizedCall.endedAt = now;
         }
       }
+
+      return { call: authorizedCall, tokenRes };
     });
 
-    const updated = await this.getCallById(callId);
-    const conv = await messagingRepo.getConversationById(call.conversationId, userId);
-    const callerUser = conv?.participants.find((p) => p.userId === call.callerId)?.user;
+    const { call: updatedCall, tokenRes } = call;
+    const conv = await this.dependencies.messagingRepo.getConversationById(
+      updatedCall.conversationId,
+      userId,
+    );
+    const callerUser = conv?.participants.find((p) => p.userId === updatedCall.callerId)?.user;
     const recipientIds = conv?.participants.map((p) => p.userId) || [];
 
-    publishCallEvent({
+    this.dependencies.publishCallEvent({
       callId,
-      conversationId: call.conversationId,
-      roomName: call.roomName,
-      type: call.type,
-      status: updated!.status,
+      conversationId: updatedCall.conversationId,
+      roomName: updatedCall.roomName,
+      type: updatedCall.type,
+      status: updatedCall.status,
       caller: {
-        id: call.callerId,
+        id: updatedCall.callerId,
         username: callerUser?.username || '',
         name: callerUser?.name || '',
         avatarUrl: callerUser?.avatarUrl || '',
@@ -216,41 +333,75 @@ export class CallingService {
     });
 
     if (action === 'accept') {
-      const user = conv?.participants.find((p) => p.userId === userId)?.user;
-      const tokenRes = await this.generateToken(userId, user?.username || userId, call.roomName);
+      if (!tokenRes) throw new Error('Authorized call token was not generated.');
       return {
-        call: updated!,
+        call: updatedCall,
         token: tokenRes.token,
         livekitUrl: tokenRes.url,
       };
     }
 
-    return { call: updated! };
+    return { call: updatedCall };
   }
 
   public async endCall(userId: string, callId: string): Promise<CallSessionDetails> {
-    const call = await this.getCallById(callId);
-    if (!call) throw new HttpError(404, 'Call not found.', 'CALL_NOT_FOUND');
-
     const now = Date.now();
-    await withTransaction(async (client) => {
-      // Mark user left
+    const call = await this.dependencies.withTransaction(async (client) => {
+      const callResult = await client.query<CallSessionRow>(
+        'SELECT * FROM zunari_call_sessions WHERE id = $1 FOR UPDATE',
+        [callId],
+      );
+      const callRow = callResult.rows[0];
+      if (!callRow) throw this.callNotFound();
+
+      const participantResult = await client.query<CallParticipantRow>(
+        `SELECT user_id, status, joined_at, left_at
+         FROM zunari_call_participants
+         WHERE call_id = $1 AND user_id = $2
+         FOR UPDATE`,
+        [callId, userId],
+      );
+      const participant = participantResult.rows[0];
+      if (!participant) throw this.callNotFound();
+
+      const membership = await client.query(
+        `SELECT 1 FROM zunari_conversation_participants
+         WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL
+         FOR SHARE`,
+        [callRow.conversation_id, userId],
+      );
+      if (!membership.rowCount) throw this.callNotFound();
+
+      const participantRows = await client.query<CallParticipantRow>(
+        `SELECT user_id, status, joined_at, left_at
+         FROM zunari_call_participants
+         WHERE call_id = $1`,
+        [callId],
+      );
+      const authorizedCall = this.mapCall(callRow, participantRows.rows);
+      this.assertCallEndAllowed(authorizedCall, participant);
+
       await client.query(
         `UPDATE zunari_call_participants
          SET status = 'left', left_at = $1
          WHERE call_id = $2 AND user_id = $3`,
         [now, callId, userId],
       );
+      participant.status = 'left';
+      participant.left_at = now;
+      const currentParticipant = authorizedCall.participants.find((entry) => entry.userId === userId);
+      if (currentParticipant) {
+        currentParticipant.status = 'left';
+        currentParticipant.leftAt = now;
+      }
 
-      // Check remaining active
       const active = await client.query(
         "SELECT 1 FROM zunari_call_participants WHERE call_id = $1 AND status = 'joined'",
         [callId],
       );
 
-      // If no active participants or caller ends a 1:1, end session
-      if (active.rowCount === 0 || (call.participants.length === 2 && call.callerId === userId)) {
-        const startTime = call.answeredAt || call.startedAt;
+      if (active.rowCount === 0 || (authorizedCall.participants.length === 2 && authorizedCall.callerId === userId)) {
+        const startTime = authorizedCall.answeredAt || authorizedCall.startedAt;
         const duration = Math.max(0, Math.floor((now - startTime) / 1000));
         await client.query(
           `UPDATE zunari_call_sessions
@@ -258,20 +409,24 @@ export class CallingService {
            WHERE id = $3`,
           [now, duration, callId],
         );
+        authorizedCall.status = 'ended';
+        authorizedCall.endedAt = now;
+        authorizedCall.durationSeconds = duration;
       }
+
+      return authorizedCall;
     });
 
-    const updated = await this.getCallById(callId);
-    const conv = await messagingRepo.getConversationById(call.conversationId, userId);
+    const conv = await this.dependencies.messagingRepo.getConversationById(call.conversationId, userId);
     const callerUser = conv?.participants.find((p) => p.userId === call.callerId)?.user;
     const recipientIds = conv?.participants.map((p) => p.userId) || [];
 
-    publishCallEvent({
+    this.dependencies.publishCallEvent({
       callId,
       conversationId: call.conversationId,
       roomName: call.roomName,
       type: call.type,
-      status: updated!.status,
+      status: call.status,
       caller: {
         id: call.callerId,
         username: callerUser?.username || '',
@@ -284,64 +439,103 @@ export class CallingService {
         name: p.user?.name || '',
         avatarUrl: p.user?.avatarUrl || '',
       })),
-      event: updated!.status === 'ended' ? 'ended' : 'participant-left',
+      event: call.status === 'ended' ? 'ended' : 'participant-left',
       recipientIds,
       leftUserId: userId,
     });
 
-    return updated!;
+    return call;
+  }
+
+  private callNotFound(): HttpError {
+    return new HttpError(404, 'Call not found.', 'CALL_NOT_FOUND');
+  }
+
+  private assertCallRespondAllowed(
+    call: CallSessionDetails,
+    participant: CallParticipantRow,
+    action: 'accept' | 'reject',
+  ): void {
+    if (call.status !== 'ringing' && call.status !== 'active') {
+      throw new HttpError(409, 'Call is no longer available.', 'CALL_NOT_AVAILABLE');
+    }
+    if (action === 'accept') {
+      if (
+        participant.left_at !== null ||
+        (participant.status !== 'invited' && participant.status !== 'joined')
+      ) {
+        throw new HttpError(409, 'Call is no longer available.', 'CALL_NOT_AVAILABLE');
+      }
+      return;
+    }
+    if (participant.status !== 'invited' || participant.left_at !== null) {
+      throw new HttpError(409, 'Call is no longer available.', 'CALL_NOT_AVAILABLE');
+    }
+  }
+
+  private assertCallEndAllowed(
+    call: CallSessionDetails,
+    participant: CallParticipantRow,
+  ): void {
+    if (
+      (call.status !== 'ringing' && call.status !== 'active') ||
+      participant.status !== 'joined' ||
+      participant.left_at !== null
+    ) {
+      throw new HttpError(409, 'Call is no longer available.', 'CALL_NOT_AVAILABLE');
+    }
+  }
+
+  private mapCall(call: CallSessionRow, participants: CallParticipantRow[]): CallSessionDetails {
+    return {
+      id: call.id,
+      conversationId: call.conversation_id,
+      roomName: call.room_name,
+      type: call.type,
+      status: call.status,
+      callerId: call.caller_id,
+      startedAt: Number(call.started_at),
+      answeredAt: call.answered_at === null ? null : Number(call.answered_at),
+      endedAt: call.ended_at === null ? null : Number(call.ended_at),
+      durationSeconds: Number(call.duration_seconds),
+      participants: participants.map((participant) => ({
+        userId: participant.user_id,
+        status: participant.status,
+        joinedAt: participant.joined_at === null ? null : Number(participant.joined_at),
+        leftAt: participant.left_at === null ? null : Number(participant.left_at),
+      })),
+    };
   }
 
   public async getCallById(callId: string): Promise<CallSessionDetails | null> {
-    const res = await query<{
-      id: string;
-      conversation_id: string;
-      room_name: string;
-      type: 'voice' | 'video';
-      status: 'ringing' | 'active' | 'ended' | 'missed' | 'rejected';
-      caller_id: string;
-      started_at: string | number;
-      answered_at: string | number | null;
-      ended_at: string | number | null;
-      duration_seconds: number;
-    }>('SELECT * FROM zunari_call_sessions WHERE id = $1', [callId]);
+    const res = await this.dependencies.query<CallSessionRow>(
+      'SELECT * FROM zunari_call_sessions WHERE id = $1',
+      [callId],
+    );
     const r = res.rows[0];
     if (!r) return null;
 
-    const partsRes = await query<{
-      user_id: string;
-      status: 'invited' | 'joined' | 'left' | 'declined' | 'missed';
-      joined_at: string | number | null;
-      left_at: string | number | null;
-    }>('SELECT * FROM zunari_call_participants WHERE call_id = $1', [callId]);
+    const partsRes = await this.dependencies.query<CallParticipantRow>(
+      'SELECT * FROM zunari_call_participants WHERE call_id = $1',
+      [callId],
+    );
 
-    return {
-      id: r.id,
-      conversationId: r.conversation_id,
-      roomName: r.room_name,
-      type: r.type,
-      status: r.status,
-      callerId: r.caller_id,
-      startedAt: Number(r.started_at),
-      answeredAt: r.answered_at ? Number(r.answered_at) : null,
-      endedAt: r.ended_at ? Number(r.ended_at) : null,
-      durationSeconds: Number(r.duration_seconds),
-      participants: partsRes.rows.map((p) => ({
-        userId: p.user_id,
-        status: p.status,
-        joinedAt: p.joined_at ? Number(p.joined_at) : null,
-        leftAt: p.left_at ? Number(p.left_at) : null,
-      })),
-    };
+    return this.mapCall(r, partsRes.rows);
   }
 
   public async validateWebhook(
     body: string,
     authHeader?: string,
-  ): Promise<{ event: string; room?: { name: string }; participant?: { identity: string } }> {
-    const { apiKey, apiSecret } = getLiveKitCredentials();
+  ): Promise<WebhookEvent> {
+    let apiKey: string;
+    let apiSecret: string;
+    try {
+      ({ apiKey, apiSecret } = getLiveKitConfiguration());
+    } catch {
+      throw new HttpError(503, 'Webhook verification is unavailable.', 'WEBHOOK_UNAVAILABLE');
+    }
     const receiver = new WebhookReceiver(apiKey, apiSecret);
-    return receiver.receive(body, authHeader) as any;
+    return receiver.receive(body, authHeader);
   }
 
   /**
@@ -355,7 +549,7 @@ export class CallingService {
     const roomName = event.room?.name;
     if (!roomName) return;
 
-    const callRes = await query<{ id: string }>('SELECT id FROM zunari_call_sessions WHERE room_name = $1', [
+    const callRes = await this.dependencies.query<{ id: string }>('SELECT id FROM zunari_call_sessions WHERE room_name = $1', [
       roomName,
     ]);
     if (!callRes.rows[0]) return;
@@ -363,13 +557,13 @@ export class CallingService {
 
     if (event.event === 'room_finished') {
       const now = Date.now();
-      await query(
+      await this.dependencies.query(
         "UPDATE zunari_call_sessions SET status = 'ended', ended_at = $1 WHERE id = $2 AND status <> 'ended'",
         [now, callId],
       );
     } else if (event.event === 'participant_left' && event.participant?.identity) {
       const now = Date.now();
-      await query(
+      await this.dependencies.query(
         "UPDATE zunari_call_participants SET status = 'left', left_at = $1 WHERE call_id = $2 AND user_id = $3",
         [now, callId, event.participant.identity],
       );

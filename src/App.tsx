@@ -180,9 +180,9 @@ function MainApp() {
   }
 
   return (
-    <div className="min-h-screen flex justify-center selection:bg-cyan-500/30 selection:text-white">
+    <div className={`${currentTab === 'messages' ? 'h-[100dvh] overflow-hidden' : 'min-h-screen'} flex justify-center selection:bg-cyan-500/30 selection:text-white`}>
       {/* 3-Column Responsive Container */}
-      <div className="flex w-full max-w-7xl justify-between">
+      <div className={`flex w-full max-w-7xl justify-between ${currentTab === 'messages' ? 'h-full min-h-0' : ''}`}>
         {/* Left Navigation Sidebar */}
         <Sidebar
           currentTab={currentTab}
@@ -196,16 +196,12 @@ function MainApp() {
 
         {/* Center Main Social Feed View */}
         <main
-          className={`min-w-0 flex-1 min-h-screen border-r border-white/[0.08] w-full ${
+          className={`min-w-0 flex-1 border-r border-white/[0.08] w-full ${
             currentTab === 'messages'
-              ? 'max-w-none pb-0 sm:pb-0 md:pb-0'
-              : 'max-w-2xl pb-20 sm:pb-4'
+              ? 'h-full min-h-0 max-w-none'
+              : 'min-h-screen max-w-2xl pb-20 sm:pb-4'
           }`}
-          style={{
-            paddingBottom: currentTab === 'messages' 
-              ? 'env(safe-area-inset-bottom, 0px)' // Reserve space for MobileNav on mobile
-              : 0,
-          }}
+          style={currentTab === 'messages' ? undefined : { paddingBottom: 0 }}
         >
           {currentTab === 'home' && (
             <Timeline

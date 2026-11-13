@@ -13,6 +13,16 @@ export interface RealtimeMessageEvent {
   conversationId: string;
   message: MessageRecord;
   recipientIds: string[];
+  eventId?: string;
+}
+
+export interface RealtimeDeliveryMetadata {
+  /**
+   * Stable outbox ID exposed as the trailing Socket.IO argument. Consumers can
+   * use it to deduplicate retries and crash-recovery duplicates without
+   * changing the existing event payload.
+   */
+  eventId: string;
 }
 
 export interface RealtimeTypingEvent {
@@ -54,20 +64,17 @@ export interface RealtimeCallEvent {
   leftUserId?: string;
 }
 
-export function publishMessage(message: unknown): void {
-  events.emit('message', message);
-}
-
-export function publishConversationMessage(event: RealtimeMessageEvent): void {
-  events.emit('conv:message', event);
+export function publishConversationMessage(event: RealtimeMessageEvent): boolean {
+  return events.emit('conv:message', event);
 }
 
 export function publishConversationMessageEdit(event: {
   conversationId: string;
   message: MessageRecord;
   recipientIds: string[];
-}): void {
-  events.emit('conv:message-edit', event);
+  eventId?: string;
+}): boolean {
+  return events.emit('conv:message-edit', event);
 }
 
 export function publishConversationMessageDelete(event: {
@@ -105,13 +112,6 @@ export function publishNotification(
   events.emit('notification', { recipientId, notification });
 }
 
-export function onMessage(
-  listener: (message: unknown) => void,
-): () => void {
-  events.on('message', listener);
-  return () => events.off('message', listener);
-}
-
 export function onConversationMessage(
   listener: (event: RealtimeMessageEvent) => void,
 ): () => void {
@@ -120,7 +120,12 @@ export function onConversationMessage(
 }
 
 export function onConversationMessageEdit(
-  listener: (event: { conversationId: string; message: MessageRecord; recipientIds: string[] }) => void,
+  listener: (event: {
+    conversationId: string;
+    message: MessageRecord;
+    recipientIds: string[];
+    eventId?: string;
+  }) => void,
 ): () => void {
   events.on('conv:message-edit', listener);
   return () => events.off('conv:message-edit', listener);

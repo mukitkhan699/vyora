@@ -1,8 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { messagingRepo } from '../db/messaging.ts';
 import {
-  publishConversationMessage,
-  publishConversationMessageEdit,
   publishConversationMessageDelete,
   publishReceipt,
   publishReaction,
@@ -181,20 +179,6 @@ export async function handleMessagingRequest(
         },
       );
 
-      // A retried clientId already reached recipients; do not fan it out twice.
-      if (!isDuplicate) {
-        const participants = await messagingRepo.getParticipants(conversationId);
-        const activeRecipientIds = participants
-          .filter((p) => !p.leftAt && p.userId !== currentUserId)
-          .map((p) => p.userId);
-
-        publishConversationMessage({
-          conversationId,
-          message,
-          recipientIds: activeRecipientIds,
-        });
-      }
-
       sendJson(res, isDuplicate ? 200 : 201, { message, duplicate: isDuplicate });
       return true;
     }
@@ -213,13 +197,6 @@ export async function handleMessagingRequest(
       const body = await readJson(req);
       const text = typeof body.text === 'string' ? body.text : '';
       const updated = await messagingRepo.editMessage(conversationId, messageId, currentUserId, text);
-
-      const participants = await messagingRepo.getParticipants(conversationId);
-      publishConversationMessageEdit({
-        conversationId,
-        message: updated,
-        recipientIds: participants.filter((p) => !p.leftAt).map((p) => p.userId),
-      });
 
       sendJson(res, 200, { message: updated });
       return true;

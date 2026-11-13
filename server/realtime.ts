@@ -4,7 +4,10 @@ import { getSession } from './auth.ts';
 import { dbAdapter } from './db/adapter.ts';
 import { query } from './db/pool.ts';
 import {
-  onMessage,
+  attachPostgresRealtimeAdapter,
+  type RealtimeAdapterHandle,
+} from './realtime-adapter.ts';
+import {
   onNotification,
   onSessionRevocation,
   onConversationMessage,
@@ -14,15 +17,28 @@ import {
   onReceipt,
   onReaction,
   onCallEvent,
+  type RealtimeMessageEvent,
+  type RealtimeDeliveryMetadata,
+  type RealtimeTypingEvent,
+  type RealtimeReceiptEvent,
+  type RealtimeReactionEvent,
+  type RealtimeCallEvent,
+  type SessionRevocation,
   publishTyping,
   publishReceipt,
 } from './realtime-events.ts';
+import type { Notification } from '../src/types/index.ts';
 
 let activeServer: SocketServer | undefined;
+let realtimeAdapter: RealtimeAdapterHandle | undefined;
 let stopListeners: Array<() => void> = [];
 
 // Track online users: Map<userId, Set<socketId>>
 const onlineUserSockets = new Map<string, Set<string>>();
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+}
 
 export function isUserOnline(userId: string): boolean {
   const sockets = onlineUserSockets.get(userId);
@@ -30,17 +46,196 @@ export function isUserOnline(userId: string): boolean {
 }
 
 export function evictUserFromConversation(userId: string, conversationId: string): void {
-  if (!activeServer) return;
-  const sockets = onlineUserSockets.get(userId);
-  if (!sockets) return;
-  const room = `conv:${conversationId}`;
-  for (const socketId of sockets) {
-    const socket = activeServer.sockets.sockets.get(socketId);
-    if (!socket) continue;
-    socket.leave(room);
+  const io = activeServer;
+  if (!io) return;
+  evictUserFromConversationLocal(io, userId, conversationId);
+  if (!realtimeAdapter?.isReady()) return;
+  void Promise.resolve(
+    io.serverSideEmit('zunari:realtime:evict-conversation', { userId, conversationId }),
+  ).catch((error) => {
+    console.error('[realtime] Unable to forward conversation eviction:', error);
+  });
+}
+
+export function emitConversationMessageToUsers(
+  event: RealtimeMessageEvent,
+  emitToUser: (userId: string, eventName: string, ...args: unknown[]) => void,
+): void {
+  const metadata: RealtimeDeliveryMetadata | undefined = event.eventId
+    ? { eventId: event.eventId }
+    : undefined;
+  for (const recipientId of event.recipientIds) {
+    const messageArgs = metadata ? [event.message, metadata] : [event.message];
+    emitToUser(recipientId, 'conversation:message', ...messageArgs);
+    const notification = { conversationId: event.conversationId, message: event.message };
+    emitToUser(
+      recipientId,
+      'conversation:message-notification',
+      ...(metadata ? [notification, metadata] : [notification]),
+    );
+  }
+}
+
+function emitConversationMessageEditToUsers(
+  event: {
+    conversationId: string;
+    message: RealtimeMessageEvent['message'];
+    recipientIds: string[];
+    eventId: string;
+  },
+  io: SocketServer,
+): void {
+  const metadata: RealtimeDeliveryMetadata = { eventId: event.eventId };
+  for (const recipientId of event.recipientIds) {
+    io.local.to(`user:${recipientId}`).emit(
+      'conversation:message-edit',
+      event.message,
+      metadata,
+    );
+  }
+}
+
+function emitConversationMessageToLocalUsers(
+  event: RealtimeMessageEvent,
+  io: SocketServer,
+): void {
+  emitConversationMessageToUsers(event, (userId, eventName, ...args) => {
+    io.local.to(`user:${userId}`).emit(eventName, ...args);
+  });
+}
+
+function emitConversationMessageDeleteToLocalUsers(
+  io: SocketServer,
+  event: { conversationId: string; messageId: string; recipientIds: string[] },
+): void {
+  const payload = { conversationId: event.conversationId, messageId: event.messageId };
+  io.local.to(`conv:${event.conversationId}`).emit('conversation:message-delete', payload);
+  for (const recipientId of event.recipientIds) {
+    io.local.to(`user:${recipientId}`).emit('conversation:message-delete', payload);
+  }
+}
+
+function emitTypingToLocalUsers(
+  io: SocketServer,
+  event: RealtimeTypingEvent,
+): void {
+  io.local.to(`conv:${event.conversationId}`).emit('conversation:typing', event);
+}
+
+function emitReceiptToLocalUsers(
+  io: SocketServer,
+  event: RealtimeReceiptEvent,
+): void {
+  const { recipientIds = [], ...payload } = event;
+  io.local.to(`conv:${event.conversationId}`).emit('conversation:receipt', payload);
+  for (const recipientId of recipientIds) {
+    io.local.to(`user:${recipientId}`).emit('conversation:receipt', payload);
+  }
+}
+
+function emitReactionToLocalUsers(
+  io: SocketServer,
+  event: RealtimeReactionEvent,
+): void {
+  const { recipientIds = [], ...payload } = event;
+  io.local.to(`conv:${event.conversationId}`).emit('conversation:reaction', payload);
+  for (const recipientId of recipientIds) {
+    io.local.to(`user:${recipientId}`).emit('conversation:reaction', payload);
+  }
+}
+
+function emitCallEventToLocalUsers(
+  io: SocketServer,
+  event: RealtimeCallEvent,
+): void {
+  for (const recipientId of event.recipientIds) {
+    io.local.to(`user:${recipientId}`).emit(`call:${event.event}`, event);
+  }
+  io.local.to(`conv:${event.conversationId}`).emit('call:update', event);
+}
+
+function emitNotificationToLocalUsers(
+  io: SocketServer,
+  event: { recipientId: string; notification: Notification },
+): void {
+  io.local.to(`user:${event.recipientId}`).emit('notification:new', event.notification);
+}
+
+function disconnectRevokedSessionLocal(
+  io: SocketServer,
+  revocation: SessionRevocation,
+): void {
+  if (revocation.tokenHash) {
+    io.local.in(`session:${revocation.tokenHash}`).disconnectSockets(true);
+  }
+  if (revocation.userId) {
+    io.local.in(`auth-user:${revocation.userId}`).disconnectSockets(true);
+  }
+}
+
+function evictUserFromConversationLocal(
+  io: SocketServer,
+  userId: string,
+  conversationId: string,
+): void {
+  const userRoom = `user:${userId}`;
+  const conversationRoom = `conv:${conversationId}`;
+  for (const socket of io.sockets.sockets.values()) {
+    if (!socket.rooms.has(userRoom)) continue;
+    socket.leave(conversationRoom);
     const joined = socket.data.joinedConversations;
     if (joined instanceof Set) joined.delete(conversationId);
   }
+}
+
+export async function publishConversationMessageToCluster(
+  io: SocketServer,
+  isAdapterReady: () => boolean,
+  event: RealtimeMessageEvent,
+): Promise<boolean> {
+  if (!isAdapterReady()) return false;
+  emitConversationMessageToLocalUsers(event, io);
+  await io.serverSideEmitWithAck('zunari:realtime:outbox-message', event);
+  return isAdapterReady();
+}
+
+export async function publishConversationMessageEditToCluster(
+  io: SocketServer,
+  isAdapterReady: () => boolean,
+  event: {
+    conversationId: string;
+    message: RealtimeMessageEvent['message'];
+    recipientIds: string[];
+    eventId: string;
+  },
+): Promise<boolean> {
+  if (!isAdapterReady()) return false;
+  emitConversationMessageEditToUsers(event, io);
+  await io.serverSideEmitWithAck('zunari:realtime:outbox-edit', event);
+  return isAdapterReady();
+}
+
+export async function publishConversationMessageAcrossInstances(
+  event: RealtimeMessageEvent,
+): Promise<boolean> {
+  const io = activeServer;
+  if (!io || !realtimeAdapter?.isReady()) return false;
+  return publishConversationMessageToCluster(io, () => Boolean(realtimeAdapter?.isReady()), event);
+}
+
+export async function publishConversationMessageEditAcrossInstances(event: {
+  conversationId: string;
+  message: RealtimeMessageEvent['message'];
+  recipientIds: string[];
+  eventId: string;
+}): Promise<boolean> {
+  const io = activeServer;
+  if (!io || !realtimeAdapter?.isReady()) return false;
+  return publishConversationMessageEditToCluster(
+    io,
+    () => Boolean(realtimeAdapter?.isReady()),
+    event,
+  );
 }
 
 export function getOnlineUserIds(): string[] {
@@ -99,7 +294,331 @@ function isAllowedOrigin(socket: Socket): boolean {
   return allowedOrigins.has(originUrl.origin);
 }
 
-export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
+export async function getClusterOnlineUserIds(
+  io: SocketServer,
+  userIds: string[],
+): Promise<string[]> {
+  if (userIds.length === 0) return [];
+  const allowed = new Set(userIds);
+  const sockets = await io
+    .in(userIds.map((userId) => `user:${userId}`))
+    .fetchSockets();
+  const online = new Set<string>();
+  for (const remoteSocket of sockets) {
+    const remoteUserId = (remoteSocket.data as { userId?: unknown } | undefined)?.userId;
+    if (typeof remoteUserId === 'string' && allowed.has(remoteUserId)) {
+      online.add(remoteUserId);
+      continue;
+    }
+    for (const room of remoteSocket.rooms) {
+      if (!room.startsWith('user:')) continue;
+      const roomUserId = room.slice('user:'.length);
+      if (allowed.has(roomUserId)) online.add(roomUserId);
+    }
+  }
+  return [...online];
+}
+
+export interface RealtimeEventPropagationHandle {
+  forward(eventName: string, payload: unknown): void;
+  stop(): void;
+}
+
+/**
+ * Wires local publishers to local-only Socket.IO delivery and forwards the
+ * same events to the other instances through serverSideEmit. Remote handlers
+ * always use io.local so that an event is never rebroadcast through the
+ * cluster adapter.
+ */
+export function installRealtimeEventPropagation(
+  io: SocketServer,
+  isAdapterReady: () => boolean,
+  options: { localPublishers?: boolean } = {},
+): RealtimeEventPropagationHandle {
+  type RemoteHandler = (raw: unknown, ack?: () => void) => void;
+  const listenerStops: Array<() => void> = [];
+  const remoteHandlers = new Map<string, RemoteHandler>();
+
+  const forward = (eventName: string, payload: unknown): void => {
+    if (!isAdapterReady()) return;
+    void Promise.resolve(io.serverSideEmit(eventName, payload)).catch((error) => {
+      console.error(`[realtime] Unable to forward ${eventName} to other instances:`, error);
+    });
+  };
+
+  const onRemote = (eventName: string, handler: RemoteHandler): void => {
+    remoteHandlers.set(eventName, handler);
+    io.on(eventName, handler);
+  };
+
+  const onConversationMessageDeleteLocal = (event: {
+    conversationId: string;
+    messageId: string;
+    recipientIds: string[];
+  }): void => {
+    emitConversationMessageDeleteToLocalUsers(io, event);
+  };
+
+  onRemote('zunari:realtime:conversation-delete', (
+    raw: unknown,
+    ack?: () => void,
+  ) => {
+    const event = raw as {
+      conversationId?: unknown;
+      messageId?: unknown;
+      recipientIds?: unknown;
+    };
+    if (
+      !isAdapterReady() ||
+      !event ||
+      typeof event.conversationId !== 'string' ||
+      typeof event.messageId !== 'string' ||
+      !isStringArray(event.recipientIds)
+    ) {
+      ack?.();
+      return;
+    }
+    onConversationMessageDeleteLocal({
+      conversationId: event.conversationId,
+      messageId: event.messageId,
+      recipientIds: event.recipientIds,
+    });
+    ack?.();
+  });
+
+  onRemote('zunari:realtime:typing', (raw: unknown, ack?: () => void) => {
+    const event = raw as {
+      conversationId?: unknown;
+      userId?: unknown;
+      username?: unknown;
+      isTyping?: unknown;
+    };
+    if (
+      !isAdapterReady() ||
+      !event ||
+      typeof event.conversationId !== 'string' ||
+      typeof event.userId !== 'string' ||
+      typeof event.username !== 'string' ||
+      typeof event.isTyping !== 'boolean'
+    ) {
+      ack?.();
+      return;
+    }
+    emitTypingToLocalUsers(io, {
+      conversationId: event.conversationId,
+      userId: event.userId,
+      username: event.username,
+      isTyping: event.isTyping,
+    });
+    ack?.();
+  });
+
+  onRemote('zunari:realtime:receipt', (raw: unknown, ack?: () => void) => {
+    const event = raw as {
+      conversationId?: unknown;
+      userId?: unknown;
+      messageIds?: unknown;
+      receiptType?: unknown;
+      recipientIds?: unknown;
+    };
+    if (
+      !isAdapterReady() ||
+      !event ||
+      typeof event.conversationId !== 'string' ||
+      typeof event.userId !== 'string' ||
+      !isStringArray(event.messageIds) ||
+      (event.receiptType !== 'delivered' && event.receiptType !== 'read') ||
+      (event.recipientIds !== undefined && !isStringArray(event.recipientIds))
+    ) {
+      ack?.();
+      return;
+    }
+    emitReceiptToLocalUsers(io, {
+      conversationId: event.conversationId,
+      userId: event.userId,
+      messageIds: event.messageIds,
+      receiptType: event.receiptType,
+      recipientIds: event.recipientIds,
+    });
+    ack?.();
+  });
+
+  onRemote('zunari:realtime:reaction', (raw: unknown, ack?: () => void) => {
+    const event = raw as {
+      conversationId?: unknown;
+      messageId?: unknown;
+      userId?: unknown;
+      username?: unknown;
+      emoji?: unknown;
+      added?: unknown;
+      recipientIds?: unknown;
+    };
+    if (
+      !isAdapterReady() ||
+      !event ||
+      typeof event.conversationId !== 'string' ||
+      typeof event.messageId !== 'string' ||
+      typeof event.userId !== 'string' ||
+      typeof event.username !== 'string' ||
+      typeof event.emoji !== 'string' ||
+      typeof event.added !== 'boolean' ||
+      (event.recipientIds !== undefined && !isStringArray(event.recipientIds))
+    ) {
+      ack?.();
+      return;
+    }
+    emitReactionToLocalUsers(io, {
+      conversationId: event.conversationId,
+      messageId: event.messageId,
+      userId: event.userId,
+      username: event.username,
+      emoji: event.emoji,
+      added: event.added,
+      recipientIds: event.recipientIds,
+    });
+    ack?.();
+  });
+
+  onRemote('zunari:realtime:call', (raw: unknown, ack?: () => void) => {
+    const event = raw as {
+      conversationId?: unknown;
+      event?: unknown;
+      recipientIds?: unknown;
+    };
+    if (
+      !isAdapterReady() ||
+      !event ||
+      typeof event.conversationId !== 'string' ||
+      typeof event.event !== 'string' ||
+      !isStringArray(event.recipientIds)
+    ) {
+      ack?.();
+      return;
+    }
+    emitCallEventToLocalUsers(io, event as RealtimeCallEvent);
+    ack?.();
+  });
+
+  onRemote('zunari:realtime:notification', (raw: unknown, ack?: () => void) => {
+    const event = raw as { recipientId?: unknown; notification?: unknown };
+    if (
+      !isAdapterReady() ||
+      !event ||
+      typeof event.recipientId !== 'string' ||
+      !event.notification ||
+      typeof event.notification !== 'object'
+    ) {
+      ack?.();
+      return;
+    }
+    emitNotificationToLocalUsers(io, {
+      recipientId: event.recipientId,
+      notification: event.notification as Notification,
+    });
+    ack?.();
+  });
+
+  onRemote('zunari:realtime:session-revocation', (raw: unknown, ack?: () => void) => {
+    const event = raw as { tokenHash?: unknown; userId?: unknown };
+    if (
+      !isAdapterReady() ||
+      !event ||
+      (event.tokenHash !== undefined && typeof event.tokenHash !== 'string') ||
+      (event.userId !== undefined && typeof event.userId !== 'number')
+    ) {
+      ack?.();
+      return;
+    }
+    disconnectRevokedSessionLocal(io, {
+      tokenHash: event.tokenHash,
+      userId: event.userId,
+    });
+    ack?.();
+  });
+
+  onRemote('zunari:realtime:evict-conversation', (raw: unknown, ack?: () => void) => {
+    const event = raw as { userId?: unknown; conversationId?: unknown };
+    if (
+      !isAdapterReady() ||
+      !event ||
+      typeof event.userId !== 'string' ||
+      typeof event.conversationId !== 'string'
+    ) {
+      ack?.();
+      return;
+    }
+    evictUserFromConversationLocal(io, event.userId, event.conversationId);
+    ack?.();
+  });
+
+  if (options.localPublishers !== false) {
+    listenerStops.push(
+      onConversationMessage((event) => {
+        emitConversationMessageToLocalUsers(event, io);
+        forward('zunari:realtime:outbox-message', event);
+      }),
+      onConversationMessageEdit(({ conversationId, message, recipientIds, eventId }) => {
+        const metadata: RealtimeDeliveryMetadata | undefined = eventId ? { eventId } : undefined;
+        for (const recipientId of recipientIds) {
+          io.local.to(`user:${recipientId}`).emit(
+            'conversation:message-edit',
+            message,
+            ...(metadata ? [metadata] : []),
+          );
+        }
+        if (eventId) {
+          forward('zunari:realtime:outbox-edit', {
+            conversationId,
+            message,
+            recipientIds,
+            eventId,
+          });
+        }
+      }),
+      onConversationMessageDelete((event) => {
+        onConversationMessageDeleteLocal(event);
+        forward('zunari:realtime:conversation-delete', event);
+      }),
+      onTyping((event) => {
+        emitTypingToLocalUsers(io, event);
+        forward('zunari:realtime:typing', event);
+      }),
+      onReceipt((event) => {
+        emitReceiptToLocalUsers(io, event);
+        forward('zunari:realtime:receipt', event);
+      }),
+      onReaction((event) => {
+        emitReactionToLocalUsers(io, event);
+        forward('zunari:realtime:reaction', event);
+      }),
+      onCallEvent((event) => {
+        emitCallEventToLocalUsers(io, event);
+        forward('zunari:realtime:call', event);
+      }),
+      onNotification((event) => {
+        emitNotificationToLocalUsers(io, event);
+        forward('zunari:realtime:notification', event);
+      }),
+      onSessionRevocation((revocation) => {
+        disconnectRevokedSessionLocal(io, revocation);
+        forward('zunari:realtime:session-revocation', revocation);
+      }),
+    );
+  }
+
+  return {
+    forward,
+    stop() {
+      for (const stop of listenerStops) stop();
+      for (const [eventName, handler] of remoteHandlers) {
+        io.off(eventName, handler);
+      }
+      remoteHandlers.clear();
+    },
+  };
+}
+
+export async function attachRealtimeServer(httpServer: HttpServer): Promise<SocketServer> {
   if (activeServer) throw new Error('Socket.IO is already attached to an HTTP server.');
   const allowedOrigin = getConfiguredOrigin();
   const adminOrigin = getAdminOrigin();
@@ -110,9 +629,64 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
     cors: corsOrigins.length > 0 ? { origin: corsOrigins, credentials: true } : undefined,
   });
   activeServer = io;
+  let adapterReady = false;
+
+  const handleAdapterAvailability = (ready: boolean) => {
+    adapterReady = ready;
+    if (!ready) {
+      for (const socket of io.sockets.sockets.values()) {
+        socket.disconnect(true);
+      }
+    }
+  };
+
+  io.on('zunari:realtime:adapter-probe', (ack: () => void) => {
+    ack();
+  });
+  io.on('zunari:realtime:outbox-message', (
+    event: RealtimeMessageEvent,
+    ack: () => void,
+  ) => {
+    if (
+      !adapterReady ||
+      !event ||
+      typeof event.conversationId !== 'string' ||
+      !Array.isArray(event.recipientIds) ||
+      !event.recipientIds.every((recipientId) => typeof recipientId === 'string') ||
+      !event.message ||
+      typeof event.eventId !== 'string'
+    ) return;
+    emitConversationMessageToLocalUsers(event, io);
+    ack();
+  });
+  io.on('zunari:realtime:outbox-edit', (
+    event: {
+      conversationId: string;
+      message: RealtimeMessageEvent['message'];
+      recipientIds: string[];
+      eventId: string;
+    },
+    ack: () => void,
+  ) => {
+    if (
+      !adapterReady ||
+      !event ||
+      typeof event.conversationId !== 'string' ||
+      !Array.isArray(event.recipientIds) ||
+      !event.recipientIds.every((recipientId) => typeof recipientId === 'string') ||
+      !event.message ||
+      typeof event.eventId !== 'string'
+    ) return;
+    emitConversationMessageEditToUsers(event, io);
+    ack();
+  });
 
   io.use((socket, next) => {
     void (async () => {
+      if (!adapterReady) {
+        next(new Error('Realtime delivery is temporarily unavailable.'));
+        return;
+      }
       if (!isAllowedOrigin(socket)) {
         next(new Error('Origin is not allowed.'));
         return;
@@ -289,8 +863,14 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
           [userId],
         );
         const allowed = new Set(authorizedUserIds.rows.map((row) => row.user_id));
-        const filteredOnlineUserIds = getOnlineUserIds().filter((onlineId) => allowed.has(onlineId));
-        ack?.({ onlineUserIds: filteredOnlineUserIds });
+        try {
+          const clusterOnline = await getClusterOnlineUserIds(io, [...allowed]);
+          ack?.({ onlineUserIds: clusterOnline });
+        } catch (error) {
+          console.error('[realtime] Unable to query cluster presence:', error);
+          const localOnline = getOnlineUserIds().filter((onlineId) => allowed.has(onlineId));
+          ack?.({ onlineUserIds: localOnline });
+        }
       } catch {
         ack?.({ onlineUserIds: [] });
       }
@@ -308,90 +888,49 @@ export function attachRealtimeServer(httpServer: HttpServer): SocketServer {
           userSet.delete(socket.id);
           if (userSet.size === 0) {
             onlineUserSockets.delete(userId);
-            io.emit('presence:update', { userId, isOnline: false, lastSeen: Date.now() });
+            // A user can have sockets on several instances. Only mark them
+            // offline once no instance still has a live socket for them.
+            void (async () => {
+              try {
+                const remaining = await io.in(`user:${userId}`).fetchSockets();
+                if (remaining.length === 0) {
+                  io.emit('presence:update', {
+                    userId,
+                    isOnline: false,
+                    lastSeen: Date.now(),
+                  });
+                }
+              } catch (error) {
+                // Keep the previous state on failure rather than incorrectly
+                // marking a remote user offline.
+                console.error('[realtime] Unable to resolve cluster presence:', error);
+              }
+            })();
           }
         }
       }
     });
   });
 
-  // Event subscribers
-  const stopLegacyMsg = onMessage((msg: any) => {
-    if (msg.recipientId) io.to(`user:${msg.recipientId}`).emit('message:new', { ...msg, isSender: false });
-    if (msg.senderId) io.to(`user:${msg.senderId}`).emit('message:new', { ...msg, isSender: true });
-  });
+  const propagation = installRealtimeEventPropagation(io, () => adapterReady);
+  stopListeners = [propagation.stop];
 
-  const stopConvMsg = onConversationMessage(({ conversationId, message, recipientIds }) => {
-    io.to(`conv:${conversationId}`).emit('conversation:message', message);
-    for (const rId of recipientIds) {
-      io.to(`user:${rId}`).emit('conversation:message-notification', { conversationId, message });
+  try {
+    realtimeAdapter = await attachPostgresRealtimeAdapter(io, undefined, handleAdapterAvailability);
+    await realtimeAdapter.waitForCluster();
+  } catch (error) {
+    for (const stop of stopListeners) stop();
+    stopListeners = [];
+    activeServer = undefined;
+    const adapter = realtimeAdapter;
+    realtimeAdapter = undefined;
+    if (adapter) {
+      await adapter.close().catch(() => {});
+    } else {
+      await new Promise<void>((resolve) => io.close(() => resolve()));
     }
-  });
-
-  const stopConvMsgEdit = onConversationMessageEdit(({ conversationId, message, recipientIds }) => {
-    io.to(`conv:${conversationId}`).emit('conversation:message-edit', message);
-    for (const rId of recipientIds) {
-      io.to(`user:${rId}`).emit('conversation:message-edit', message);
-    }
-  });
-
-  const stopConvMsgDelete = onConversationMessageDelete(({ conversationId, messageId, recipientIds }) => {
-    const payload = { conversationId, messageId };
-    io.to(`conv:${conversationId}`).emit('conversation:message-delete', payload);
-    for (const rId of recipientIds) {
-      io.to(`user:${rId}`).emit('conversation:message-delete', payload);
-    }
-  });
-
-  const stopTyping = onTyping((event) => {
-    io.to(`conv:${event.conversationId}`).emit('conversation:typing', event);
-  });
-
-  const stopReceipt = onReceipt((event) => {
-    const { recipientIds = [], ...payload } = event;
-    io.to(`conv:${event.conversationId}`).emit('conversation:receipt', payload);
-    for (const rId of recipientIds) {
-      io.to(`user:${rId}`).emit('conversation:receipt', payload);
-    }
-  });
-
-  const stopReaction = onReaction((event) => {
-    const { recipientIds = [], ...payload } = event;
-    io.to(`conv:${event.conversationId}`).emit('conversation:reaction', payload);
-    for (const rId of recipientIds) {
-      io.to(`user:${rId}`).emit('conversation:reaction', payload);
-    }
-  });
-
-  const stopCall = onCallEvent((event) => {
-    // Deliver call events to participants
-    for (const rId of event.recipientIds) {
-      io.to(`user:${rId}`).emit(`call:${event.event}`, event);
-    }
-    io.to(`conv:${event.conversationId}`).emit('call:update', event);
-  });
-
-  const stopNotif = onNotification(({ recipientId, notification }) => {
-    io.to(`user:${recipientId}`).emit('notification:new', notification);
-  });
-
-  const stopSessionRev = onSessionRevocation(({ tokenHash, userId }) => {
-    if (tokenHash) io.in(`session:${tokenHash}`).disconnectSockets(true);
-    if (userId) io.in(`auth-user:${userId}`).disconnectSockets(true);
-  });
-
-  stopListeners = [
-    stopLegacyMsg,
-    stopConvMsg,
-    stopConvMsgEdit,
-    stopConvMsgDelete,
-    stopTyping,
-    stopReceipt,
-    stopReaction,
-    stopCall,
-    stopNotif,
-    stopSessionRev,
-  ];
+    throw error;
+  }
 
   return io;
 }
@@ -401,6 +940,15 @@ export async function closeRealtimeServer(): Promise<void> {
   stopListeners = [];
   if (!activeServer) return;
   const io = activeServer;
+  const adapter = realtimeAdapter;
   activeServer = undefined;
+  realtimeAdapter = undefined;
+  onlineUserSockets.clear();
+  if (adapter) {
+    // Closing the adapter clears its reconnection/cleanup timers before the
+    // PostgreSQL pools are closed by the caller.
+    await adapter.close();
+    return;
+  }
   await new Promise<void>((resolve) => io.close(() => resolve()));
 }

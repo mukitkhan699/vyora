@@ -1,5 +1,6 @@
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { isIP } from 'node:net';
+import { domainToASCII, fileURLToPath } from 'node:url';
 
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 const parentDir = path.resolve(configDir, '..');
@@ -33,9 +34,7 @@ export function validateServerConfiguration(): void {
     throw new Error('DATABASE_URL must use the PostgreSQL protocol.');
   }
 
-  // DATABASE_URL_DIRECT is only required for explicit migration execution
-  // (via db:migrate or db:migrate:dist commands), not for normal server startup.
-  // Normal startup uses DATABASE_URL and verifies schema via verifyDatabase().
+  getRealtimeDatabaseUrl();
 
   const trustProxyHopsRaw = process.env.TRUST_PROXY_HOPS?.trim();
   if (trustProxyHopsRaw !== undefined) {
@@ -71,6 +70,28 @@ export function validateServerConfiguration(): void {
   }
 }
 
+export function getRealtimeDatabaseUrl(
+  environment: Readonly<NodeJS.ProcessEnv> = process.env,
+): string {
+  const connectionString = environment.DATABASE_URL_DIRECT?.trim();
+  if (!connectionString) {
+    throw new Error('DATABASE_URL_DIRECT is required for PostgreSQL realtime delivery.');
+  }
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(connectionString);
+  } catch {
+    throw new Error('DATABASE_URL_DIRECT must be a valid PostgreSQL connection URL.');
+  }
+  if (!['postgres:', 'postgresql:'].includes(parsedUrl.protocol)) {
+    throw new Error('DATABASE_URL_DIRECT must use the PostgreSQL protocol.');
+  }
+  if (parsedUrl.hostname.toLowerCase().includes('-pooler.')) {
+    throw new Error('DATABASE_URL_DIRECT must use a direct PostgreSQL connection for realtime.');
+  }
+  return connectionString;
+}
+
 export function validateMigrationConfiguration(): void {
   const directDatabaseUrl = process.env.DATABASE_URL_DIRECT?.trim();
   if (!directDatabaseUrl) {
@@ -86,6 +107,84 @@ export function validateMigrationConfiguration(): void {
   if (!['postgres:', 'postgresql:'].includes(parsedDirectDatabaseUrl.protocol)) {
     throw new Error('DATABASE_URL_DIRECT must use the PostgreSQL protocol.');
   }
+}
+
+export interface LiveKitConfiguration {
+  apiKey: string;
+  apiSecret: string;
+  url: string;
+}
+
+export function getLiveKitConfiguration(
+  environment: Readonly<NodeJS.ProcessEnv> = process.env,
+): LiveKitConfiguration {
+  const apiKey = environment.LIVEKIT_API_KEY?.trim();
+  const apiSecret = environment.LIVEKIT_API_SECRET?.trim();
+  const url = environment.LIVEKIT_URL?.trim();
+
+  if (!apiKey) throw new Error('LIVEKIT_API_KEY is required.');
+  if (!apiSecret) throw new Error('LIVEKIT_API_SECRET is required.');
+  if (!url) throw new Error('LIVEKIT_URL is required.');
+  if (apiSecret.length < 32) {
+    throw new Error('LIVEKIT_API_SECRET must be at least 32 characters.');
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(url);
+  } catch {
+    throw new Error('LIVEKIT_URL must be a valid URL.');
+  }
+
+  if (parsedUrl.username || parsedUrl.password) {
+    throw new Error('LIVEKIT_URL must not contain embedded credentials.');
+  }
+
+  const hostname = parsedUrl.hostname.toLowerCase();
+  const bareHostname = hostname.startsWith('[') && hostname.endsWith(']')
+    ? hostname.slice(1, -1)
+    : hostname;
+  const asciiHostname = domainToASCII(bareHostname).replace(/\.$/, '');
+  const normalizedHostname = bareHostname.replace(/\.$/, '');
+  const isIpAddress = isIP(bareHostname) !== 0;
+  const isValidHostname =
+    isIpAddress ||
+    (asciiHostname.length <= 253 &&
+      asciiHostname.split('.').every(
+        (label) =>
+          label.length > 0 &&
+          label.length <= 63 &&
+          /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label),
+      ));
+
+  if (!hostname || !isValidHostname) {
+    throw new Error('LIVEKIT_URL must contain a valid hostname.');
+  }
+
+  const isLocalhost =
+    normalizedHostname === 'localhost' ||
+    normalizedHostname.endsWith('.localhost') ||
+    (isIP(bareHostname) === 4 && bareHostname.startsWith('127.')) ||
+    normalizedHostname === '::1';
+  const isDevelopment = environment.NODE_ENV === 'development';
+
+  if (parsedUrl.protocol === 'https:' || parsedUrl.protocol === 'wss:') {
+    return { apiKey, apiSecret, url };
+  }
+
+  if (
+    (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'ws:') &&
+    isDevelopment &&
+    isLocalhost
+  ) {
+    return { apiKey, apiSecret, url };
+  }
+
+  if (parsedUrl.protocol === 'http:' || parsedUrl.protocol === 'ws:') {
+    throw new Error('Insecure LIVEKIT_URL protocols are only allowed for localhost in development.');
+  }
+
+  throw new Error('LIVEKIT_URL must use HTTPS or WSS.');
 }
 
 function bool(value: string | undefined, fallback: boolean): boolean {

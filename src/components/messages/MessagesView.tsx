@@ -23,7 +23,7 @@ import type {
 import { api } from '../../services/api.ts';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRealtime } from '../../context/RealtimeContext.tsx';
-import { useKeyboardHeight, useKeyboardOpen } from '../../hooks/useKeyboard.ts';
+import { useKeyboardHeight } from '../../hooks/useKeyboard.ts';
 import {
   useOutboxContext,
   OUTBOX_MESSAGE_SENT_EVENT,
@@ -47,10 +47,14 @@ import { VirtualizedMessageList } from './VirtualizedMessageList.tsx';
 import { MessageComposer } from './MessageComposer.tsx';
 import { AttachmentPicker } from './AttachmentPicker.tsx';
 import {
+  applyRealtimeMessageEvent,
+  applyRealtimeMessageNotification,
+  createBoundedEventIdSet,
   formatDateSeparator,
   getConversationTitle,
   getDirectCounterpart,
   isImageMime,
+  MAX_TRACKED_REALTIME_EVENT_IDS,
   supportsFileType,
 } from '../../utils/messaging.ts';
 
@@ -148,7 +152,11 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
   const { showToast } = useToast();
 
   const keyboardHeight = useKeyboardHeight();
-  const isMobile = typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches;
+  const keyboardOpen = keyboardHeight > 150;
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches,
+  );
+  const [keyboardInset, setKeyboardInset] = useState(0);
 
   const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -180,10 +188,12 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
   const scrollRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLElement>(null);
+  const messagesRootRef = useRef<HTMLDivElement>(null);
   const messagesRef = useRef<Message[]>([]);
   const conversationsRef = useRef<Conversation[]>([]);
   const activeIdRef = useRef<string | null>(null);
   const shouldStickRef = useRef(true);
+  const scrollMetricsRef = useRef<{ clientHeight: number; scrollTop: number } | null>(null);
   const prependingRef = useRef(false);
   const previousCountRef = useRef(0);
 
@@ -200,6 +210,51 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
   const highlightTimerRef = useRef<number | null>(null);
   const previousSelectedIdRef = useRef<string | null>(null);
   const draftsLoadedRef = useRef(false);
+  const processedMessageEventIdsRef = useRef(
+    createBoundedEventIdSet(MAX_TRACKED_REALTIME_EVENT_IDS),
+  );
+  const processedMessageNotificationEventIdsRef = useRef(
+    createBoundedEventIdSet(MAX_TRACKED_REALTIME_EVENT_IDS),
+  );
+
+  const bottomInset = keyboardOpen
+    ? keyboardInset
+    : isMobile
+      ? 'var(--z-mobile-nav-height)'
+      : 'env(safe-area-inset-bottom, 0px)';
+
+  useEffect(() => {
+    const mobileQuery = window.matchMedia('(max-width: 639px)');
+    const updateMobile = () => setIsMobile(mobileQuery.matches);
+    mobileQuery.addEventListener('change', updateMobile);
+    return () => mobileQuery.removeEventListener('change', updateMobile);
+  }, []);
+
+  useEffect(() => {
+    const root = messagesRootRef.current;
+    if (!keyboardOpen || !root) {
+      setKeyboardInset(0);
+      return;
+    }
+
+    const viewport = window.visualViewport;
+    if (!viewport) {
+      setKeyboardInset(keyboardHeight);
+      return;
+    }
+
+    const updateInset = () => {
+      setKeyboardInset(Math.max(0, root.getBoundingClientRect().height - viewport.height));
+    };
+
+    updateInset();
+    viewport.addEventListener('resize', updateInset);
+    viewport.addEventListener('scroll', updateInset);
+    return () => {
+      viewport.removeEventListener('resize', updateInset);
+      viewport.removeEventListener('scroll', updateInset);
+    };
+  }, [keyboardHeight, keyboardOpen]);
 
   const { addToOutbox, retryMessage, removeFromOutbox } = useOutboxContext();
 
@@ -543,24 +598,29 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
     if (socket.connected) join();
     else socket.on('connect', join);
 
-    const handleMessage = (incoming: Message) => {
-      if (incoming.conversationId && incoming.conversationId !== conversationId) return;
-      if (incoming.clientId) {
-        recordTiming(incoming.clientId, 'recipientEventPublished');
-        recordTiming(incoming.clientId, 'recipientReceived');
-      }
-      saveMessage(incoming);
-      setMessages((previous) => upsertMessage(previous, incoming));
-      updateConversationPreview(incoming);
-      const isOwn = incoming.senderId === currentUser.id;
-      if (!isOwn) {
-        if (!shouldStickRef.current) setUnseenBelow(true);
-        if (document.visibilityState === 'visible') {
-          sendReceipts(conversationId, 'read', [incoming]);
-        } else {
-          sendReceipts(conversationId, 'delivered', [incoming]);
-        }
-      }
+    const handleMessage = (incoming: Message, metadata?: { eventId?: string }) => {
+      applyRealtimeMessageEvent(
+        incoming,
+        metadata,
+        processedMessageEventIdsRef.current,
+        {
+          conversationId,
+          currentUserId: currentUser.id,
+          shouldStick: shouldStickRef.current,
+          visible: document.visibilityState === 'visible',
+        },
+        {
+          recordTiming,
+          saveMessage,
+          upsertMessage: (message) => {
+            setMessages((previous) => upsertMessage(previous, message));
+          },
+          updateConversationPreview,
+          setUnseenBelow: () => setUnseenBelow(true),
+          sendReceipts,
+        },
+        processedMessageNotificationEventIdsRef.current,
+      );
     };
 
     const handleEdit = (updated: Message) => {
@@ -722,22 +782,37 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
   // only sends these to the user room, so this listener must be global.
   useEffect(() => {
     if (!socket || !currentUser?.id) return;
-    const handleNotification = (payload: { conversationId?: string; message?: Message }) => {
-      const incoming = payload?.message;
-      const conversationId = payload?.conversationId || incoming?.conversationId;
-      if (!incoming || !conversationId) return;
-      if (incoming.conversationId && incoming.conversationId !== conversationId) return;
-      void saveMessage(incoming);
-      if (activeIdRef.current === conversationId) {
-        setMessages((previous) => upsertMessage(previous, incoming));
-        if (incoming.senderId !== currentUser.id && document.visibilityState === 'visible') {
-          sendReceipts(conversationId, 'read', [incoming]);
-        }
-      }
-      updateConversationPreview(incoming);
-      if (!conversationsRef.current.some((conversation) => conversation.id === conversationId)) {
-        void refreshConversations();
-      }
+    const handleNotification = (
+      payload: { conversationId?: string; message?: Message },
+      metadata?: { eventId?: string },
+    ) => {
+      applyRealtimeMessageNotification(
+        payload,
+        metadata,
+        processedMessageNotificationEventIdsRef.current,
+        {
+          activeConversationId: activeIdRef.current,
+          currentUserId: currentUser.id,
+          visible: document.visibilityState === 'visible',
+          conversationKnown: conversationsRef.current.some(
+            (conversation) => conversation.id === (payload?.conversationId || payload?.message?.conversationId),
+          ),
+        },
+        {
+          saveMessage: (message) => {
+            void saveMessage(message);
+          },
+          upsertActiveMessage: (message) => {
+            setMessages((previous) => upsertMessage(previous, message));
+          },
+          sendReceipts,
+          updateConversationPreview,
+          refreshConversations: () => {
+            void refreshConversations();
+          },
+        },
+        processedMessageEventIdsRef.current,
+      );
     };
     // Keep inactive conversation previews/cache in step with edits and deletes.
     // The active conversation already handles these via its own listeners.
@@ -832,6 +907,10 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
     if (previous === 0) {
       element.scrollTop = element.scrollHeight;
       shouldStickRef.current = true;
+      scrollMetricsRef.current = {
+        clientHeight: element.clientHeight,
+        scrollTop: element.scrollTop,
+      };
       return;
     }
     if (shouldStickRef.current) {
@@ -842,10 +921,31 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
   const handleScroll = () => {
     const element = scrollRef.current;
     if (!element) return;
+    const previousMetrics = scrollMetricsRef.current;
+    const resizedWithoutScrolling =
+      previousMetrics !== null &&
+      element.clientHeight !== previousMetrics.clientHeight &&
+      Math.abs(element.scrollTop - previousMetrics.scrollTop) < 1;
+    scrollMetricsRef.current = {
+      clientHeight: element.clientHeight,
+      scrollTop: element.scrollTop,
+    };
+    if (resizedWithoutScrolling) return;
+
     const nearBottom = element.scrollHeight - element.scrollTop - element.clientHeight < 140;
     shouldStickRef.current = nearBottom;
     if (nearBottom) setUnseenBelow(false);
   };
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element || !keyboardOpen || !shouldStickRef.current) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      if (shouldStickRef.current) element.scrollTop = element.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [keyboardHeight, keyboardOpen, bottomInset]);
 
   const scrollToLatest = useCallback(() => {
     const element = scrollRef.current;
@@ -1646,7 +1746,11 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
   const inputText = activeConversation ? drafts[activeConversation.id] || '' : '';
 
   return (
-    <div className="flex min-h-[100dvh] min-h-[100vh] max-h-[100dvh] max-h-[100vh] w-full overflow-hidden z-bg">
+    <div
+      ref={messagesRootRef}
+      className="flex h-full w-full overflow-hidden z-bg"
+      style={{ paddingBottom: bottomInset }}
+    >
       <aside
         className={`${
           showMobileChat ? 'hidden sm:flex' : 'flex'
@@ -1817,11 +1921,6 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
       <main
         className={`${showMobileChat ? 'flex' : 'hidden sm:flex'} flex-1 min-w-0 min-h-0 flex-col z-bg`}
         aria-label="Conversation"
-        style={{ 
-          paddingBottom: isMobile && keyboardHeight > 0 
-            ? keyboardHeight 
-            : 0 
-        }}
       >
         {activeConversation && currentUser ? (
           <>

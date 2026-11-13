@@ -8,6 +8,7 @@ import {
   publishReceipt,
   publishReaction,
   publishCallEvent,
+  publishNotification,
   onConversationMessage,
   onConversationMessageEdit,
   onConversationMessageDelete,
@@ -15,10 +16,48 @@ import {
   onReceipt,
   onReaction,
   onCallEvent,
+  onNotification,
 } from './realtime-events.ts';
-import { isUserOnline } from './realtime.ts';
+import type { MessageRecord } from './db/messaging.ts';
+import {
+  emitConversationMessageToUsers,
+  isUserOnline,
+} from './realtime.ts';
 
 describe('Real-time Messaging Foundation & Events', () => {
+  test('notification subscribers remain wired', () => {
+    let received: { recipientId: string; notification: unknown } | undefined;
+    const unsubscribe = onNotification((event) => {
+      received = event;
+    });
+
+    const notification = {
+      id: 'notification-1',
+      type: 'follow' as const,
+      sender: {
+        id: 'sender',
+        username: 'sender',
+        name: 'Sender',
+        avatarUrl: '',
+        bannerUrl: '',
+        bio: '',
+        location: '',
+        website: '',
+        joinedDate: '',
+        verified: false,
+        isGold: false,
+        followersCount: 0,
+        followingCount: 0,
+      },
+      createdAt: '2026-11-13T00:00:00.000Z',
+      read: false,
+    };
+    publishNotification('recipient', notification);
+    unsubscribe();
+
+    assert.deepEqual(received, { recipientId: 'recipient', notification });
+  });
+
   test('dispatches conversation message events to subscribers', async () => {
     let received: any = null;
     const unsubscribe = onConversationMessage((event) => {
@@ -44,6 +83,7 @@ describe('Real-time Messaging Foundation & Events', () => {
         receipts: [],
       },
       recipientIds: ['user_b'],
+      eventId: '00000000-0000-4000-8000-000000000001',
     };
 
     publishConversationMessage(mockEvent);
@@ -53,6 +93,83 @@ describe('Real-time Messaging Foundation & Events', () => {
     assert.equal(received.conversationId, 'conv_123');
     assert.equal(received.message.text, 'Hello world');
     assert.deepEqual(received.recipientIds, ['user_b']);
+    assert.equal(received.eventId, '00000000-0000-4000-8000-000000000001');
+  });
+
+  test('dispatches edited message events with stable outbox metadata', () => {
+    let received: unknown;
+    const unsubscribe = onConversationMessageEdit((event) => {
+      received = event;
+    });
+    const event = {
+      conversationId: 'conv_123',
+      message: {
+        id: 'msg_1',
+        conversationId: 'conv_123',
+        senderId: 'user_a',
+        clientId: null,
+        text: 'edited',
+        replyToMessageId: null,
+        replyToMessage: null,
+        isEdited: true,
+        editedAt: 123,
+        isDeleted: false,
+        deletedAt: null,
+        createdAt: 1,
+        attachments: [],
+        reactions: [],
+        receipts: [],
+      } satisfies MessageRecord,
+      recipientIds: ['user_b'],
+      eventId: 'stable-edit-event',
+    };
+
+    assert.equal(publishConversationMessageEdit(event), true);
+    unsubscribe();
+    assert.deepEqual(received, event);
+  });
+
+  test('conversation messages are sent only to authorized user rooms with backward-compatible metadata', () => {
+    const message = {
+      id: 'msg_1',
+      conversationId: 'conv_123',
+      senderId: 'user_a',
+      clientId: null,
+      text: 'Hello world',
+      replyToMessageId: null,
+      replyToMessage: null,
+      isEdited: false,
+      editedAt: null,
+      isDeleted: false,
+      deletedAt: null,
+      createdAt: 1,
+      attachments: [],
+      reactions: [],
+      receipts: [],
+    };
+    const deliveries: Array<{ userId: string; eventName: string; args: unknown[] }> = [];
+
+    emitConversationMessageToUsers(
+      {
+        conversationId: 'conv_123',
+        message,
+        recipientIds: ['user_a', 'user_c'],
+        eventId: 'stable-event-id',
+      },
+      (userId, eventName, ...args) => deliveries.push({ userId, eventName, args }),
+    );
+
+    assert.deepEqual(deliveries.map(({ userId, eventName }) => [userId, eventName]), [
+      ['user_a', 'conversation:message'],
+      ['user_a', 'conversation:message-notification'],
+      ['user_c', 'conversation:message'],
+      ['user_c', 'conversation:message-notification'],
+    ]);
+    assert.deepEqual(deliveries[0].args, [message, { eventId: 'stable-event-id' }]);
+    assert.deepEqual(deliveries[1].args, [
+      { conversationId: 'conv_123', message },
+      { eventId: 'stable-event-id' },
+    ]);
   });
 
   test('dispatches typing and receipt events', async () => {

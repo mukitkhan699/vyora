@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { query, withTransaction } from './pool.ts';
 import { HttpError } from '../errors.ts';
-import { publishMessage, publishNotification } from '../realtime-events.ts';
+import { publishNotification } from '../realtime-events.ts';
+import { enqueueOutboxEvent } from './outbox.ts';
+import {
+  lockConversationForMembershipChange,
+  lockConversationForPublication,
+} from './conversation-membership-lock.ts';
 import type { User } from '../../src/types/index.ts';
 
 export interface ConversationParticipant {
@@ -111,7 +116,26 @@ interface MessageRow {
   reply_text: string | null;
 }
 
+interface MessagingRepositoryDependencies {
+  withTransaction: typeof withTransaction;
+  loadSentMessage: (messageId: string, senderId: string) => Promise<MessageRecord | null>;
+  loadEditedMessage: (messageId: string, senderId: string) => Promise<MessageRecord | null>;
+}
+
 export class MessagingRepository {
+  private readonly transaction: typeof withTransaction;
+  private readonly loadSentMessage?: MessagingRepositoryDependencies['loadSentMessage'];
+  private readonly loadEditedMessage: MessagingRepositoryDependencies['loadEditedMessage'];
+
+  constructor(
+    dependencies: Partial<MessagingRepositoryDependencies> = {},
+  ) {
+    this.transaction = dependencies.withTransaction ?? withTransaction;
+    this.loadSentMessage = dependencies.loadSentMessage;
+    this.loadEditedMessage = dependencies.loadEditedMessage ??
+      ((messageId, senderId) => this.getMessageById(messageId, senderId));
+  }
+
   public async getConversationById(
     conversationId: string,
     currentUserId: string,
@@ -324,12 +348,13 @@ export class MessagingRepository {
         [directKey],
       );
       if (existing.rows[0]) {
+        await lockConversationForMembershipChange(client, existing.rows[0].id);
         // If either user previously left or was removed, re-join them
         await client.query(
           `UPDATE zunari_conversation_participants
-           SET left_at = NULL
-           WHERE conversation_id = $1 AND user_id = ANY($2::text[])`,
-          [existing.rows[0].id, [userA, userB]],
+           SET left_at = NULL, joined_at = $3
+           WHERE conversation_id = $1 AND user_id = ANY($2::text[]) AND left_at IS NOT NULL`,
+          [existing.rows[0].id, [userA, userB], now],
         );
         return existing.rows[0].id;
       }
@@ -482,7 +507,7 @@ export class MessagingRepository {
     const now = Date.now();
     await withTransaction(async (client) => {
       const conv = await client.query<{ type: string }>(
-        'SELECT type FROM zunari_conversations_v2 WHERE id = $1',
+        'SELECT type FROM zunari_conversations_v2 WHERE id = $1 FOR UPDATE',
         [conversationId],
       );
       if (!conv.rows[0] || conv.rows[0].type !== 'group') {
@@ -534,7 +559,8 @@ export class MessagingRepository {
              (conversation_id, user_id, role, joined_at, left_at)
            VALUES ($1, $2, 'member', $3, NULL)
            ON CONFLICT (conversation_id, user_id)
-           DO UPDATE SET left_at = NULL, joined_at = $3`,
+           DO UPDATE SET left_at = NULL, joined_at = $3
+           WHERE zunari_conversation_participants.left_at IS NOT NULL`,
           [conversationId, targetId, now],
         );
       }
@@ -551,7 +577,7 @@ export class MessagingRepository {
     const now = Date.now();
     return withTransaction(async (client) => {
       const conv = await client.query<{ type: string; created_by: string | null }>(
-        'SELECT type, created_by FROM zunari_conversations_v2 WHERE id = $1',
+        'SELECT type, created_by FROM zunari_conversations_v2 WHERE id = $1 FOR UPDATE',
         [conversationId],
       );
       if (!conv.rows[0] || conv.rows[0].type !== 'group') {
@@ -781,10 +807,16 @@ export class MessagingRepository {
     }
 
     const now = Date.now();
-    const result = await withTransaction(async (client) => {
-      // 1. Check sender membership
-      const partCheck = await client.query<{ left_at: number | null }>(
-        `SELECT left_at FROM zunari_conversation_participants
+    const result = await this.transaction(async (client) => {
+      // Serialize sender authorization and message creation with membership changes.
+      await lockConversationForPublication(client, conversationId);
+
+      // 1. Check sender membership while holding the conversation lock.
+      const partCheck = await client.query<{
+        left_at: number | null;
+        membership_epoch: string;
+      }>(
+        `SELECT left_at, membership_epoch FROM zunari_conversation_participants
          WHERE conversation_id = $1 AND user_id = $2`,
         [conversationId, senderId],
       );
@@ -846,8 +878,11 @@ export class MessagingRepository {
       );
 
       // 6. Find all active recipients in conversation
-      const recipientsRes = await client.query<{ user_id: string }>(
-        `SELECT user_id FROM zunari_conversation_participants
+      const recipientsRes = await client.query<{
+        user_id: string;
+        membership_epoch: string;
+      }>(
+        `SELECT user_id, membership_epoch FROM zunari_conversation_participants
          WHERE conversation_id = $1 AND user_id <> $2 AND left_at IS NULL`,
         [conversationId, senderId],
       );
@@ -891,14 +926,42 @@ export class MessagingRepository {
         [messageId, senderId, now],
       );
 
+      await enqueueOutboxEvent(client, {
+        eventType: 'conversation.message',
+        entityId: messageId,
+        conversationId,
+        createdAt: now,
+        payload: {
+          messageId,
+          senderId,
+          recipientIds: [senderId, ...recipientsRes.rows.map((recipient) => recipient.user_id)],
+          recipientMemberships: [
+            {
+              userId: senderId,
+              epoch: partCheck.rows[0].membership_epoch,
+            },
+            ...recipientsRes.rows.map((recipient) => ({
+              userId: recipient.user_id,
+              epoch: recipient.membership_epoch,
+            })),
+          ],
+        },
+      });
+
       return { messageId, isDuplicate: false };
     });
 
-    const [fullMsg] = await this.getMessages(conversationId, senderId, { limit: 1 });
-    const targetMsg =
-      fullMsg && fullMsg.id === result.messageId
-        ? fullMsg
-        : (await this.getMessageById(result.messageId, senderId))!;
+    let targetMsg: MessageRecord | null;
+    if (this.loadSentMessage) {
+      targetMsg = await this.loadSentMessage(result.messageId, senderId);
+    } else {
+      const [fullMsg] = await this.getMessages(conversationId, senderId, { limit: 1 });
+      targetMsg =
+        fullMsg && fullMsg.id === result.messageId
+          ? fullMsg
+          : await this.getMessageById(result.messageId, senderId);
+    }
+    if (!targetMsg) throw new Error('Failed to load sent message.');
     return { message: targetMsg, isDuplicate: result.isDuplicate };
   }
 
@@ -994,13 +1057,14 @@ export class MessagingRepository {
       throw new HttpError(400, 'Message text cannot be empty.', 'EMPTY_MESSAGE');
     }
     const now = Date.now();
-    await withTransaction(async (client) => {
-      const membership = await client.query(
-        `SELECT 1 FROM zunari_conversation_participants
+    await this.transaction(async (client) => {
+      await lockConversationForMembershipChange(client, conversationId);
+      const membership = await client.query<{ membership_epoch: string }>(
+        `SELECT membership_epoch FROM zunari_conversation_participants
          WHERE conversation_id = $1 AND user_id = $2 AND left_at IS NULL`,
         [conversationId, senderId],
       );
-      if (!membership.rowCount) {
+      if (!membership.rows[0]) {
         throw new HttpError(403, 'You are not an active member of this conversation.', 'FORBIDDEN');
       }
 
@@ -1022,9 +1086,30 @@ export class MessagingRepository {
          WHERE id = $3`,
         [cleanText, now, messageId],
       );
+
+      const recipients = await client.query<{ user_id: string; membership_epoch: string }>(
+        `SELECT user_id, membership_epoch FROM zunari_conversation_participants
+         WHERE conversation_id = $1 AND left_at IS NULL`,
+        [conversationId],
+      );
+      await enqueueOutboxEvent(client, {
+        eventType: 'conversation.message.edit',
+        entityId: messageId,
+        conversationId,
+        createdAt: now,
+        payload: {
+          messageId,
+          senderId,
+          recipientIds: recipients.rows.map((recipient) => recipient.user_id),
+          recipientMemberships: recipients.rows.map((recipient) => ({
+            userId: recipient.user_id,
+            epoch: recipient.membership_epoch,
+          })),
+        },
+      });
     });
 
-    const updated = await this.getMessageById(messageId, senderId);
+    const updated = await this.loadEditedMessage(messageId, senderId);
     if (!updated) throw new Error('Failed to load edited message.');
     return updated;
   }

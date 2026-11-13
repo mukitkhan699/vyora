@@ -3,7 +3,12 @@ import { User } from '../../types/index.ts';
 import { Modal } from '../common/Modal.tsx';
 import { Button } from '../common/Button.tsx';
 import { api } from '../../services/api.ts';
-import { IMAGE_ACCEPT_ATTRIBUTE, validateImageFile } from '../../utils/mediaValidation.ts';
+import { IMAGE_ACCEPT_ATTRIBUTE } from '../../utils/mediaValidation.ts';
+import {
+  uploadProfileImage,
+  submitEditProfileForm,
+} from '../../utils/profileForm.ts';
+import type { EditProfileFieldErrors } from '../../utils/profileForm.ts';
 import { Upload, AlertCircle } from 'lucide-react';
 import { Avatar } from '../common/Avatar.tsx';
 
@@ -26,10 +31,12 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
   const [website, setWebsite] = useState(user.website || '');
   const [avatarUrl, setAvatarUrl] = useState(user.avatarUrl || '');
   const [bannerUrl, setBannerUrl] = useState(user.bannerUrl || '');
+  const [avatarRemovalRequested, setAvatarRemovalRequested] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [uploadingBanner, setUploadingBanner] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<EditProfileFieldErrors>({});
   const [avatarPresets, setAvatarPresets] = useState<string[]>([]);
 
   const avatarInputRef = useRef<HTMLInputElement>(null);
@@ -46,22 +53,32 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
       .catch(() => {});
   }, []);
 
+  const clearFieldError = (field: keyof EditProfileFieldErrors) => {
+    setFieldErrors((prev) => {
+      if (!prev[field]) return prev;
+      const next = { ...prev };
+      delete next[field];
+      return next;
+    });
+  };
+
   const handleAvatarFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setErrorMsg(null);
-    const validationError = validateImageFile(file);
-    if (validationError) {
-      setErrorMsg(validationError);
-      if (avatarInputRef.current) avatarInputRef.current.value = '';
-      return;
-    }
+    setAvatarRemovalRequested(false);
     try {
       setUploadingAvatar(true);
-      const res = await api.uploadFile(file, 'profile-avatar');
-      setAvatarUrl(api.resolveFileUrl(res.url));
-    } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : 'Avatar upload failed');
+      const result = await uploadProfileImage(file, 'profile-avatar', (selected, purpose) =>
+        api.uploadFile(selected, purpose),
+      );
+      if (!result.ok) {
+        setErrorMsg(result.error);
+        return;
+      }
+      setAvatarUrl(api.resolveFileUrl(result.url));
+      setAvatarRemovalRequested(false);
+      clearFieldError('avatarUrl');
     } finally {
       setUploadingAvatar(false);
       if (avatarInputRef.current) avatarInputRef.current.value = '';
@@ -72,42 +89,58 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     setErrorMsg(null);
-    const validationError = validateImageFile(file);
-    if (validationError) {
-      setErrorMsg(validationError);
-      if (bannerInputRef.current) bannerInputRef.current.value = '';
-      return;
-    }
     try {
       setUploadingBanner(true);
-      const res = await api.uploadFile(file, 'profile-cover');
-      setBannerUrl(api.resolveFileUrl(res.url));
-    } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : 'Banner upload failed');
+      const result = await uploadProfileImage(file, 'profile-cover', (selected, purpose) =>
+        api.uploadFile(selected, purpose),
+      );
+      if (!result.ok) {
+        setErrorMsg(result.error);
+        return;
+      }
+      setBannerUrl(api.resolveFileUrl(result.url));
+      clearFieldError('bannerUrl');
     } finally {
       setUploadingBanner(false);
       if (bannerInputRef.current) bannerInputRef.current.value = '';
     }
   };
 
+  const handleRemoveAvatar = () => {
+    setAvatarUrl('');
+    setAvatarRemovalRequested(true);
+    clearFieldError('avatarUrl');
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
     setErrorMsg(null);
+    setFieldErrors({});
+    setSaving(true);
 
     try {
-      setSaving(true);
-      await onSave({
-        name: name.trim(),
-        bio: bio.trim(),
-        location: location.trim(),
-        website: website.trim(),
-        avatarUrl: avatarUrl.trim() || undefined,
-        bannerUrl: bannerUrl.trim() || undefined,
-      });
+      const result = await submitEditProfileForm(
+        {
+          name,
+          bio,
+          location,
+          website,
+          avatarUrl,
+          bannerUrl,
+          originalAvatarUrl: user.avatarUrl || '',
+          originalBannerUrl: user.bannerUrl || '',
+          avatarRemovalRequested,
+        },
+        onSave,
+      );
+
+      if (!result.ok) {
+        if (result.fieldErrors) setFieldErrors(result.fieldErrors);
+        if (result.errorMessage) setErrorMsg(result.errorMessage);
+        return;
+      }
+
       onClose();
-    } catch (e: unknown) {
-      setErrorMsg(e instanceof Error ? e.message : 'Failed to update profile');
     } finally {
       setSaving(false);
     }
@@ -115,7 +148,7 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Edit Profile" maxWidth="max-w-lg">
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+      <form onSubmit={handleSubmit} noValidate className="flex flex-col gap-4">
         {errorMsg && (
           <div className="flex items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 text-xs">
             <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
@@ -129,10 +162,14 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
             type="text"
             value={name}
             maxLength={50}
-            onChange={(e) => setName(e.target.value)}
+            onChange={(e) => {
+              setName(e.target.value);
+              clearFieldError('name');
+            }}
+            aria-invalid={Boolean(fieldErrors.name)}
             className="w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3.5 py-2 text-sm text-white outline-none focus:border-cyan-500"
-            required
           />
+          {fieldErrors.name && <p className="mt-1 text-[11px] text-red-400">{fieldErrors.name}</p>}
         </div>
 
         <div>
@@ -160,19 +197,31 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
         <div>
           <label className="block text-xs font-semibold text-neutral-400 mb-1">Website</label>
           <input
-            type="url"
+            type="text"
+            inputMode="url"
             value={website}
             maxLength={100}
-            onChange={(e) => setWebsite(e.target.value)}
+            onChange={(e) => {
+              setWebsite(e.target.value);
+              clearFieldError('website');
+            }}
+            aria-invalid={Boolean(fieldErrors.website)}
             className="w-full bg-neutral-900 border border-neutral-700 rounded-xl px-3.5 py-2 text-sm text-white outline-none focus:border-cyan-500"
           />
+          {fieldErrors.website && (
+            <p className="mt-1 text-[11px] text-red-400">{fieldErrors.website}</p>
+          )}
         </div>
 
         {/* Avatar Upload / URL */}
         <div className="p-3 bg-neutral-900/60 rounded-xl border border-neutral-800">
           <label className="block text-xs font-semibold text-neutral-300 mb-2">Avatar Image</label>
           <div className="flex items-center gap-3 mb-2">
-            <Avatar src={avatarUrl} name={name || 'Operator'} size="lg" />
+            <Avatar
+              src={avatarRemovalRequested ? '' : avatarUrl}
+              name={name || 'Operator'}
+              size="lg"
+            />
             <div className="flex flex-col gap-1.5 flex-1">
               <input
                 type="file"
@@ -181,22 +230,43 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
                 accept={IMAGE_ACCEPT_ATTRIBUTE}
                 className="hidden"
               />
-              <button
-                type="button"
-                onClick={() => avatarInputRef.current?.click()}
-                disabled={uploadingAvatar}
-                className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-cyan-950 border border-cyan-800/60 text-cyan-300 text-xs rounded-lg hover:bg-cyan-900 cursor-pointer disabled:opacity-50"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                {uploadingAvatar ? 'Uploading...' : 'Upload Avatar'}
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => avatarInputRef.current?.click()}
+                  disabled={uploadingAvatar}
+                  className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-cyan-950 border border-cyan-800/60 text-cyan-300 text-xs rounded-lg hover:bg-cyan-900 cursor-pointer disabled:opacity-50"
+                >
+                  <Upload className="w-3.5 h-3.5" />
+                  {uploadingAvatar ? 'Uploading...' : 'Upload Avatar'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRemoveAvatar}
+                  disabled={
+                    avatarRemovalRequested || (!avatarUrl.trim() && !user.avatarUrl)
+                  }
+                  className="px-2.5 py-1.5 text-[11px] font-semibold text-rose-300 border border-rose-500/30 rounded-lg hover:bg-rose-500/10 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  {avatarRemovalRequested ? 'Avatar will be removed' : 'Remove Avatar'}
+                </button>
+              </div>
               <input
-                type="url"
+                type="text"
+                inputMode="url"
                 value={avatarUrl}
-                onChange={(e) => setAvatarUrl(e.target.value)}
+                onChange={(e) => {
+                  setAvatarUrl(e.target.value);
+                  setAvatarRemovalRequested(false);
+                  clearFieldError('avatarUrl');
+                }}
                 placeholder="Or paste image URL..."
+                aria-invalid={Boolean(fieldErrors.avatarUrl)}
                 className="w-full bg-black border border-neutral-800 rounded-lg px-2.5 py-1 text-xs text-white outline-none focus:border-cyan-500"
               />
+              {fieldErrors.avatarUrl && (
+                <p className="text-[11px] text-red-400">{fieldErrors.avatarUrl}</p>
+              )}
             </div>
           </div>
 
@@ -208,7 +278,11 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
                   <button
                     key={idx}
                     type="button"
-                    onClick={() => setAvatarUrl(preset)}
+                    onClick={() => {
+                      setAvatarUrl(preset);
+                      setAvatarRemovalRequested(false);
+                      clearFieldError('avatarUrl');
+                    }}
                     className="w-6 h-6 rounded-full overflow-hidden border border-neutral-700 hover:border-cyan-400 cursor-pointer transition-colors"
                   >
                     <img src={preset} alt="" className="w-full h-full object-cover" />
@@ -241,13 +315,21 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
                 {uploadingBanner ? 'Uploading...' : 'Upload Banner'}
               </button>
               <input
-                type="url"
+                type="text"
+                inputMode="url"
                 value={bannerUrl}
-                onChange={(e) => setBannerUrl(e.target.value)}
+                onChange={(e) => {
+                  setBannerUrl(e.target.value);
+                  clearFieldError('bannerUrl');
+                }}
                 placeholder="Or paste banner image URL..."
+                aria-invalid={Boolean(fieldErrors.bannerUrl)}
                 className="flex-1 bg-black border border-neutral-800 rounded-lg px-2.5 py-1 text-xs text-white outline-none focus:border-cyan-500"
               />
             </div>
+            {fieldErrors.bannerUrl && (
+              <p className="text-[11px] text-red-400">{fieldErrors.bannerUrl}</p>
+            )}
           </div>
         </div>
 

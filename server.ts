@@ -9,6 +9,7 @@ import { closeDatabase } from './server/db/pool.ts';
 import { closeStorage } from './server/storage/b2.ts';
 import { attachRealtimeServer, closeRealtimeServer } from './server/realtime.ts';
 import { initializeBackend } from './server/bootstrap.ts';
+import { startRealtimeOutboxDispatcher } from './server/realtime-outbox.ts';
 import { config } from './server/config.ts';
 import { formatStartupError } from './server/errors.ts';
 
@@ -59,7 +60,8 @@ async function startDevelopmentServer(): Promise<void> {
   }
 
   const httpServer = createHttpServer(app);
-  attachRealtimeServer(httpServer);
+  await attachRealtimeServer(httpServer);
+  const stopOutboxDispatcher = startRealtimeOutboxDispatcher();
   httpServer.listen(port, '0.0.0.0', () => {
     console.log(`[${config.appName}] Server listening on http://0.0.0.0:${port}`);
   });
@@ -69,12 +71,14 @@ async function startDevelopmentServer(): Promise<void> {
     process.on(signal, () => {
       if (shuttingDown) return;
       shuttingDown = true;
-      stopCleanup();
-      void closeRealtimeServer().then(() => {
+      void (async () => {
+        await stopOutboxDispatcher();
+        await stopCleanup();
+        await closeRealtimeServer();
         void Promise.all([closeDatabase(), Promise.resolve(closeStorage())])
           .then(() => process.exit(0))
           .catch(() => process.exit(1));
-      });
+      })().catch(() => process.exit(1));
     });
   }
 }
