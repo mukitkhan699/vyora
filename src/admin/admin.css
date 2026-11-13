@@ -1,0 +1,260 @@
+/* ==========================================================================
+   ZUNARI CONTROL CENTER — ADMIN-SPECIFIC CSS OVERRIDES
+   --------------------------------------------------------------------------
+   Additional styles for the MiniMax-based admin interface.
+   ========================================================================== */
+
+/* Admin page layouts and spacing */
+.admin-page {
+  padding: var(--zc-space-8);
+  background-color: var(--zc-bg-primary);
+  min-height: 100vh;
+}
+
+.admin-page__header {
+  margin-bottom: var(--zc-space-8);
+}
+
+.admin-page__title {
+  font-size: var(--zc-font-size-3xl);
+  font-weight: 700;
+  color: var(--zc-text-primary);
+  margin-bottom: var(--zc-space-2);
+}
+
+.admin-page__subtitle {
+  font-size: var(--zc-font-size-base);
+  color: var(--zc-text-secondary);
+}
+
+/* Empty state placeholder */
+.admin-empty-state {
+  text-align: center;
+  padding: var(--zc-space-12);
+}
+
+.admin-empty-state__icon {
+  font-size: 48px;
+  margin-bottom: var(--zc-space-4);
+  opacity: 0.5;
+}
+
+.admin-empty-state__title {
+  font-size: var(--zc-font-size-xl);
+  font-weight: 600;
+  color: var(--zc-text-primary);
+  margin-bottom: var(--zc-space-2);
+}
+
+.admin-empty-state__description {
+  font-size: var(--zc-font-size-base);
+  color: var(--zc-text-secondary);
+  max-width: 400px;
+  margin: 0 auto var(--zc-space-6);
+}
+
+/* Navigation indicator for active AI sections */
+.ai-accent .zc-shell__nav-link.active {
+  border-left-color: var(--zc-text-ai);
+  color: var(--zc-text-ai);
+}
+
+.ai-accent .zc-shell__nav-link:hover {
+  color: var(--zc-text-ai);
+}
+
+/* Theme transition effects */
+* {
+  transition-property: background-color, border-color, color, fill, stroke;
+  transition-duration: var(--zc-motion-base);
+  transition-timing-function: var(--zc-ease-standard);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background-color: var(--zc-bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--zc-border-primary);
+  border-radius: var(--zc-radius-sm);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--zc-border-accent);
+}
+
+/* Typography fixes for admin interface */
+h1, h2, h3, h4, h5, h6 {
+  color: var(--zc-text-primary);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+p {
+  color: var(--zc-text-secondary);
+  line-height: 1.5;
+}
+
+/* Grid improvements */
+.zc-grid {
+  display: grid;
+  gap: var(--zc-space-6);
+}
+
+.zc-grid--2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.zc-grid--3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.zc-grid--4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.zc-grid--2-1 {
+  grid-template-columns: 2fr 1fr;
+}
+
+.zc-grid--1-2 {
+  grid-template-columns: 1fr 2fr;
+}
+
+.zc-grid--3-2 {
+  grid-template-columns: 3fr 2fr;
+}
+
+.zc-grid--sidebar {
+  grid-template-columns: var(--zc-sidebar-width) 1fr;
+}
+
+/* Stack layout */
+.zc-stack {
+  display: flex;
+  flex-direction: column;
+}
+
+.zc-stack--sm {
+  gap: var(--zc-space-4);
+}
+
+.zc-stack--lg {
+  gap: var(--zc-space-8);
+}
+
+/* Row layout */
+.zc-row {
+  display: flex;
+  flex-wrap: wrap;
+  margin: calc(-1 * var(--zc-space-3)) 0;
+}
+
+.zc-row--wrap {
+  flex-wrap: wrap;
+}
+
+.zc-row--between {
+  justify-content: space-between;
+}
+
+.zc-row--end {
+  justify-content: flex-end;
+}
+
+.zc-row--top {
+  align-items: flex-start;
+}
+
+.zc-row > * {
+  flex: 1 1 auto;
+  padding: var(--zc-space-3) 0;
+}
+
+/* Grow utility */
+.zc-grow {
+  flex: 1;
+}
+
+/* Divider */
+.zc-divider {
+  height: 1px;
+  background-color: var(--zc-border-primary);
+  margin: var(--zc-space-6) 0;
+}
+
+/* Mock data notice */
+.zc-sample-notice {
+  position: fixed;
+  top: var(--zc-space-4);
+  right: var(--zc-space-4);
+  z-index: var(--zc-z-toast);
+  padding: var(--zc-space-2) var(--zc-space-4);
+  background-color: var(--zc-bg-tertiary);
+  border: 1px solid var(--zc-border-accent);
+  border-radius: var(--zc-radius-sm);
+  font-size: var(--zc-font-size-xs);
+  color: var(--zc-text-accent);
+  font-weight: 500;
+  box-shadow: var(--zc-shadow-md);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .zc-shell__sidebar {
+    transform: translateX(-100%);
+  }
+  
+  .zc-shell__main {
+    margin-left: 0;
+  }
+  
+  .zc-shell__topbar {
+    padding-left: var(--zc-space-4);
+    padding-right: var(--zc-space-4);
+  }
+  
+  .zc-grid--2,
+  .zc-grid--3,
+  .zc-grid--4 {
+    grid-template-columns: 1fr;
+  }
+  
+  .zc-shell__menu-btn {
+    display: flex;
+  }
+  
+  .zc-shell__theme-mobile {
+    display: flex;
+    gap: var(--zc-space-2);
+  }
+  
+  .zc-shell__theme-desktop {
+    display: none;
+  }
+}
+
+/* Print styles */
+@media print {
+  .zc-shell,
+  .zc-shell__topbar,
+  .zc-shell__sidebar {
+    display: none;
+  }
+  
+  .zc-shell__main {
+    margin-left: 0;
+  }
+  
+  .zc-card {
+    break-inside: avoid;
+    box-shadow: none;
+    border: 1px solid var(--zc-border-primary);
+  }
+}

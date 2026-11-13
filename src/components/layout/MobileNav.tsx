@@ -36,7 +36,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({ currentTab, onSelectTab })
   return (
     <nav
       aria-label="Mobile Navigation"
-      className={`sm:hidden fixed bottom-0 left-0 right-0 z-40 border-t ${bg} backdrop-blur-xl flex items-center justify-around py-2 px-1 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] transition-opacity duration-150`}
+      className={`sm:hidden fixed bottom-0 left-0 right-0 z-40 h-[var(--z-mobile-nav-height)] border-t ${bg} backdrop-blur-xl flex items-center justify-around py-2 px-1 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] transition-opacity duration-150`}
     >
       {navItems.map((item) => {
         const Icon = item.icon;

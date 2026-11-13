@@ -1,13 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { messagingRepo } from '../db/messaging.ts';
 import {
-  publishConversationMessage,
-  publishConversationMessageEdit,
   publishConversationMessageDelete,
   publishReceipt,
   publishReaction,
 } from '../realtime-events.ts';
 import { HttpError } from '../errors.ts';
+import { evictUserFromConversation } from '../realtime.ts';
 
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   const body = Buffer.from(JSON.stringify(payload));
@@ -137,6 +136,8 @@ export async function handleMessagingRequest(
     await requireSessionWithCsrf(req);
     const [, conversationId, targetUserId] = removeParticipantMatch;
     const result = await messagingRepo.removeGroupParticipant(conversationId, currentUserId, targetUserId);
+    // Revoke live access immediately instead of waiting for a reconnect.
+    evictUserFromConversation(targetUserId, conversationId);
     sendJson(res, 200, result);
     return true;
   }
@@ -164,26 +165,21 @@ export async function handleMessagingRequest(
       }
       await requireSessionWithCsrf(req);
       const body = await readJson(req);
-      const message = await messagingRepo.sendMessage(currentUserId, conversationId, {
-        text: typeof body.text === 'string' ? body.text : undefined,
-        clientId: typeof body.clientId === 'string' ? body.clientId : undefined,
-        replyToMessageId: typeof body.replyToMessageId === 'string' ? body.replyToMessageId : undefined,
-        attachmentAssetIds: Array.isArray(body.attachmentAssetIds) ? body.attachmentAssetIds.map(String) : undefined,
-      });
-
-      // Notify realtime subscribers
-      const participants = await messagingRepo.getParticipants(conversationId);
-      const activeRecipientIds = participants
-        .filter((p) => !p.leftAt && p.userId !== currentUserId)
-        .map((p) => p.userId);
-
-      publishConversationMessage({
+      const { message, isDuplicate } = await messagingRepo.sendMessage(
+        currentUserId,
         conversationId,
-        message,
-        recipientIds: activeRecipientIds,
-      });
+        {
+          text: typeof body.text === 'string' ? body.text : undefined,
+          clientId: typeof body.clientId === 'string' ? body.clientId : undefined,
+          replyToMessageId:
+            typeof body.replyToMessageId === 'string' ? body.replyToMessageId : undefined,
+          attachmentAssetIds: Array.isArray(body.attachmentAssetIds)
+            ? body.attachmentAssetIds.map(String)
+            : undefined,
+        },
+      );
 
-      sendJson(res, 201, { message });
+      sendJson(res, isDuplicate ? 200 : 201, { message, duplicate: isDuplicate });
       return true;
     }
   }
@@ -201,13 +197,6 @@ export async function handleMessagingRequest(
       const body = await readJson(req);
       const text = typeof body.text === 'string' ? body.text : '';
       const updated = await messagingRepo.editMessage(conversationId, messageId, currentUserId, text);
-
-      const participants = await messagingRepo.getParticipants(conversationId);
-      publishConversationMessageEdit({
-        conversationId,
-        message: updated,
-        recipientIds: participants.filter((p) => !p.leftAt).map((p) => p.userId),
-      });
 
       sendJson(res, 200, { message: updated });
       return true;
@@ -246,6 +235,7 @@ export async function handleMessagingRequest(
     const emoji = typeof body.emoji === 'string' ? body.emoji : '';
     const result = await messagingRepo.toggleReaction(conversationId, messageId, currentUserId, emoji);
 
+    const participants = await messagingRepo.getParticipants(conversationId);
     publishReaction({
       conversationId,
       messageId,
@@ -253,6 +243,7 @@ export async function handleMessagingRequest(
       username: '',
       emoji: result.emoji,
       added: result.added,
+      recipientIds: participants.filter((p) => !p.leftAt).map((p) => p.userId),
     });
 
     sendJson(res, 200, result);
@@ -274,11 +265,13 @@ export async function handleMessagingRequest(
 
     await messagingRepo.recordReceipts(conversationId, currentUserId, receiptType, messageIds);
 
+    const participants = await messagingRepo.getParticipants(conversationId);
     publishReceipt({
       conversationId,
       userId: currentUserId,
       messageIds,
       receiptType,
+      recipientIds: participants.filter((p) => !p.leftAt).map((p) => p.userId),
     });
 
     sendJson(res, 200, { success: true });

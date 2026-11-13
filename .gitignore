@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Capacitor Android frontend build output
+dist-android/

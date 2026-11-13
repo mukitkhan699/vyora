@@ -1,0 +1,8 @@
+{
+  "appId": "com.zunari.app",
+  "appName": "Zunari",
+  "webDir": "dist-android",
+  "android": {
+    "allowMixedContent": false
+  }
+}

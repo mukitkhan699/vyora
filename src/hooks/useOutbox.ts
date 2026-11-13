@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { useRealtime } from '../context/RealtimeContext';
 import { useNetworkStatus } from './useNetworkStatus';
 import { useMessagingDB } from './useMessagingDB';
 import { recordSendInitiated, recordTiming } from '../lib/messaging/performance';
+import type { Message } from '../types/index';
+import { toMillis } from '../utils/messaging';
 
 export interface OutboxMessage {
   clientId: string;
@@ -19,33 +20,88 @@ export interface OutboxMessage {
   lastError?: string;
 }
 
+export interface OutboxCallbacks {
+  onMessageSent?: (message: Message, clientId: string) => void;
+  onMessageFailed?: (clientId: string, error: string) => void;
+}
+
 const BASE_RETRY_DELAY = 1000;
 const MAX_RETRY_DELAY = 30000;
 const MAX_RETRIES = 10;
+// Keep failed messages for manual retry instead of discarding them. This is a
+// far-future retry time, not a deletion.
+const PARKED_RETRY_AT = Number.MAX_SAFE_INTEGER;
 
-export function useOutbox() {
+export function useOutbox(callbacks: OutboxCallbacks = {}) {
   const { currentUser } = useAuth();
-  const { connected, socket } = useRealtime();
   const { online } = useNetworkStatus();
-  const { getOutbox, queueMessage, retryOutboxMessage, removeFromOutboxQueue } = useMessagingDB();
+  const {
+    getOutbox,
+    queueMessage,
+    retryOutboxMessage,
+    removeFromOutboxQueue,
+    saveMessage,
+    removeMessage,
+    updateMessageLocalStatus,
+    loadConversation,
+    saveConversation,
+  } = useMessagingDB();
   const [outbox, setOutbox] = useState<OutboxMessage[]>([]);
+  const outboxRef = useRef<OutboxMessage[]>([]);
   const processingRef = useRef(false);
+  const callbacksRef = useRef(callbacks);
   const retryTimersRef = useRef<Map<string, number>>(new Map());
 
   useEffect(() => {
+    callbacksRef.current = callbacks;
+  }, [callbacks]);
+
+  const publishOutbox = useCallback((next: OutboxMessage[]) => {
+    outboxRef.current = next;
+    setOutbox(next);
+  }, []);
+
+  useEffect(() => {
     if (!currentUser?.id) return;
+    let cancelled = false;
     const loadOutbox = async () => {
       const messages = await getOutbox();
-      setOutbox(messages);
+      if (cancelled) return;
+      // An interrupted process may have left rows in 'sending'. Recover them.
+      const recovered = messages.map((message) =>
+        message.status === 'sending'
+          ? { ...message, status: 'pending' as const, nextRetryAt: 0 }
+          : (message as OutboxMessage),
+      );
+      for (const message of messages) {
+        if (message.status === 'sending') {
+          void retryOutboxMessage(message.clientId);
+        }
+      }
+      publishOutbox(recovered);
     };
-    loadOutbox();
-  }, [currentUser?.id, getOutbox]);
+    void loadOutbox();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser?.id, getOutbox, retryOutboxMessage, publishOutbox]);
 
   const calculateNextRetry = useCallback((retryCount: number): number => {
     const delay = Math.min(BASE_RETRY_DELAY * Math.pow(2, retryCount), MAX_RETRY_DELAY);
     const jitter = delay * 0.1 * Math.random();
     return Date.now() + delay + jitter;
   }, []);
+
+  const updateOutboxMessage = useCallback(
+    (clientId: string, updates: Partial<OutboxMessage>) => {
+      publishOutbox(
+        outboxRef.current.map((message) =>
+          message.clientId === clientId ? { ...message, ...updates } : message,
+        ),
+      );
+    },
+    [publishOutbox],
+  );
 
   const addToOutbox = useCallback(
     (message: Omit<OutboxMessage, 'createdAt' | 'retryCount' | 'nextRetryAt' | 'status'>) => {
@@ -56,95 +112,122 @@ export function useOutbox() {
         nextRetryAt: 0,
         status: 'pending',
       };
-      queueMessage(newMessage);
-      setOutbox((prev) => [...prev, newMessage]);
+      void queueMessage(newMessage);
+      publishOutbox([...outboxRef.current.filter((item) => item.clientId !== newMessage.clientId), newMessage]);
       return newMessage.clientId;
     },
-    [queueMessage]
+    [queueMessage, publishOutbox],
   );
 
-  const updateOutboxMessage = useCallback(
-    (clientId: string, updates: Partial<OutboxMessage>) => {
-      setOutbox((prev) => prev.map((m) => (m.clientId === clientId ? { ...m, ...updates } : m)));
+  const removeFromOutbox = useCallback(
+    (clientId: string) => {
+      publishOutbox(outboxRef.current.filter((message) => message.clientId !== clientId));
+      void removeFromOutboxQueue(clientId);
+      const timer = retryTimersRef.current.get(clientId);
+      if (timer) {
+        window.clearTimeout(timer);
+        retryTimersRef.current.delete(clientId);
+      }
     },
-    []
+    [removeFromOutboxQueue, publishOutbox],
   );
 
-  const removeFromOutbox = useCallback((clientId: string) => {
-    setOutbox((prev) => prev.filter((m) => m.clientId !== clientId));
-    removeFromOutboxQueue(clientId);
-    const timer = retryTimersRef.current.get(clientId);
-    if (timer) {
-      window.clearTimeout(timer);
-      retryTimersRef.current.delete(clientId);
-    }
-  }, [removeFromOutboxQueue]);
+  const persistSentMessage = useCallback(
+    async (message: Message, clientId: string) => {
+      await saveMessage(message);
+      // Remove the optimistic placeholder now that the server row exists.
+      await removeMessage(`local-${clientId}`);
+      const conversation = await loadConversation(message.conversationId || '');
+      if (conversation) {
+        await saveConversation({
+          ...conversation,
+          lastMessage: message,
+          lastMessageAt: toMillis(message.createdAt),
+        });
+      }
+      callbacksRef.current.onMessageSent?.(message, clientId);
+    },
+    [saveMessage, removeMessage, loadConversation, saveConversation],
+  );
 
   const processOutbox = useCallback(async () => {
-    if (processingRef.current || !connected || !currentUser?.id) return;
-    if (!socket?.connected) return;
+    if (processingRef.current || !online || !currentUser?.id) return;
 
-    const pendingMessages = outbox.filter(
-      (m) => m.status === 'pending' || (m.status === 'failed' && m.nextRetryAt <= Date.now())
+    const now = Date.now();
+    const pendingMessages = outboxRef.current.filter(
+      (message) =>
+        message.status === 'pending' ||
+        (message.status === 'failed' && message.nextRetryAt <= now),
     );
-
     if (pendingMessages.length === 0) return;
 
     processingRef.current = true;
 
-    for (const msg of pendingMessages) {
-      if (!connected) break;
+    try {
+      for (const message of pendingMessages) {
+        if (!online) break;
 
-      updateOutboxMessage(msg.clientId, { status: 'sending', lastError: undefined });
+        updateOutboxMessage(message.clientId, { status: 'sending', lastError: undefined });
 
-      try {
-        recordSendInitiated(msg.clientId, msg.conversationId);
-        const response = await api.sendConversationMessage(msg.conversationId, {
-          text: msg.text,
-          clientId: msg.clientId,
-          replyToMessageId: msg.replyToMessageId,
-          attachmentAssetIds: msg.attachmentAssetIds,
-        });
-        recordTiming(msg.clientId, 'serverReceived');
-        recordTiming(msg.clientId, 'databaseCommitted');
+        try {
+          recordSendInitiated(message.clientId, message.conversationId);
+          const response = await api.sendConversationMessage(message.conversationId, {
+            text: message.text,
+            clientId: message.clientId,
+            replyToMessageId: message.replyToMessageId,
+            attachmentAssetIds: message.attachmentAssetIds,
+          });
+          recordTiming(message.clientId, 'serverReceived');
+          recordTiming(message.clientId, 'databaseCommitted');
 
-        updateOutboxMessage(msg.clientId, { status: 'sent' });
-        removeFromOutbox(msg.clientId);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Failed to send message';
-        const nextRetryCount = msg.retryCount + 1;
-        const nextRetryAt = nextRetryCount < MAX_RETRIES ? calculateNextRetry(nextRetryCount) : 0;
+          await persistSentMessage(response.message, message.clientId);
+          removeFromOutbox(message.clientId);
+        } catch (error) {
+          const failure = error instanceof Error ? error.message : 'Failed to send message';
+          const nextRetryCount = message.retryCount + 1;
+          const exhausted = nextRetryCount >= MAX_RETRIES;
+          const nextRetryAt = exhausted
+            ? PARKED_RETRY_AT
+            : calculateNextRetry(nextRetryCount);
 
-        updateOutboxMessage(msg.clientId, {
-          status: nextRetryCount < MAX_RETRIES ? 'failed' : 'failed',
-          retryCount: nextRetryCount,
-          nextRetryAt,
-          lastError: message,
-        });
+          updateOutboxMessage(message.clientId, {
+            status: 'failed',
+            retryCount: nextRetryCount,
+            nextRetryAt,
+            lastError: failure,
+          });
 
-        if (nextRetryCount >= MAX_RETRIES) {
-          removeFromOutbox(msg.clientId);
+          await updateMessageLocalStatus(`local-${message.clientId}`, 'failed', failure);
+          callbacksRef.current.onMessageFailed?.(message.clientId, failure);
         }
       }
+    } finally {
+      processingRef.current = false;
     }
-
-    processingRef.current = false;
-  }, [connected, currentUser?.id, outbox, socket?.connected, updateOutboxMessage, removeFromOutbox, calculateNextRetry]);
+  }, [
+    online,
+    currentUser?.id,
+    updateOutboxMessage,
+    removeFromOutbox,
+    calculateNextRetry,
+    persistSentMessage,
+    updateMessageLocalStatus,
+  ]);
 
   useEffect(() => {
-    if (!connected) return;
-    processOutbox();
+    if (!online) return;
+    void processOutbox();
 
     const interval = window.setInterval(() => {
-      processOutbox();
+      void processOutbox();
     }, 5000);
 
     return () => window.clearInterval(interval);
-  }, [connected, processOutbox]);
+  }, [online, processOutbox]);
 
   useEffect(() => {
     const handleOnline = () => {
-      processOutbox();
+      void processOutbox();
     };
     window.addEventListener('online', handleOnline);
     return () => window.removeEventListener('online', handleOnline);
@@ -152,11 +235,17 @@ export function useOutbox() {
 
   const retryMessage = useCallback(
     (clientId: string) => {
-      updateOutboxMessage(clientId, { status: 'pending', nextRetryAt: 0, retryCount: 0, lastError: undefined });
-      retryOutboxMessage(clientId);
-      processOutbox();
+      updateOutboxMessage(clientId, {
+        status: 'pending',
+        nextRetryAt: 0,
+        retryCount: 0,
+        lastError: undefined,
+      });
+      void updateMessageLocalStatus(`local-${clientId}`, 'pending', '');
+      void retryOutboxMessage(clientId);
+      void processOutbox();
     },
-    [updateOutboxMessage, retryOutboxMessage, processOutbox]
+    [updateOutboxMessage, updateMessageLocalStatus, retryOutboxMessage, processOutbox],
   );
 
   return {

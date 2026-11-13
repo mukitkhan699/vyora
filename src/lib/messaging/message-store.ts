@@ -9,6 +9,21 @@ import {
 
 export type { StoredMessage, StoredAttachment, StoredReaction, StoredReceipt };
 
+/**
+ * The messages store is indexed by the compound key [conversationId, createdAt].
+ * A scalar key range (IDBKeyRange.only(conversationId)) never matches an array
+ * index key, so every cached-history read used to return nothing. Always build a
+ * bounded array range for a single conversation.
+ */
+export function conversationKeyRange(conversationId: string): IDBKeyRange {
+  return IDBKeyRange.bound(
+    [conversationId, Number.NEGATIVE_INFINITY],
+    [conversationId, Number.POSITIVE_INFINITY],
+    false,
+    false,
+  );
+}
+
 export async function getMessages(
   accountId: string,
   conversationId: string,
@@ -21,13 +36,18 @@ export async function getMessages(
     const store = transaction.objectStore('messages');
     const index = store.index('conversationId_createdAt');
 
-    let range: IDBKeyRange | null = IDBKeyRange.only(conversationId);
+    let range: IDBKeyRange = conversationKeyRange(conversationId);
     if (before) {
       const cursorRes = store.get(before);
       cursorRes.onsuccess = () => {
         const cursorMsg = cursorRes.result;
         if (cursorMsg) {
-          range = IDBKeyRange.upperBound([conversationId, cursorMsg.createdAt], true);
+          range = IDBKeyRange.bound(
+            [conversationId, Number.NEGATIVE_INFINITY],
+            [conversationId, cursorMsg.createdAt],
+            false,
+            true,
+          );
           executeQuery(range);
         } else {
           resolve([]);
@@ -39,7 +59,7 @@ export async function getMessages(
 
     executeQuery(range);
 
-    function executeQuery(keyRange: IDBKeyRange | null): void {
+    function executeQuery(keyRange: IDBKeyRange): void {
       const request = index.openCursor(keyRange, 'prev');
       const messages: StoredMessage[] = [];
 
@@ -47,7 +67,7 @@ export async function getMessages(
         const cursor = request.result;
         if (cursor && messages.length < limit) {
           const msg = cursor.value;
-          if (msg.accountId === accountId) {
+          if (msg.accountId === accountId && msg.conversationId === conversationId) {
             messages.push(msg);
           }
           cursor.continue();
@@ -95,6 +115,7 @@ export async function upsertMessage(message: StoredMessage): Promise<void> {
 }
 
 export async function upsertMessages(messages: StoredMessage[]): Promise<void> {
+  if (messages.length === 0) return;
   const db = await getDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(['messages'], 'readwrite');
@@ -215,23 +236,28 @@ export async function getMessagesForSync(
     const store = transaction.objectStore('messages');
     const index = store.index('conversationId_createdAt');
 
-    let range: IDBKeyRange;
+    let range: IDBKeyRange = conversationKeyRange(conversationId);
     if (sinceCursor) {
       const cursorRes = store.get(sinceCursor);
       cursorRes.onsuccess = () => {
         const cursorMsg = cursorRes.result;
         if (cursorMsg) {
-          range = IDBKeyRange.lowerBound([conversationId, cursorMsg.createdAt], true);
+          range = IDBKeyRange.bound(
+            [conversationId, cursorMsg.createdAt],
+            [conversationId, Number.POSITIVE_INFINITY],
+            true,
+            false,
+          );
           executeQuery(range);
         } else {
-          executeQuery(IDBKeyRange.only(conversationId));
+          executeQuery(conversationKeyRange(conversationId));
         }
       };
       cursorRes.onerror = () => reject(cursorRes.error);
       return;
-    } else {
-      range = IDBKeyRange.only(conversationId);
     }
+
+    executeQuery(range);
 
     function executeQuery(keyRange: IDBKeyRange): void {
       const request = index.openCursor(keyRange, 'next');
@@ -241,7 +267,7 @@ export async function getMessagesForSync(
         const cursor = request.result;
         if (cursor) {
           const msg = cursor.value;
-          if (msg.accountId === accountId) {
+          if (msg.accountId === accountId && msg.conversationId === conversationId) {
             messages.push(msg);
           }
           cursor.continue();

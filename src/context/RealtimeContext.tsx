@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
 import { getBackendApiUrl } from '../config/backendUrl.ts';
 import { useAuth } from './AuthContext.tsx';
@@ -17,6 +17,10 @@ interface RealtimeContextType {
   reconnectNonce: number;
 }
 
+interface AuthSessionResponse {
+  authenticated: boolean;
+}
+
 const RealtimeContext = createContext<RealtimeContextType | undefined>(undefined);
 
 export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -26,10 +30,18 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
   const [lastSeenByUser, setLastSeenByUser] = useState<Map<string, number>>(new Map());
   const [reconnectNonce, setReconnectNonce] = useState(0);
+  const socketRef = useRef<Socket | null>(null);
 
   useEffect(() => {
     if (!currentUser?.id) {
-      setSocket(null);
+      const currentSocket = socketRef.current;
+      if (currentSocket) {
+        currentSocket.disconnect();
+        if (socketRef.current === currentSocket) {
+          socketRef.current = null;
+        }
+      }
+      setSocket((current) => (current === currentSocket ? null : current));
       setConnected(false);
       setOnlineUserIds(new Set());
       setLastSeenByUser(new Map());
@@ -42,6 +54,7 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       reconnectionDelay: 800,
       reconnectionDelayMax: 6000,
     });
+    socketRef.current = instance;
 
     setSocket(instance);
 
@@ -55,7 +68,75 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       });
     };
 
-    const handleDisconnect = () => {
+    const getSession = async (): Promise<AuthSessionResponse | null> => {
+      try {
+        const backendUrl = getBackendApiUrl();
+        const backendOrigin = new URL(backendUrl, window.location.origin).origin;
+        const credentials: RequestCredentials =
+          backendOrigin === window.location.origin ? 'same-origin' : 'include';
+        const response = await fetch(`${backendUrl}/api/auth/session`, {
+          method: 'GET',
+          credentials,
+        });
+        if (!response.ok) {
+          return null;
+        }
+        const session: unknown = await response.json();
+        if (
+          typeof session !== 'object' ||
+          session === null ||
+          !('authenticated' in session) ||
+          typeof session.authenticated !== 'boolean'
+        ) {
+          return null;
+        }
+        return { authenticated: session.authenticated };
+      } catch {
+        return null;
+      }
+    };
+
+    let disconnectValidationInProgress = false;
+    let serverDisconnectReconnectAttempts = 0;
+    const maxServerDisconnectReconnectAttempts = 3;
+    let isActive = true;
+
+    const handleDisconnect = (reason: string) => {
+      setConnected(false);
+
+      if (reason === 'io server disconnect' || reason === 'server disconnect') {
+        if (
+          disconnectValidationInProgress ||
+          serverDisconnectReconnectAttempts >= maxServerDisconnectReconnectAttempts ||
+          !isActive ||
+          socketRef.current !== instance
+        ) {
+          return;
+        }
+        disconnectValidationInProgress = true;
+
+        void (async () => {
+          try {
+            const session = await getSession();
+            if (
+              session?.authenticated === true &&
+              isActive &&
+              socketRef.current === instance &&
+              !instance.connected
+            ) {
+              serverDisconnectReconnectAttempts += 1;
+              instance.connect();
+            }
+          } catch (error) {
+            console.error('Unable to recover the realtime connection.', error);
+          } finally {
+            disconnectValidationInProgress = false;
+          }
+        })();
+      }
+    };
+
+    const handleConnectError = () => {
       setConnected(false);
     };
 
@@ -78,17 +159,24 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     instance.on('connect', handleConnect);
     instance.on('disconnect', handleDisconnect);
-    instance.on('connect_error', handleDisconnect);
+    instance.on('connect_error', handleConnectError);
     instance.on('presence:update', handlePresence);
 
     return () => {
+      isActive = false;
+
       instance.off('connect', handleConnect);
       instance.off('disconnect', handleDisconnect);
-      instance.off('connect_error', handleDisconnect);
+      instance.off('connect_error', handleConnectError);
       instance.off('presence:update', handlePresence);
+
       instance.disconnect();
+
       setSocket((current) => (current === instance ? null : current));
       setConnected(false);
+      if (socketRef.current === instance) {
+        socketRef.current = null;
+      }
     };
   }, [currentUser?.id]);
 

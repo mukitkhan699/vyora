@@ -26,6 +26,7 @@ import { handleMessagingRequest } from './messaging.ts';
 import { handleCallingRequest } from './calling.ts';
 import { enforceReportRateLimit } from '../rate-limit.ts';
 import { HttpError } from '../errors.ts';
+import { MAX_POST_MEDIA } from '../../src/utils/postMedia.ts';
 
 class PayloadTooLargeError extends Error {}
 
@@ -110,6 +111,14 @@ export async function handleApiRequest(
   const method = (req.method || 'GET').toUpperCase();
 
   try {
+    if (
+      (pathname === '/api/messages' && method === 'POST') ||
+      (/^\/api\/messages\/[^/]+$/.test(pathname) && method === 'GET')
+    ) {
+      sendError(res, 410, 'Legacy direct messaging has been retired. Use conversation messaging.');
+      return true;
+    }
+
     if (await handleAuthRequest(req, res, url)) return true;
 
     if (await handleAdminRequest(req, res, url)) return true;
@@ -323,8 +332,12 @@ export async function handleApiRequest(
         sendError(res, 400, `Post exceeds maximum length of ${config.maxPostLength} characters.`);
         return true;
       }
-      if (mediaUrls && mediaUrls.length > 4) {
-        sendError(res, 400, 'A maximum of 4 media attachments are allowed per post.');
+      if (mediaUrls && mediaUrls.length > MAX_POST_MEDIA) {
+        sendError(
+          res,
+          400,
+          `A maximum of ${MAX_POST_MEDIA} media attachments are allowed per post.`,
+        );
         return true;
       }
       const post = await dbAdapter.createPost(
@@ -446,28 +459,6 @@ export async function handleApiRequest(
       const currentUserId = await requireUserId(req, res);
       if (!currentUserId) return true;
       sendJson(res, 200, { success: await dbAdapter.markNotificationsRead(currentUserId) });
-      return true;
-    }
-
-    const messagesMatch = /^\/api\/messages\/([^/]+)$/.exec(pathname);
-    if (messagesMatch && method === 'GET') {
-      const currentUserId = await requireUserId(req, res);
-      if (!currentUserId) return true;
-      sendJson(res, 200, await dbAdapter.getMessages(currentUserId, messagesMatch[1]));
-      return true;
-    }
-
-    if (pathname === '/api/messages' && method === 'POST') {
-      const currentUserId = await requireUserId(req, res);
-      if (!currentUserId) return true;
-      const body = await readJson(req);
-      const recipientId = typeof body.recipientId === 'string' ? body.recipientId : '';
-      const text = typeof body.text === 'string' ? body.text.trim() : '';
-      if (!recipientId || !text) {
-        sendError(res, 400, 'recipientId and text are required.');
-        return true;
-      }
-      sendJson(res, 201, await dbAdapter.sendMessage(currentUserId, recipientId, text));
       return true;
     }
 

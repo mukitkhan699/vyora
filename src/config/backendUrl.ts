@@ -1,30 +1,22 @@
 /**
- * =====================================================================
- * HARDCODED BACKEND API SERVER URL
- * =====================================================================
- * As requested, the frontend and backend are decoupled.
- * The backend handles all configurations and business logic.
+ * Backend URL configuration.
  *
- * To point this frontend to your separate standalone backend server,
- * change the HARDCODED_BACKEND_URL below to your backend URL:
- * e.g., "http://localhost:5000" or "https://api.vyora.social"
- *
- * If left empty (""), it automatically connects to the current host origin.
+ * Android builds use the production Zunari backend.
+ * Web builds retain the existing same-origin behavior.
  */
-export const HARDCODED_BACKEND_URL: string = "";
+
+const ANDROID_BACKEND_URL = 'https://zunari.duckdns.org';
 
 export function getBackendApiUrl(): string {
-  // If a hardcoded backend URL is specified, use it directly
-  if (HARDCODED_BACKEND_URL && HARDCODED_BACKEND_URL.trim() !== "") {
-    return HARDCODED_BACKEND_URL.replace(/\/$/, "");
+  if (import.meta.env.VITE_ANDROID_BUILD === 'true') {
+    return ANDROID_BACKEND_URL;
   }
 
-  // Fallback to active browser origin so the preview environment works seamlessly
-  if (typeof window !== "undefined" && window.location && window.location.origin) {
+  if (typeof window !== 'undefined' && window.location?.origin) {
     return window.location.origin;
   }
 
-  return "http://localhost:3000";
+  return 'http://localhost:3000';
 }
 
 export const BACKEND_URL = getBackendApiUrl();

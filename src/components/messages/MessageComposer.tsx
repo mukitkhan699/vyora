@@ -68,7 +68,6 @@ export const MessageComposer: React.FC<MessageComposerProps> = ({
   const allAttachmentsReady = pendingAttachments.every((item) => item.status === 'ready');
   const canSend =
     !disabled &&
-    connected &&
     !sending &&
     !uploading &&
     allAttachmentsReady &&
@@ -167,7 +166,7 @@ export const MessageComposer: React.FC<MessageComposerProps> = ({
 
   return (
     <div
-      className="shrink-0 border-t z-border z-surface px-2.5 pt-2 sm:px-4 sm:pt-2.5 z-safe-bottom pb-safe"
+      className="shrink-0 border-t z-border z-surface px-2.5 pt-2 sm:px-4 sm:pt-2.5"
       style={{ backgroundColor: 'var(--z-surface)' }}
     >
       {replyTarget && (
@@ -257,7 +256,7 @@ export const MessageComposer: React.FC<MessageComposerProps> = ({
       {!connected && !disabled && (
         <div className="mb-1.5 flex items-center gap-1.5 text-[10px] z-muted" role="status" aria-live="polite">
           <WifiOff className="w-3 h-3" aria-hidden="true" />
-          Offline — your draft is saved. Reconnect to send.
+          Offline — messages will be queued and sent automatically when you reconnect.
         </div>
       )}
 

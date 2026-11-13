@@ -402,6 +402,10 @@ class ApiService {
     }
   }
 
+  public deleteFile(fileId: string): Promise<{ success: boolean }> {
+    return this.request(`/files/${encodeURIComponent(fileId)}`, { method: 'DELETE' });
+  }
+
   public getMediaCatalog(): Promise<{
     avatars: string[];
     attachments: string[];
@@ -665,18 +669,6 @@ class ApiService {
     return this.request<{ call: CallSession }>(`/calls/${encodeURIComponent(callId)}/end`, {
       method: 'POST',
       body: '{}',
-    });
-  }
-
-  // Legacy Direct Messages fallback
-  public getMessages(recipientId: string): Promise<Message[]> {
-    return this.request<Message[]>(`/messages/${recipientId}`);
-  }
-
-  public sendMessage(recipientId: string, text: string): Promise<Message> {
-    return this.request<Message>('/messages', {
-      method: 'POST',
-      body: JSON.stringify({ recipientId, text }),
     });
   }
 

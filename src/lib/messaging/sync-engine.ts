@@ -4,7 +4,6 @@ import {
   clearAccountData,
   type StoredConversation,
   type StoredMessage,
-  type StoredOutboxMessage,
 } from './database.ts';
 import {
   getAllConversations,
@@ -12,26 +11,8 @@ import {
   updateConversationSyncCursor,
   getConversationById,
 } from './conversation-store.ts';
-import {
-  getMessages,
-  upsertMessages,
-  getMessagesForSync,
-  updateMessageStatus,
-  getMessageById,
-} from './message-store.ts';
-import {
-  getOutboxMessages,
-  getPendingOutboxMessages,
-  updateOutboxMessage,
-  removeFromOutbox,
-  clearSentOutboxMessages,
-} from './outbox-store.ts';
-import {
-  getSyncState,
-  upsertSyncState,
-  updateSyncCursor,
-  updateLastSuccessfulSync,
-} from './sync-state-store.ts';
+import { upsertMessages } from './message-store.ts';
+import { updateSyncCursor, updateLastSuccessfulSync } from './sync-state-store.ts';
 // import { useAuth } from '../../context/AuthContext.tsx';
 // import { useRealtime } from '../../context/RealtimeContext.tsx';
 
@@ -45,17 +26,34 @@ export interface SyncResult {
 export interface SyncEngine {
   syncAll: () => Promise<SyncResult>;
   syncConversation: (conversationId: string) => Promise<SyncResult>;
-  processOutbox: () => Promise<number>;
 }
 
-function convertServerMessage(serverMsg: any, accountId: string): StoredMessage {
+export function convertServerMessage(serverMsg: any, accountId: string): StoredMessage {
   return {
     id: serverMsg.id,
     conversationId: serverMsg.conversationId,
     senderId: serverMsg.senderId,
+    sender: serverMsg.sender
+      ? {
+          id: serverMsg.sender.id,
+          username: serverMsg.sender.username,
+          name: serverMsg.sender.name,
+          avatarUrl: serverMsg.sender.avatarUrl,
+          verified: Boolean(serverMsg.sender.verified),
+          isGold: Boolean(serverMsg.sender.isGold),
+        }
+      : undefined,
     clientId: serverMsg.clientId,
     text: serverMsg.text,
     replyToMessageId: serverMsg.replyToMessageId,
+    replyToMessage: serverMsg.replyToMessage
+      ? {
+          id: serverMsg.replyToMessage.id,
+          senderId: serverMsg.replyToMessage.senderId ?? null,
+          senderUsername: serverMsg.replyToMessage.senderUsername,
+          text: serverMsg.replyToMessage.text ?? '',
+        }
+      : null,
     isEdited: serverMsg.isEdited ?? false,
     editedAt: serverMsg.editedAt ?? null,
     isDeleted: serverMsg.isDeleted ?? false,
@@ -90,7 +88,7 @@ function convertServerMessage(serverMsg: any, accountId: string): StoredMessage 
   };
 }
 
-function convertServerConversation(serverConv: any, accountId: string): StoredConversation {
+export function convertServerConversation(serverConv: any, accountId: string): StoredConversation {
   return {
     id: serverConv.id,
     type: serverConv.type,
@@ -135,23 +133,6 @@ async function fetchMessages(
   return (response.messages || []).map((m) => convertServerMessage(m, accountId));
 }
 
-async function sendOutboxMessage(
-  accountId: string,
-  outboxMsg: StoredOutboxMessage
-): Promise<{ message: StoredMessage } | null> {
-  try {
-    const response = await api.sendConversationMessage(outboxMsg.conversationId, {
-      text: outboxMsg.text,
-      clientId: outboxMsg.clientId,
-      replyToMessageId: outboxMsg.replyToMessageId,
-      attachmentAssetIds: outboxMsg.attachmentAssetIds,
-    });
-    return { message: convertServerMessage(response.message, accountId) };
-  } catch (error) {
-    return null;
-  }
-}
-
 export function createSyncEngine(getAccountId: () => string | null): SyncEngine {
   return {
     async syncAll(): Promise<SyncResult> {
@@ -194,30 +175,22 @@ export function createSyncEngine(getAccountId: () => string | null): SyncEngine 
       let outboxProcessed = 0;
 
       try {
-        const syncState = await getSyncState(accountId, conversationId);
-        const cursor = syncState?.lastSyncedCursor ?? null;
+        // Always reconcile the newest page. Live delivery is handled by the
+        // socket and older history is backfilled by the UI's `before` cursor,
+        // so the sync cursor must never be treated as a timestamp.
+        const serverMessages = await fetchMessages(accountId, conversationId, undefined, 100);
+        if (serverMessages.length > 0) {
+          await upsertMessages(serverMessages);
+          messagesSynced = serverMessages.length;
 
-        const newMessages = await getMessagesForSync(accountId, conversationId, cursor);
-        const serverMessages = await fetchMessages(accountId, conversationId, cursor ?? undefined, 100);
-
-        const allMessages = [...newMessages];
-        for (const msg of serverMessages) {
-          if (!allMessages.find((m) => m.id === msg.id)) {
-            allMessages.push(msg);
-          }
-        }
-
-        if (allMessages.length > 0) {
-          await upsertMessages(allMessages);
-          messagesSynced = allMessages.length;
-
-          const latestMessage = allMessages.reduce((latest, m) =>
+          const latestMessage = serverMessages.reduce((latest, m) =>
             m.createdAt > latest.createdAt ? m : latest
           );
-          await updateSyncCursor(accountId, conversationId, String(latestMessage.createdAt));
+          // Store a message id: both `getMessagesForSync` and the API treat
+          // `before` as a message id, never as a timestamp.
+          await updateSyncCursor(accountId, conversationId, latestMessage.id);
           await updateLastSuccessfulSync(accountId, conversationId);
-          
-          // Also update the conversation with the latest message
+
           const conversation = await getConversationById(accountId, conversationId);
           if (conversation) {
             conversation.lastMessage = latestMessage;
@@ -226,74 +199,13 @@ export function createSyncEngine(getAccountId: () => string | null): SyncEngine 
           }
         }
 
-        const pendingOutbox = await getPendingOutboxMessages(accountId);
-        for (const outboxMsg of pendingOutbox) {
-          if (outboxMsg.conversationId !== conversationId) continue;
-
-          await updateOutboxMessage(outboxMsg.clientId, { status: 'sending' });
-          const result = await sendOutboxMessage(accountId, outboxMsg);
-
-          if (result) {
-            await upsertMessages([result.message]);
-            // Update the conversation with the latest message
-            const conversation = await getConversationById(accountId, outboxMsg.conversationId);
-            if (conversation) {
-              conversation.lastMessage = result.message;
-              conversation.lastMessageAt = result.message.createdAt;
-              await upsertConversations([conversation]);
-            }
-            await removeFromOutbox(outboxMsg.clientId);
-            outboxProcessed++;
-          } else {
-            await updateOutboxMessage(outboxMsg.clientId, {
-              status: 'failed',
-              retryCount: outboxMsg.retryCount + 1,
-              nextRetryAt: Date.now() + Math.min(1000 * Math.pow(2, outboxMsg.retryCount), 30000),
-            });
-          }
-        }
-
-        await clearSentOutboxMessages(accountId);
+        // Outbox sending is owned by `useOutbox` (single processor). Sync only
+        // pulls history so the two paths cannot race on the same clientId.
       } catch (e) {
         errors.push(`Sync error: ${e}`);
       }
 
       return { conversationsSynced: 0, messagesSynced, outboxProcessed, errors };
-    },
-
-    async processOutbox(): Promise<number> {
-      const accountId = getAccountId();
-      if (!accountId) return 0;
-
-      let processed = 0;
-      const pendingOutbox = await getPendingOutboxMessages(accountId);
-
-      for (const outboxMsg of pendingOutbox) {
-        await updateOutboxMessage(outboxMsg.clientId, { status: 'sending' });
-        const result = await sendOutboxMessage(accountId, outboxMsg);
-
-        if (result) {
-          await upsertMessages([result.message]);
-          // Update the conversation with the latest message
-          const conversation = await getConversationById(accountId, outboxMsg.conversationId);
-          if (conversation) {
-            conversation.lastMessage = result.message;
-            conversation.lastMessageAt = result.message.createdAt;
-            await upsertConversations([conversation]);
-          }
-          await removeFromOutbox(outboxMsg.clientId);
-          processed++;
-        } else {
-          await updateOutboxMessage(outboxMsg.clientId, {
-            status: 'failed',
-            retryCount: outboxMsg.retryCount + 1,
-            nextRetryAt: Date.now() + Math.min(1000 * Math.pow(2, outboxMsg.retryCount), 30000),
-          });
-        }
-      }
-
-      await clearSentOutboxMessages(accountId);
-      return processed;
     },
   };
 }

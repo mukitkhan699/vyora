@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { describe, test, before, after, beforeEach } from 'node:test';
 import {
+  applyRealtimeMessageEvent,
+  applyRealtimeMessageNotification,
+  createBoundedEventIdSet,
   sortConversations,
   mergeMessages,
   toMillis,
@@ -9,6 +12,7 @@ import {
   getDeliveryState,
   formatMessageTime,
   formatDateSeparator,
+  MAX_TRACKED_REALTIME_EVENT_IDS,
 } from '../utils/messaging.ts';
 import type { Message, Conversation } from '../types/index.ts';
 
@@ -302,4 +306,281 @@ describe('Messaging Utilities', () => {
       assert.equal(separator, 'Yesterday');
     });
   });
+
+  describe('Realtime event deduplication', () => {
+    const createMessage = (overrides: Partial<Message> = {}): Message => ({
+      id: 'msg_dedupe',
+      conversationId: 'conv_dedupe',
+      senderId: 'user_2',
+      clientId: 'client_dedupe',
+      text: 'hello',
+      replyToMessageId: null,
+      isEdited: false,
+      editedAt: null,
+      isDeleted: false,
+      deletedAt: null,
+      createdAt: 1000,
+      localStatus: 'sent',
+      attachments: [],
+      reactions: [],
+      receipts: [],
+      ...overrides,
+    });
+
+    const createHarness = (options: {
+      activeConversationId?: string | null;
+      visible?: boolean;
+      shouldStick?: boolean;
+      conversationKnown?: boolean;
+    } = {}) => {
+      const {
+        activeConversationId = 'conv_dedupe',
+        visible = true,
+        shouldStick = true,
+        conversationKnown = true,
+      } = options;
+      const state = {
+        messages: [] as Message[],
+        cache: new Map<string, Message>(),
+        preview: undefined as Message | undefined,
+        timing: [] as string[],
+        unseenBelow: false,
+        receipts: [] as Array<{
+          conversationId: string;
+          type: 'delivered' | 'read';
+          ids: string[];
+        }>,
+        refreshes: 0,
+        calls: {
+          cacheSaves: 0,
+          previewUpdates: 0,
+          upserts: 0,
+          receiptRequests: 0,
+          receiptSends: 0,
+          unseenUpdates: 0,
+        },
+      };
+      const sentReceipts = new Set<string>();
+      const messageEventIds = createBoundedEventIdSet(MAX_TRACKED_REALTIME_EVENT_IDS);
+      const notificationEventIds = createBoundedEventIdSet(MAX_TRACKED_REALTIME_EVENT_IDS);
+
+      const saveMessage = (message: Message): void => {
+        state.calls.cacheSaves += 1;
+        state.cache.set(message.id, message);
+      };
+      const upsert = (message: Message): void => {
+        state.calls.upserts += 1;
+        state.messages = upsertMessage(state.messages, message);
+      };
+      const updateConversationPreview = (message: Message): void => {
+        state.calls.previewUpdates += 1;
+        state.preview = message;
+      };
+      const sendReceipts = (
+        conversationId: string,
+        type: 'delivered' | 'read',
+        messages: Message[],
+      ): void => {
+        state.calls.receiptRequests += 1;
+        const ids = messages
+          .filter((message) => message.senderId !== 'user_1')
+          .map((message) => message.id)
+          .filter((id) => {
+            const key = `${type}:${id}`;
+            if (sentReceipts.has(key)) return false;
+            sentReceipts.add(key);
+            return true;
+          });
+        if (ids.length > 0) {
+          state.calls.receiptSends += 1;
+          state.receipts.push({ conversationId, type, ids });
+        }
+      };
+
+      const deliverMessage = (message: Message, eventId?: string): boolean =>
+        applyRealtimeMessageEvent(
+          message,
+          eventId ? { eventId } : undefined,
+          messageEventIds,
+          {
+            conversationId: 'conv_dedupe',
+            currentUserId: 'user_1',
+            shouldStick,
+            visible,
+          },
+          {
+            recordTiming: (_clientId, event) => {
+              state.timing.push(event);
+            },
+            saveMessage,
+            upsertMessage: upsert,
+            updateConversationPreview,
+            setUnseenBelow: () => {
+              state.calls.unseenUpdates += 1;
+              state.unseenBelow = true;
+            },
+            sendReceipts,
+          },
+          notificationEventIds,
+        );
+
+      const deliverNotification = (message: Message, eventId?: string): boolean =>
+        applyRealtimeMessageNotification(
+          { conversationId: message.conversationId, message },
+          eventId ? { eventId } : undefined,
+          notificationEventIds,
+          {
+            activeConversationId,
+            currentUserId: 'user_1',
+            visible,
+            conversationKnown,
+          },
+          {
+            saveMessage,
+            upsertActiveMessage: upsert,
+            sendReceipts,
+            updateConversationPreview,
+            refreshConversations: () => {
+              state.refreshes += 1;
+            },
+          },
+          messageEventIds,
+        );
+
+      const snapshot = () => ({
+        messageIds: state.messages.map((message) => message.id),
+        cacheIds: [...state.cache.keys()],
+        previewId: state.preview?.id,
+        timing: [...state.timing],
+        unseenBelow: state.unseenBelow,
+        receipts: state.receipts,
+      });
+
+      return { state, deliverMessage, deliverNotification, snapshot };
+    };
+
+    test('message then notification yields one message and keeps handler side effects', () => {
+      const harness = createHarness({ shouldStick: false });
+      const message = createMessage();
+
+      assert.equal(harness.deliverMessage(message, 'event-1'), true);
+      assert.equal(harness.deliverNotification(message, 'event-1'), true);
+
+      assert.deepEqual(harness.state.messages.map((item) => item.id), ['msg_dedupe']);
+      assert.deepEqual([...harness.state.cache.keys()], ['msg_dedupe']);
+      assert.equal(harness.state.preview?.id, 'msg_dedupe');
+      assert.deepEqual(harness.state.timing, ['recipientEventPublished', 'recipientReceived']);
+      assert.equal(harness.state.unseenBelow, true);
+      assert.deepEqual(harness.state.receipts, [
+        { conversationId: 'conv_dedupe', type: 'read', ids: ['msg_dedupe'] },
+      ]);
+      assert.deepEqual(harness.state.calls, {
+        cacheSaves: 1,
+        previewUpdates: 1,
+        upserts: 1,
+        receiptRequests: 1,
+        receiptSends: 1,
+        unseenUpdates: 1,
+      });
+    });
+
+    test('notification then message produces the same state without losing message handling', () => {
+      const message = createMessage();
+      const messageFirst = createHarness({ shouldStick: false });
+      assert.equal(messageFirst.deliverMessage(message, 'event-1'), true);
+      assert.equal(messageFirst.deliverNotification(message, 'event-1'), true);
+
+      const notificationFirst = createHarness({ shouldStick: false });
+      assert.equal(notificationFirst.deliverNotification(message, 'event-1'), true);
+      assert.equal(notificationFirst.deliverMessage(message, 'event-1'), true);
+
+      assert.deepEqual(notificationFirst.snapshot(), messageFirst.snapshot());
+      assert.deepEqual(notificationFirst.state.timing, [
+        'recipientEventPublished',
+        'recipientReceived',
+      ]);
+      assert.equal(notificationFirst.state.unseenBelow, true);
+      assert.deepEqual(notificationFirst.state.receipts, [
+        { conversationId: 'conv_dedupe', type: 'read', ids: ['msg_dedupe'] },
+      ]);
+      assert.deepEqual(notificationFirst.state.calls, {
+        cacheSaves: 1,
+        previewUpdates: 1,
+        upserts: 2,
+        receiptRequests: 2,
+        receiptSends: 1,
+        unseenUpdates: 1,
+      });
+    });
+
+    test('duplicate notifications do not duplicate cache, insertion, or receipts', () => {
+      const harness = createHarness({ conversationKnown: false });
+      const message = createMessage();
+
+      assert.equal(harness.deliverNotification(message, 'notification-1'), true);
+      assert.equal(harness.deliverNotification(message, 'notification-1'), false);
+
+      assert.deepEqual(harness.state.messages.map((item) => item.id), ['msg_dedupe']);
+      assert.deepEqual([...harness.state.cache.keys()], ['msg_dedupe']);
+      assert.equal(harness.state.receipts.length, 1);
+      assert.equal(harness.state.timing.length, 0);
+      assert.equal(harness.state.refreshes, 2);
+      assert.deepEqual(harness.state.calls, {
+        cacheSaves: 1,
+        previewUpdates: 1,
+        upserts: 1,
+        receiptRequests: 1,
+        receiptSends: 1,
+        unseenUpdates: 0,
+      });
+    });
+
+    test('duplicate message events are ignored without duplicate message handling', () => {
+      const harness = createHarness({ shouldStick: false });
+      const message = createMessage();
+
+      assert.equal(harness.deliverMessage(message, 'message-1'), true);
+      assert.equal(harness.deliverMessage(message, 'message-1'), false);
+
+      assert.deepEqual(harness.state.messages.map((item) => item.id), ['msg_dedupe']);
+      assert.deepEqual([...harness.state.cache.keys()], ['msg_dedupe']);
+      assert.deepEqual(harness.state.timing, ['recipientEventPublished', 'recipientReceived']);
+      assert.equal(harness.state.receipts.length, 1);
+      assert.deepEqual(harness.state.calls, {
+        cacheSaves: 1,
+        previewUpdates: 1,
+        upserts: 1,
+        receiptRequests: 1,
+        receiptSends: 1,
+        unseenUpdates: 1,
+      });
+    });
+
+    test('missing event IDs retain existing non-deduplicated behavior', () => {
+      const harness = createHarness({ shouldStick: false });
+      const message = createMessage();
+
+      assert.equal(harness.deliverNotification(message), true);
+      assert.equal(harness.deliverMessage(message), true);
+      assert.equal(harness.deliverMessage(message), true);
+
+      assert.deepEqual(harness.state.messages.map((item) => item.id), ['msg_dedupe']);
+      assert.deepEqual([...harness.state.cache.keys()], ['msg_dedupe']);
+      assert.deepEqual(harness.state.timing, [
+        'recipientEventPublished',
+        'recipientReceived',
+        'recipientEventPublished',
+        'recipientReceived',
+      ]);
+      assert.deepEqual(harness.state.calls, {
+        cacheSaves: 3,
+        previewUpdates: 3,
+        upserts: 3,
+        receiptRequests: 3,
+        receiptSends: 1,
+        unseenUpdates: 2,
+      });
+    });
+  });
+
 });

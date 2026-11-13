@@ -6,32 +6,50 @@ export function useKeyboardHeight(): number {
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
+    const viewport = window.visualViewport;
+    let baselineHeight = viewport?.height ?? window.innerHeight;
+    let baselineWidth = window.innerWidth;
+    let orientationFrame = 0;
+    let orientationResizePending = false;
+
     const handleResize = () => {
-      const viewport = window.visualViewport;
-      if (!viewport) {
+      const currentViewport = window.visualViewport;
+      const currentHeight = currentViewport?.height ?? window.innerHeight;
+
+      if (Math.abs(window.innerWidth - baselineWidth) > 1) {
+        baselineWidth = window.innerWidth;
+        orientationResizePending = true;
         setKeyboardHeight(0);
+        if (orientationFrame) window.cancelAnimationFrame(orientationFrame);
+        orientationFrame = window.requestAnimationFrame(() => {
+          baselineHeight = window.visualViewport?.height ?? window.innerHeight;
+          orientationResizePending = false;
+          orientationFrame = 0;
+          setKeyboardHeight(0);
+        });
         return;
       }
-      const height = window.innerHeight - viewport.height;
-      setKeyboardHeight(Math.max(0, height));
+      if (orientationResizePending) return;
+
+      baselineHeight = Math.max(baselineHeight, currentHeight);
+      setKeyboardHeight(
+        Math.max(0, baselineHeight - currentHeight, window.innerHeight - currentHeight),
+      );
     };
 
-    const viewport = window.visualViewport;
+    window.addEventListener('resize', handleResize);
     if (viewport) {
       viewport.addEventListener('resize', handleResize);
       viewport.addEventListener('scroll', handleResize);
-      handleResize();
-    } else {
-      window.addEventListener('resize', handleResize);
-      handleResize();
     }
+    handleResize();
 
     return () => {
+      if (orientationFrame) window.cancelAnimationFrame(orientationFrame);
+      window.removeEventListener('resize', handleResize);
       if (viewport) {
         viewport.removeEventListener('resize', handleResize);
         viewport.removeEventListener('scroll', handleResize);
-      } else {
-        window.removeEventListener('resize', handleResize);
       }
     };
   }, []);

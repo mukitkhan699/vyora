@@ -8,6 +8,7 @@ import { config } from './config.ts';
 import { closeDatabase } from './db/pool.ts';
 import { closeStorage } from './storage/b2.ts';
 import { initializeBackend } from './bootstrap.ts';
+import { startRealtimeOutboxDispatcher } from './realtime-outbox.ts';
 import { attachRealtimeServer, closeRealtimeServer } from './realtime.ts';
 import { handleApiRequest } from './routes/api.ts';
 import {
@@ -199,7 +200,6 @@ export function createServer() {
   server.keepAliveTimeout = 5_000;
   server.maxHeadersCount = 100;
   server.timeout = 30_000;
-  attachRealtimeServer(server);
   return server;
 }
 
@@ -208,6 +208,8 @@ export async function startServer(): Promise<void> {
   const port = Number(process.env.PORT) || config.port || 3000;
   const host = process.env.HOST || '0.0.0.0';
   const server = createServer();
+  await attachRealtimeServer(server);
+  const stopOutboxDispatcher = startRealtimeOutboxDispatcher();
 
   server.listen(port, host, () => {
     console.log(`${config.appName} server listening on http://${host}:${port}`);
@@ -219,7 +221,6 @@ export async function startServer(): Promise<void> {
     process.on(signal, () => {
       if (shuttingDown) return;
       shuttingDown = true;
-      stopCleanup();
       try {
         server.closeIdleConnections?.();
         server.closeAllConnections?.();
@@ -227,6 +228,8 @@ export async function startServer(): Promise<void> {
         // Ignore.
       }
       void (async () => {
+        await stopOutboxDispatcher();
+        await stopCleanup();
         await closeRealtimeServer();
         await Promise.all([closeDatabase(), Promise.resolve(closeStorage())]);
         process.exit(0);
