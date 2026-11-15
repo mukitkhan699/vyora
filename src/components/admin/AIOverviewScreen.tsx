@@ -15,7 +15,7 @@ import {
   BarChart2
 } from 'lucide-react';
 import { Card } from '../common/Card.tsx';
-import { Badge }}>{badge}`)
+import { Badge } from '../common/Badge.tsx';
 import { Button } from '../common/Button.tsx';
 import { adminApi } from '../../services/adminApi.ts';
 
@@ -34,14 +34,14 @@ export const AIOverviewScreen: React.FC = () => {
 
   useEffect(() => {
     // AI API is not configured per requirements - return empty state
-    const mockData: AIOverviewData = {
+    const emptyStateData: AIOverviewData = {
       totalAIRequests: 0,
       totalAICosts: 0,
       averageLatency: 0,
       budgetRemaining: 0,
       budgetPercentage: 0,
     };
-    setData(mockData);
+    setData(emptyStateData);
     setLoading(false);
   }, []);
 

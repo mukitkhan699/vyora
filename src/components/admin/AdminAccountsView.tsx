@@ -24,7 +24,7 @@ const getRoleBadge = (role: AdminRole | null) => {
     super_admin: { label: 'Super Admin', color: 'gold' },
     admin: { label: 'Admin', color: 'violet' },
     moderator: { label: 'Moderator', color: 'blue' },
-    verification_manager: { label: 'Verification', color: 'amber' },
+    verification_manager: { label: 'Verification Manager', color: 'amber' },
     analyst: { label: 'Analyst', color: 'cyan' },
   };
   const badge = badges[role];
@@ -50,9 +50,19 @@ export const AdminAccountsView: React.FC = () => {
   const [roleFilter, setRoleFilter] = useState<AdminRole | ''>('');
   const [selectedAdmin, setSelectedAdmin] = useState<AdminUserListItem | null>(null);
   const [showRoleModal, setShowRoleModal] = useState(false);
+  const [pendingRole, setPendingRole] = useState<AdminRole | null | undefined>(undefined);
+  const [roleConfirmPassword, setRoleConfirmPassword] = useState('');
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showRevokeDialog, setShowRevokeDialog] = useState(false);
+  const [revokeTarget, setRevokeTarget] = useState<AdminUserListItem | null>(null);
+  const [revokePassword, setRevokePassword] = useState('');
   const [newAdminUsername, setNewAdminUsername] = useState('');
+  const [newAdminEmail, setNewAdminEmail] = useState('');
+  const [newAdminPassword, setNewAdminPassword] = useState('');
+  const [newAdminName, setNewAdminName] = useState('');
   const [newAdminRole, setNewAdminRole] = useState<AdminRole>('admin');
+  const [createPassword, setCreatePassword] = useState('');
+  const [creating, setCreating] = useState(false);
 
   const fetchAdmins = async () => {
     try {
@@ -77,9 +87,13 @@ export const AdminAccountsView: React.FC = () => {
     fetchAdmins();
   }, [page, pageSize, search, roleFilter]);
 
-  const handleRoleChange = async (admin: AdminUserListItem, newRole: AdminRole | null) => {
+  const handleRoleChange = async (admin: AdminUserListItem, newRole: AdminRole | null, confirmPassword?: string) => {
     try {
-      await adminApi.updateUserRole(admin.public_id, newRole);
+      await adminApi.updateUserRole(admin.public_id, newRole, confirmPassword);
+      setShowRoleModal(false);
+      setSelectedAdmin(null);
+      setPendingRole(undefined);
+      setRoleConfirmPassword('');
       fetchAdmins();
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to update role');
@@ -87,26 +101,110 @@ export const AdminAccountsView: React.FC = () => {
   };
 
   const handleRevokeAdmin = async (admin: AdminUserListItem) => {
-    if (!confirm(`Revoke admin privileges for @${admin.username}?`)) return;
+    setRevokeTarget(admin);
+    setRevokePassword('');
+    setShowRevokeDialog(true);
+  };
+
+  const handleConfirmRevoke = async () => {
+    if (!revokeTarget) return;
+    if (!revokePassword.trim()) {
+      alert('Your current admin password is required to revoke admin privileges.');
+      return;
+    }
     try {
-      await adminApi.updateUserRole(admin.public_id, null);
+      await adminApi.updateUserRole(revokeTarget.public_id, null, revokePassword);
+      setShowRevokeDialog(false);
+      setRevokeTarget(null);
+      setRevokePassword('');
       fetchAdmins();
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to revoke admin');
     }
   };
 
+  const openCreateModal = () => {
+    setNewAdminUsername('');
+    setNewAdminEmail('');
+    setNewAdminPassword('');
+    setNewAdminName('');
+    setNewAdminRole('admin');
+    setCreatePassword('');
+    setError(null);
+    setShowCreateModal(true);
+  };
+
   const handleCreateAdmin = async () => {
-    if (!newAdminUsername.trim()) return;
-    try {
-      // Note: Creating admin accounts would need a backend endpoint
-      // For now, we just show an alert
-      alert('Creating admin accounts requires backend endpoint implementation');
-      setShowCreateModal(false);
-      setNewAdminUsername('');
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to create admin');
+    if (!newAdminUsername.trim()) {
+      setError('Username is required.');
+      return;
     }
+    if (!newAdminEmail.trim()) {
+      setError('Email is required.');
+      return;
+    }
+    const emailPattern = /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
+    if (!emailPattern.test(newAdminEmail)) {
+      setError('A valid email address is required.');
+      return;
+    }
+    if (!newAdminPassword.trim()) {
+      setError('Password is required.');
+      return;
+    }
+    if (newAdminPassword.length < 8) {
+      setError('Password must be at least 8 characters.');
+      return;
+    }
+    if (!/[A-Z]/.test(newAdminPassword)) {
+      setError('Password must contain at least one uppercase letter.');
+      return;
+    }
+    if (!/[a-z]/.test(newAdminPassword)) {
+      setError('Password must contain at least one lowercase letter.');
+      return;
+    }
+    if (!/[0-9]/.test(newAdminPassword)) {
+      setError('Password must contain at least one number.');
+      return;
+    }
+    if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(newAdminPassword)) {
+      setError('Password must contain at least one special character.');
+      return;
+    }
+    if (!createPassword.trim()) {
+      setError('Your current admin password is required to create an admin account.');
+      return;
+    }
+    setCreating(true);
+    setError(null);
+    try {
+      await adminApi.createAdminUser({
+        username: newAdminUsername.trim(),
+        email: newAdminEmail.trim().toLowerCase(),
+        password: newAdminPassword,
+        name: newAdminName.trim() || newAdminUsername.trim(),
+        adminRole: newAdminRole,
+        confirmPassword: createPassword,
+      });
+      setShowCreateModal(false);
+      setCreating(false);
+      fetchAdmins();
+    } catch (err) {
+      setCreating(false);
+      setError(err instanceof Error ? err.message : 'Failed to create admin account');
+    }
+  };
+
+  const closeCreateModal = () => {
+    setShowCreateModal(false);
+    setNewAdminUsername('');
+    setNewAdminEmail('');
+    setNewAdminPassword('');
+    setNewAdminName('');
+    setNewAdminRole('admin');
+    setCreatePassword('');
+    setError(null);
   };
 
   const roleOptions = [
@@ -149,7 +247,7 @@ export const AdminAccountsView: React.FC = () => {
           <h1 className="text-2xl font-bold text-white">Admin Accounts</h1>
           <p className="mt-1 text-neutral-400">Manage administrator accounts and privileges</p>
         </div>
-        <Button onClick={() => setShowCreateModal(true)}>
+        <Button onClick={openCreateModal}>
           <UserPlus className="h-4 w-4 mr-2" />
           Add Admin
         </Button>
@@ -235,7 +333,12 @@ export const AdminAccountsView: React.FC = () => {
                     <td className="px-4 py-3 text-right pr-4">
                       <div className="flex items-center justify-end gap-2">
                         <button
-                          onClick={() => { setSelectedAdmin(admin); setShowRoleModal(true); }}
+                          onClick={() => {
+                            setSelectedAdmin(admin);
+                            setPendingRole(admin.admin_role ?? undefined);
+                            setRoleConfirmPassword('');
+                            setShowRoleModal(true);
+                          }}
                           className="p-2 rounded-lg text-neutral-400 hover:text-white hover:bg-white/10 transition-colors"
                           title="Change Role"
                         >
@@ -257,6 +360,133 @@ export const AdminAccountsView: React.FC = () => {
           </table>
         </div>
       </Card>
+      {/* Revoke Admin Confirmation Dialog */}
+      {showRevokeDialog && revokeTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0a0f18]/95 p-6 shadow-2xl animate-in zoom-in-95 duration-200">
+            <h2 className="text-lg font-bold text-white mb-4">Revoke Admin for @{revokeTarget.username}</h2>
+            <p className="text-sm text-neutral-400 mb-6">
+              Revoking admin privileges requires step-up authentication. Enter your current admin password to confirm.
+            </p>
+            <Input
+              type="password"
+              value={revokePassword}
+              onChange={(e) => setRevokePassword(e.target.value)}
+              placeholder="Your current admin password"
+              className="mb-4"
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => { setShowRevokeDialog(false); setRevokeTarget(null); setRevokePassword(''); }}>Cancel</Button>
+              <Button variant="danger" onClick={handleConfirmRevoke} disabled={!revokePassword.trim()}>
+                Revoke Admin
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Change Role Dialog */}
+      {showRoleModal && selectedAdmin && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0a0f18]/95 p-6 shadow-2xl animate-in zoom-in-95 duration-200">
+            <h2 className="text-lg font-bold text-white mb-4">Change Role for @{selectedAdmin.username}</h2>
+            <p className="text-sm text-neutral-400 mb-6">
+              Role changes require step-up authentication. Select the new role and enter your current admin password to confirm.
+            </p>
+            <Select
+              value={pendingRole ?? selectedAdmin.admin_role ?? ''}
+              onChange={(e) => setPendingRole((e.target.value || null) as AdminRole | null)}
+              options={[
+                { value: '', label: 'Remove Admin Role' },
+                { value: 'super_admin', label: 'Super Admin' },
+                { value: 'admin', label: 'Admin' },
+                { value: 'moderator', label: 'Moderator' },
+                { value: 'verification_manager', label: 'Verification Manager' },
+                { value: 'analyst', label: 'Analyst' },
+              ]}
+              className="mb-4"
+            />
+            <Input
+              type="password"
+              value={roleConfirmPassword}
+              onChange={(e) => setRoleConfirmPassword(e.target.value)}
+              placeholder="Your current admin password"
+              className="mb-4"
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => { setShowRoleModal(false); setSelectedAdmin(null); setPendingRole(undefined); setRoleConfirmPassword(''); }}>Cancel</Button>
+              <Button
+                onClick={() => handleRoleChange(selectedAdmin, pendingRole ?? selectedAdmin.admin_role ?? null, roleConfirmPassword || undefined)}
+                disabled={pendingRole === undefined || pendingRole === selectedAdmin.admin_role || !roleConfirmPassword.trim()}
+              >
+                Save Role
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Create Admin Dialog */}
+      {showCreateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0a0f18]/95 p-6 shadow-2xl animate-in zoom-in-95 duration-200">
+            <h2 className="text-lg font-bold text-white mb-4">Create Admin Account</h2>
+            <p className="text-sm text-neutral-400 mb-6">
+              Creating an admin account is restricted to super admins and requires step-up authentication.
+            </p>
+            <Input
+              value={newAdminUsername}
+              onChange={(e) => setNewAdminUsername(e.target.value)}
+              placeholder="Username"
+              className="mb-3"
+            />
+            <Input
+              type="email"
+              value={newAdminEmail}
+              onChange={(e) => setNewAdminEmail(e.target.value)}
+              placeholder="Email address"
+              className="mb-3"
+            />
+            <Input
+              value={newAdminName}
+              onChange={(e) => setNewAdminName(e.target.value)}
+              placeholder="Full name (optional)"
+              className="mb-3"
+            />
+            <Input
+              type="password"
+              value={newAdminPassword}
+              onChange={(e) => setNewAdminPassword(e.target.value)}
+              placeholder="New admin password (8+ chars, upper/lower/digit/special)"
+              className="mb-3"
+            />
+            <Select
+              value={newAdminRole}
+              onChange={(e) => setNewAdminRole(e.target.value as AdminRole)}
+              options={roleOptions.filter(o => o.value !== '')}
+              className="mb-3"
+            />
+            <Input
+              type="password"
+              value={createPassword}
+              onChange={(e) => setCreatePassword(e.target.value)}
+              placeholder="Your current admin password (step-up)"
+              className="mb-4"
+            />
+            {error && (
+              <div className="mb-4 rounded-xl border border-rose-500/20 bg-rose-500/10 p-3 text-rose-300 text-sm">
+                {error}
+              </div>
+            )}
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={closeCreateModal} disabled={creating}>
+                Cancel
+              </Button>
+              <Button onClick={handleCreateAdmin} disabled={creating}>
+                {creating ? 'Creating...' : 'Create Admin'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

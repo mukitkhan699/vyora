@@ -1,5 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import '../index.css';
 import { ThemeProvider } from '../context/ThemeContext.tsx';
 import { AuthProvider, useAuth } from '../context/AuthContext.tsx';
 import { AdminRoute } from '../components/admin/AdminRoute.tsx';
@@ -13,6 +14,18 @@ import { ReportsView } from '../components/admin/ReportsView.tsx';
 import { AuditLogView as AuditLogViewFull } from '../components/admin/AuditLogView.tsx';
 import { AdminAccountsView } from '../components/admin/AdminAccountsView.tsx';
 import { AdminSettingsView } from '../components/admin/AdminSettingsView.tsx';
+import { NotificationSettingsScreen } from '../components/admin/NotificationSettingsScreen.tsx';
+import { ContentManagementScreen } from '../components/admin/ContentManagementScreen.tsx';
+import { PlatformAnalyticsScreen } from '../components/admin/PlatformAnalyticsScreen.tsx';
+import { SecurityEventsScreen } from '../components/admin/SecurityEventsScreen.tsx';
+import { SystemHealthScreen } from '../components/admin/SystemHealthScreen.tsx';
+import { AIOverviewScreen } from '../components/admin/AIOverviewScreen.tsx';
+import { AIConfigurationScreen } from '../components/admin/AIConfigurationScreen.tsx';
+import { AIProvidersScreen } from '../components/admin/AIProvidersScreen.tsx';
+import { AIUsageScreen } from '../components/admin/AIUsageScreen.tsx';
+import { AIUserUsageScreen } from '../components/admin/AIUserUsageScreen.tsx';
+import { AICostsScreen } from '../components/admin/AICostsScreen.tsx';
+import { AIPerformanceScreen } from '../components/admin/AIPerformanceScreen.tsx';
 import { Loader, AlertCircle } from 'lucide-react';
 import { AppConfig } from '../types/index.tsx';
 
@@ -55,12 +68,36 @@ function AdminApp({ appConfig }: AdminAppProps) {
         return <GoldMembershipView />;
       case 'reports':
         return <ReportsView />;
+      case 'analytics':
+        return <PlatformAnalyticsScreen />;
       case 'audit':
         return <AuditLogViewFull />;
+      case 'security':
+        return <SecurityEventsScreen />;
       case 'admin-accounts':
         return <AdminAccountsView />;
       case 'settings':
         return <AdminSettingsView />;
+      case 'notifications':
+        return <NotificationSettingsScreen />;
+      case 'content':
+        return <ContentManagementScreen />;
+      case 'health':
+        return <SystemHealthScreen />;
+      case 'ai-overview':
+        return <AIOverviewScreen />;
+      case 'ai-providers':
+        return <AIProvidersScreen />;
+      case 'ai-usage':
+        return <AIUsageScreen />;
+      case 'ai-users':
+        return <AIUserUsageScreen />;
+      case 'ai-costs':
+        return <AICostsScreen />;
+      case 'ai-performance':
+        return <AIPerformanceScreen />;
+      case 'ai-config':
+        return <AIConfigurationScreen />;
       default:
         return (
           <div className="p-6 text-center text-neutral-500">

@@ -37,6 +37,10 @@ export const GoldMembershipView: React.FC = () => {
   const [pageSize, setPageSize] = useState(25);
   const [search, setSearch] = useState('');
   const [goldFilter, setGoldFilter] = useState<'all' | 'gold' | 'none'>('all');
+  const [selectedUser, setSelectedUser] = useState<AdminUserListItem | null>(null);
+  const [showGoldModal, setShowGoldModal] = useState(false);
+  const [goldPassword, setGoldPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   const fetchUsers = async () => {
     try {
@@ -64,10 +68,39 @@ export const GoldMembershipView: React.FC = () => {
     fetchUsers();
   }, [page, pageSize, search, goldFilter]);
 
-  const handleGoldToggle = async (user: AdminUserListItem) => {
-    // Note: Gold membership toggle would need a separate backend endpoint
-    // For now, we just show the current status
-    alert('Gold membership management requires backend endpoint implementation');
+  const openGoldModal = (user: AdminUserListItem) => {
+    setSelectedUser(user);
+    setGoldPassword('');
+    setShowGoldModal(true);
+  };
+
+  const handleConfirm = async () => {
+    if (!selectedUser) return;
+    if (!goldPassword.trim()) {
+      setError('Your current admin password is required.');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const isGold = !selectedUser.is_gold;
+      await adminApi.updateUserGold(selectedUser.public_id, isGold, goldPassword);
+      setShowGoldModal(false);
+      setSelectedUser(null);
+      setGoldPassword('');
+      setSubmitting(false);
+      fetchUsers();
+    } catch (err) {
+      setSubmitting(false);
+      setError(err instanceof Error ? err.message : 'Gold membership update failed');
+    }
+  };
+
+  const handleCancel = () => {
+    setShowGoldModal(false);
+    setSelectedUser(null);
+    setGoldPassword('');
+    setError(null);
   };
 
   if (loading && users.length === 0) {
@@ -236,7 +269,7 @@ export const GoldMembershipView: React.FC = () => {
                     <td className="px-4 py-3 text-right pr-4">
                       <div className="flex items-center justify-end gap-2">
                         <button
-                          onClick={() => handleGoldToggle(user)}
+                          onClick={() => openGoldModal(user)}
                           className="p-2 rounded-lg text-neutral-400 hover:text-amber-400 hover:bg-amber-500/10 transition-colors"
                           title={user.is_gold ? 'Remove Gold' : 'Grant Gold'}
                         >
@@ -251,6 +284,38 @@ export const GoldMembershipView: React.FC = () => {
           </table>
         </div>
       </Card>
+
+      {/* Gold Membership Confirmation Dialog */}
+      {showGoldModal && selectedUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0a0f18]/95 p-6 shadow-2xl animate-in zoom-in-95 duration-200">
+            <h2 className="text-lg font-bold text-white mb-4">
+              {selectedUser.is_gold ? 'Remove Gold Membership' : 'Grant Gold Membership'}
+            </h2>
+            <p className="text-sm text-neutral-400 mb-6">
+              This action requires step-up authentication. Enter your current admin password to confirm.
+            </p>
+            <Input
+              type="password"
+              value={goldPassword}
+              onChange={(e) => setGoldPassword(e.target.value)}
+              placeholder="Your current admin password"
+              className="mb-4"
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={handleCancel} disabled={submitting}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleConfirm}
+                disabled={submitting || !goldPassword.trim()}
+              >
+                {submitting ? 'Processing...' : 'Confirm'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

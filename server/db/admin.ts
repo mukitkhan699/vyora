@@ -130,6 +130,89 @@ export async function getAdminUsers(
   return { users: usersResult.rows, total };
 }
 
+interface AdminPostRow extends QueryResultRow {
+  id: string;
+  author_id: string;
+  content: string;
+  media_urls: string[];
+  reply_to_post_id: string | null;
+  quote_post_id: string | null;
+  created_at: number;
+  likes_count: number;
+  reposts_count: number;
+  replies_count: number;
+  views_count: number;
+  author_public_id: string;
+  author_username: string;
+  author_name: string;
+  author_avatar_url: string;
+  author_verified: boolean;
+  author_is_gold: boolean;
+}
+
+export async function getAdminPosts(
+  options: {
+    limit?: number;
+    offset?: number;
+    search?: string;
+    sortBy?: 'created_at' | 'likes_count' | 'replies_count';
+    sortOrder?: 'asc' | 'desc';
+  } = {},
+): Promise<{ posts: AdminPostRow[]; total: number }> {
+  const {
+    limit = 50,
+    offset = 0,
+    search = '',
+    sortBy = 'created_at',
+    sortOrder = 'desc',
+  } = options;
+
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  let paramIndex = 1;
+
+  if (search) {
+    conditions.push(`(
+      p.content ILIKE $${paramIndex} OR
+      a.username ILIKE $${paramIndex} OR
+      a.name ILIKE $${paramIndex}
+    )`);
+    params.push(`%${search}%`);
+    paramIndex++;
+  }
+
+  const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+  const allowedSortColumns = ['created_at', 'likes_count', 'replies_count'] as const;
+  const sortColumn = validateSortColumn(sortBy, allowedSortColumns);
+  const sortDirection = validateSortOrder(sortOrder) === 'asc' ? 'ASC' : 'DESC';
+
+  const countResult = await query<{ count: number }>(
+    `SELECT COUNT(*)::integer AS count
+     FROM zunari_posts p
+     JOIN zunari_users a ON a.public_id = p.author_id
+     ${whereClause}`,
+    params,
+  );
+  const total = Number(countResult.rows[0]?.count || 0);
+
+  const postsResult = await query<AdminPostRow>(
+    `SELECT
+       p.id, p.author_id, p.content, p.media_urls, p.reply_to_post_id, p.quote_post_id,
+       p.created_at, p.likes_count, p.reposts_count, p.replies_count, p.views_count,
+       a.public_id AS author_public_id, a.username AS author_username, a.name AS author_name,
+       a.avatar_url AS author_avatar_url, a.verified AS author_verified, a.is_gold AS author_is_gold
+     FROM zunari_posts p
+     JOIN zunari_users a ON a.public_id = p.author_id
+     ${whereClause}
+     ORDER BY ${sortColumn} ${sortDirection}
+     LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+    [...params, limit, offset],
+  );
+
+  return { posts: postsResult.rows, total };
+}
+
 export async function getAdminUserDetail(publicId: string): Promise<{
   user: AdminUserRow | null;
   sessionCount: number;
@@ -289,6 +372,113 @@ export async function getAuditLog(
   return { logs: logsResult.rows, total };
 }
 
+export const SECURITY_ACTIONS = [
+  'admin.session.revoke',
+  'admin.session.revoke_all',
+  'admin.role.grant',
+  'admin.role.revoke',
+  'user.suspend',
+  'report.user.create',
+  'report.user.reviewed',
+  'report.user.dismissed',
+  'report.user.action_taken',
+  'report.post.create',
+  'report.post.reviewed',
+  'report.post.dismissed',
+  'report.post.action_taken',
+  'bootstrap.super_admin',
+  'admin.login.failed',
+  'admin.login.success',
+  'admin.logout',
+  'admin.session.create',
+  'admin.permission.denied',
+];
+
+interface SecurityEventRow extends QueryResultRow {
+  id: string;
+  admin_id: string | null;
+  admin_username: string | null;
+  action: string;
+  target_type: string;
+  target_id: string;
+  metadata: Record<string, unknown>;
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: number;
+}
+
+export async function getSecurityEvents(
+  options: {
+    limit?: number;
+    offset?: number;
+    search?: string;
+    adminId?: string;
+    startDate?: number;
+    endDate?: number;
+    sortOrder?: 'asc' | 'desc';
+  } = {},
+): Promise<{ events: SecurityEventRow[]; total: number }> {
+  const {
+    limit = 100,
+    offset = 0,
+    search = '',
+    adminId = null,
+    startDate = null,
+    endDate = null,
+    sortOrder = 'desc',
+  } = options;
+
+  const conditions: string[] = [`a.action = ANY($${1})`];
+  const params: unknown[] = [SECURITY_ACTIONS];
+  let paramIndex = 2;
+
+  if (adminId) {
+    conditions.push(`a.admin_id = $${paramIndex}`);
+    params.push(adminId);
+    paramIndex++;
+  }
+
+  if (search) {
+    conditions.push(`a.action ILIKE $${paramIndex}`);
+    params.push(`%${search}%`);
+    paramIndex++;
+  }
+
+  if (startDate) {
+    conditions.push(`a.created_at >= $${paramIndex}`);
+    params.push(startDate);
+    paramIndex++;
+  }
+
+  if (endDate) {
+    conditions.push(`a.created_at <= $${paramIndex}`);
+    params.push(endDate);
+    paramIndex++;
+  }
+
+  const whereClause = `WHERE ${conditions.join(' AND ')}`;
+  const sortDirection = validateSortOrder(sortOrder) === 'asc' ? 'ASC' : 'DESC';
+
+  const countResult = await query<{ count: number }>(
+    `SELECT COUNT(*)::integer AS count FROM zunari_admin_audit_log a ${whereClause}`,
+    params,
+  );
+  const total = Number(countResult.rows[0]?.count || 0);
+
+  const eventsResult = await query<SecurityEventRow>(
+    `SELECT
+       a.*, u.username AS admin_username
+     FROM zunari_admin_audit_log a
+     LEFT JOIN zunari_users u ON u.public_id = a.admin_id
+     ${whereClause}
+     ORDER BY a.created_at ${sortDirection}, a.id ${sortDirection}
+     LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
+    [...params, limit, offset],
+  );
+
+  return { events: eventsResult.rows, total };
+}
+
 export async function getAdminRolePermissions(): Promise<{
   role: AdminRole;
   permissions: Record<string, unknown>;
@@ -303,18 +493,37 @@ export async function getAdminRolePermissions(): Promise<{
 }
 
 export async function updateAdminRolePermissions(
+  actingAdminId: string,
   role: AdminRole,
   permissions: Record<string, unknown>,
   description: string,
+  req?: { socket?: { remoteAddress?: string | null }; headers?: { 'user-agent'?: string | null } },
 ): Promise<void> {
   if (role === 'super_admin') {
     throw new HttpError(403, 'Cannot modify super_admin permissions.', 'SUPER_ADMIN_IMMUTABLE');
   }
   validateAdminPermissions(permissions);
-  await query(
-    'UPDATE zunari_admin_role_permissions SET permissions = $1, description = $2 WHERE role = $3',
-    [JSON.stringify(permissions), description, role],
-  );
+  await withTransaction(async (connection) => {
+    await connection.query(
+      'UPDATE zunari_admin_role_permissions SET permissions = $1, description = $2 WHERE role = $3',
+      [JSON.stringify(permissions), description, role],
+    );
+    await connection.query(
+      `INSERT INTO zunari_admin_audit_log (id, admin_id, action, target_type, target_id, metadata, ip_address, user_agent, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        `audit_${randomUUID()}`,
+        actingAdminId,
+        'admin.permission.updated',
+        'role',
+        role,
+        JSON.stringify({ new_permissions: permissions, description }),
+        req?.socket?.remoteAddress || null,
+        req?.headers?.['user-agent'] || null,
+        Date.now(),
+      ],
+    );
+  });
 }
 
 function validateAdminPermissions(permissions: Record<string, unknown>): void {

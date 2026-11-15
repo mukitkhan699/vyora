@@ -15,6 +15,12 @@ import {
   Crown,
   Users2,
   FileText as FileTextIcon,
+  Bell,
+  Sparkles,
+  Plug,
+  TableProperties,
+  Wallet,
+  Cpu,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { adminApi, AdminRole } from '../../services/adminApi.ts';
@@ -35,8 +41,20 @@ const adminNavItems = [
   { id: 'gold', label: 'Gold Membership', icon: Award, roles: ['super_admin', 'admin'] as AdminRole[] },
   { id: 'reports', label: 'Reports', icon: Flag, roles: ['super_admin', 'admin', 'moderator'] as AdminRole[] },
   { id: 'audit', label: 'Audit Log', icon: History, roles: ['super_admin', 'admin', 'moderator', 'verification_manager', 'analyst'] as AdminRole[] },
+  { id: 'security', label: 'Security Events', icon: Shield, roles: ['super_admin', 'admin', 'moderator', 'verification_manager', 'analyst'] as AdminRole[] },
   { id: 'admin-accounts', label: 'Admin Accounts', icon: Users2, roles: ['super_admin', 'admin'] as AdminRole[] },
   { id: 'settings', label: 'Settings', icon: Settings, roles: ['super_admin', 'admin'] as AdminRole[] },
+  { id: 'notifications', label: 'Notification Settings', icon: Bell, roles: ['super_admin', 'admin'] as AdminRole[] },
+  { id: 'content', label: 'Content Management', icon: FileText, roles: ['super_admin', 'admin', 'moderator'] as AdminRole[] },
+  { id: 'analytics', label: 'Platform Analytics', icon: BarChart2, roles: ['super_admin', 'admin', 'analyst'] as AdminRole[] },
+  { id: 'health', label: 'System Health', icon: Activity, roles: ['super_admin', 'admin'] as AdminRole[] },
+  { id: 'ai-overview', label: 'AI Overview', icon: Sparkles, roles: ['super_admin', 'admin', 'analyst'] as AdminRole[] },
+  { id: 'ai-providers', label: 'Providers & Models', icon: Plug, roles: ['super_admin', 'admin'] as AdminRole[] },
+  { id: 'ai-usage', label: 'Usage Explorer', icon: TableProperties, roles: ['super_admin', 'admin', 'analyst'] as AdminRole[] },
+  { id: 'ai-users', label: 'User & Feature Usage', icon: Users2, roles: ['super_admin', 'admin', 'analyst'] as AdminRole[] },
+  { id: 'ai-costs', label: 'Costs & Budgets', icon: Wallet, roles: ['super_admin', 'admin', 'analyst'] as AdminRole[] },
+  { id: 'ai-performance', label: 'Performance & Errors', icon: Activity, roles: ['super_admin', 'admin', 'analyst'] as AdminRole[] },
+  { id: 'ai-config', label: 'AI Configuration', icon: Cpu, roles: ['super_admin', 'admin'] as AdminRole[] },
 ];
 
 export const AdminSidebar: React.FC<AdminSidebarProps> = ({

@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { query } from '../db/pool.ts';
+import { randomBytes } from 'node:crypto';
+import { query, withTransaction } from '../db/pool.ts';
 import {
   getAuthUser,
   requireSessionWithCsrf,
@@ -11,7 +12,7 @@ import {
 import {
   requireAdminSession,
   requireAdminSessionReadOnly,
-  requirePermission,
+  getAdminSession,
   logAdminAction,
   setUserAdminRole,
   suspendUser,
@@ -23,8 +24,10 @@ import {
 import {
   getAdminUsers,
   getAdminUserDetail,
+  getAdminPosts,
   getAdminStats,
   getAuditLog,
+  getSecurityEvents,
   getAdminRolePermissions,
   updateAdminRolePermissions,
   getActiveAdminSessions,
@@ -41,7 +44,13 @@ import {
   createPostReport,
 } from '../db/admin.ts';
 import { normalizeAuditExportLimit } from '../db/audit-export.ts';
-import { enforceRateLimits, hashRateLimitSubject, buildReportRateLimitRules } from '../rate-limit.ts';
+import {
+  enforceRateLimits,
+  hashRateLimitSubject,
+  buildReportRateLimitRules,
+  getClientIp,
+} from '../rate-limit.ts';
+import { config } from '../config.ts';
 import { HttpError } from '../errors.ts';
 
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
@@ -66,11 +75,11 @@ async function parseAdminRequest(req: IncomingMessage): Promise<Record<string, u
 }
 
 function getAdminIdFromSession(session: AdminSession): string {
-  return `user_auth_${session.userId}`;
+  return session.publicId;
 }
 
-function getClientIp(req: IncomingMessage): string {
-  return req.socket.remoteAddress || 'unknown';
+function truncate(value: string, maxLength = 255): string {
+  return value.length > maxLength ? value.slice(0, maxLength) : value;
 }
 
 function isValidAdminRole(role: string): role is AdminRole {
@@ -108,12 +117,25 @@ export async function handleAdminRequest(
       const password = String(body.password || '');
 
       if (!identifier || !password) {
+        try {
+          await logAdminAction(
+            null,
+            'admin.login.failed',
+            'auth',
+            'unknown',
+            { reason: 'missing_credentials', identifier: truncate(identifier) },
+            req,
+          );
+        } catch {
+          // Audit write failure must not affect the auth response.
+        }
         sendError(res, 400, 'Username or email and password are required.', 'MISSING_CREDENTIALS');
         return true;
       }
 
-      // Rate limit admin login attempts by IP
-      const clientIp = req.socket.remoteAddress || 'unknown';
+      // Rate limit admin login attempts by client IP. X-Forwarded-For is only
+      // consulted when TRUST_PROXY_HOPS explicitly declares trusted proxies.
+      const clientIp = getClientIp(req, config.trustProxyHops);
       const ipSubject = hashRateLimitSubject(clientIp);
       await enforceRateLimits([
         {
@@ -127,13 +149,14 @@ export async function handleAdminRequest(
 
       const userResult = await query<{
         id: number;
+        public_id: string;
         username: string;
         email: string | null;
         password_hash: string;
         admin_role: AdminRole | null;
         suspended_at: number | null;
       }>(
-        `SELECT id, username, email, password_hash, admin_role, suspended_at
+        `SELECT id, public_id, username, email, password_hash, admin_role, suspended_at
          FROM zunari_users
          WHERE (lower(username) = lower($1) OR lower(email) = lower($1))
          AND admin_role IS NOT NULL
@@ -143,11 +166,35 @@ export async function handleAdminRequest(
 
       const user = userResult.rows[0];
       if (!user) {
+        try {
+          await logAdminAction(
+            null,
+            'admin.login.failed',
+            'auth',
+            'unknown',
+            { reason: 'user_not_found', identifier: truncate(identifier) },
+            req,
+          );
+        } catch {
+          // Audit write failure must not affect the auth response.
+        }
         sendError(res, 401, 'Invalid admin credentials.', 'INVALID_ADMIN_CREDENTIALS');
         return true;
       }
 
       if (user.suspended_at) {
+        try {
+          await logAdminAction(
+            user.public_id,
+            'admin.login.failed',
+            'auth',
+            user.public_id,
+            { reason: 'account_suspended', identifier: truncate(identifier) },
+            req,
+          );
+        } catch {
+          // Audit write failure must not affect the auth response.
+        }
         sendError(res, 403, 'This admin account is suspended.', 'ADMIN_SUSPENDED');
         return true;
       }
@@ -155,20 +202,46 @@ export async function handleAdminRequest(
       const { verifyPassword } = await import('../auth.ts');
       const passwordOk = await verifyPassword(password, user.password_hash);
       if (!passwordOk) {
+        try {
+          await logAdminAction(
+            user.public_id,
+            'admin.login.failed',
+            'auth',
+            user.public_id,
+            { reason: 'invalid_password', identifier: truncate(identifier) },
+            req,
+          );
+        } catch {
+          // Audit write failure must not affect the auth response.
+        }
         sendError(res, 401, 'Invalid admin credentials.', 'INVALID_ADMIN_CREDENTIALS');
         return true;
       }
 
-      const adminSession = await import('../auth/admin.ts').then(m => m.createAdminSession(user.id, user.admin_role!, req));
+      const adminSession = await import('../auth/admin.ts').then(m => m.createAdminSession(user.id, user.public_id, user.admin_role!, req));
       adminSession.username = user.username;
       adminSession.email = user.email;
       const { setAdminSessionCookie } = await import('../auth/admin.ts');
       setAdminSessionCookie(req, res, adminSession);
 
+      try {
+        await logAdminAction(
+          user.public_id,
+          'admin.login.success',
+          'auth',
+          user.public_id,
+          {},
+          req,
+        );
+      } catch {
+        // Audit write failure must not affect the auth response.
+      }
+
       sendJson(res, 200, {
         authenticated: true,
         adminRole: user.admin_role,
         permissions: adminSession.permissions,
+        csrfToken: adminSession.csrfToken,
         expiresAt: adminSession.expiresAt,
         message: 'Admin login successful.',
       });
@@ -180,6 +253,18 @@ export async function handleAdminRequest(
       const session = await getAdminSession(req);
       if (session) {
         await query('DELETE FROM zunari_admin_sessions WHERE session_token_hash = $1', [session.tokenHash]);
+        try {
+          await logAdminAction(
+            session.publicId,
+            'admin.logout',
+            'admin_session',
+            session.publicId,
+            {},
+            req,
+          );
+        } catch {
+          // Audit write failure must not affect the auth response.
+        }
       }
       clearAdminSessionCookie(req, res);
       sendJson(res, 200, { success: true, message: 'Logged out.' });
@@ -244,6 +329,23 @@ export async function handleAdminRequest(
         role,
         suspended: searchParams.get('suspended') === 'true',
         sortBy: (searchParams.get('sortBy') as 'created_at' | 'username' | 'last_admin_action_at') || 'created_at',
+        sortOrder: (searchParams.get('sortOrder') as 'asc' | 'desc') || 'desc',
+      });
+      sendJson(res, 200, result);
+      return true;
+    }
+
+    if (pathname === '/api/admin/posts' && method === 'GET') {
+      if (!adminSession.permissions.posts.read) {
+        sendError(res, 403, 'Insufficient permissions.', 'INSUFFICIENT_PERMISSIONS');
+        return true;
+      }
+      const searchParams = url.searchParams;
+      const result = await getAdminPosts({
+        limit: Math.min(Number(searchParams.get('limit') || 50), 200),
+        offset: Number(searchParams.get('offset') || 0),
+        search: searchParams.get('search') || undefined,
+        sortBy: (searchParams.get('sortBy') as 'created_at' | 'likes_count' | 'replies_count') || 'created_at',
         sortOrder: (searchParams.get('sortOrder') as 'asc' | 'desc') || 'desc',
       });
       sendJson(res, 200, result);
@@ -331,6 +433,25 @@ export async function handleAdminRequest(
       return true;
     }
 
+    if (pathname === '/api/admin/security-events' && method === 'GET') {
+      if (!adminSession.permissions.audit.read) {
+        sendError(res, 403, 'Insufficient permissions.', 'INSUFFICIENT_PERMISSIONS');
+        return true;
+      }
+      const searchParams = url.searchParams;
+      const result = await getSecurityEvents({
+        limit: Math.min(Number(searchParams.get('limit') || 100), 500),
+        offset: Number(searchParams.get('offset') || 0),
+        search: searchParams.get('search') || undefined,
+        adminId: searchParams.get('adminId') || undefined,
+        startDate: searchParams.get('startDate') ? Number(searchParams.get('startDate')) : undefined,
+        endDate: searchParams.get('endDate') ? Number(searchParams.get('endDate')) : undefined,
+        sortOrder: (searchParams.get('sortOrder') as 'asc' | 'desc') || 'desc',
+      });
+      sendJson(res, 200, result);
+      return true;
+    }
+
     if (pathname === '/api/admin/roles/permissions' && method === 'GET') {
       if (!adminSession.permissions.admin_users.read) {
         sendError(res, 403, 'Insufficient permissions.', 'INSUFFICIENT_PERMISSIONS');
@@ -363,7 +484,7 @@ export async function handleAdminRequest(
         return true;
       }
 
-      await updateAdminRolePermissions(role, permissions, description);
+      await updateAdminRolePermissions(adminId, role, permissions, description, req);
       sendJson(res, 200, { success: true, message: 'Permissions updated.' });
       return true;
     }
@@ -391,8 +512,27 @@ export async function handleAdminRequest(
         sendError(res, 403, 'Step-up authentication required. Please provide your current password.', 'STEP_UP_REQUIRED');
         return true;
       }
-      await revokeAdminSession(sessionMatch[1]);
-      await logAdminAction(adminId, 'admin.session.revoke', 'admin_session', sessionMatch[1], {}, req);
+      await withTransaction(async (connection) => {
+        await connection.query(
+          'DELETE FROM zunari_admin_sessions WHERE id = $1',
+          [sessionMatch[1]],
+        );
+        await connection.query(
+          `INSERT INTO zunari_admin_audit_log (id, admin_id, action, target_type, target_id, metadata, ip_address, user_agent, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            `audit_${randomBytes(16).toString('hex')}`,
+            adminId,
+            'admin.session.revoke',
+            'admin_session',
+            sessionMatch[1],
+            JSON.stringify({}),
+            req?.socket.remoteAddress || null,
+            req?.headers['user-agent'] || null,
+            Date.now(),
+          ],
+        );
+      });
       sendJson(res, 200, { success: true, message: 'Session revoked.' });
       return true;
     }
@@ -414,8 +554,27 @@ export async function handleAdminRequest(
         sendError(res, 403, 'Step-up authentication required. Please provide your current password.', 'STEP_UP_REQUIRED');
         return true;
       }
-      await revokeAllAdminSessionsForUser(targetUserId);
-      await logAdminAction(adminId, 'admin.session.revoke_all', 'user', targetUserId, {}, req);
+      await withTransaction(async (connection) => {
+        await connection.query(
+          'DELETE FROM zunari_admin_sessions WHERE admin_id = $1',
+          [targetUserId],
+        );
+        await connection.query(
+          `INSERT INTO zunari_admin_audit_log (id, admin_id, action, target_type, target_id, metadata, ip_address, user_agent, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            `audit_${randomBytes(16).toString('hex')}`,
+            adminId,
+            'admin.session.revoke_all',
+            'user',
+            targetUserId,
+            JSON.stringify({}),
+            req?.socket.remoteAddress || null,
+            req?.headers['user-agent'] || null,
+            Date.now(),
+          ],
+        );
+      });
       sendJson(res, 200, { success: true, message: 'All admin sessions revoked for user.' });
       return true;
     }
@@ -640,14 +799,17 @@ export async function handleAdminRequest(
       }
 
       // CSRF protection for audit export (GET endpoint with sensitive data)
-      const csrfToken = searchParams.get('csrfToken') || req.headers['x-csrf-token'];
+      const csrfToken = req.headers['x-csrf-token'];
       if (!csrfToken || typeof csrfToken !== 'string' || !safeEqual(csrfToken, adminSession.csrfToken)) {
         sendError(res, 403, 'Invalid CSRF token.', 'CSRF_INVALID');
         return true;
       }
 
-      // Step-up auth for audit export (password via query param for GET)
-      const confirmPassword = searchParams.get('confirmPassword') || undefined;
+      // Step-up auth for audit export (password via header, never the URL)
+      const confirmPasswordHeader = req.headers['x-admin-confirm-password'];
+      const confirmPassword = typeof confirmPasswordHeader === 'string'
+        ? confirmPasswordHeader
+        : undefined;
       const stepUp = await verifyAdminPassword(adminId, confirmPassword);
       if (!stepUp) {
         sendError(res, 403, 'Step-up authentication required. Please provide your current password.', 'STEP_UP_REQUIRED');
@@ -726,6 +888,31 @@ export async function handleAdminRequest(
     return true;
   } catch (error) {
     if (error instanceof HttpError) {
+      if (
+        error.code === 'ADMIN_SESSION_REQUIRED' ||
+        error.code === 'CSRF_INVALID' ||
+        error.code === 'INSUFFICIENT_PERMISSIONS'
+      ) {
+        try {
+          let adminId: string | null = null;
+          try {
+            const session = await getAdminSession(req);
+            if (session) adminId = session.publicId;
+          } catch {
+            // Session lookup failure must not prevent logging or the error response.
+          }
+          await logAdminAction(
+            adminId,
+            'admin.permission.denied',
+            'api_request',
+            url.pathname,
+            { denied_reason: error.code, method },
+            req,
+          );
+        } catch {
+          // Audit write failure must not prevent the error response.
+        }
+      }
       sendError(res, error.status, error.message, error.code);
       return true;
     }

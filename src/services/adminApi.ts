@@ -60,6 +60,74 @@ export interface AdminStats {
   suspended_users_count: number;
 }
 
+export interface AdminPost {
+  id: string;
+  author_id: string;
+  content: string;
+  media_urls: string[];
+  reply_to_post_id: string | null;
+  quote_post_id: string | null;
+  created_at: number;
+  likes_count: number;
+  reposts_count: number;
+  replies_count: number;
+  views_count: number;
+  author_public_id: string;
+  author_username: string;
+  author_name: string;
+  author_avatar_url: string;
+  author_verified: boolean;
+  author_is_gold: boolean;
+}
+
+export interface PaginatedPostsResponse {
+  posts: AdminPost[];
+  total: number;
+}
+
+export interface AdminReport {
+  id: string;
+  type: 'user' | 'post';
+  reporter_id: string;
+  reporter_username: string;
+  reported_user_id?: string;
+  reported_username?: string;
+  post_id?: string;
+  post_preview?: string;
+  reason: string;
+  details?: string;
+  status: 'pending' | 'reviewed' | 'dismissed' | 'action_taken';
+  reviewed_by?: string;
+  reviewed_at?: number;
+  created_at: number;
+}
+
+export interface PaginatedReportsResponse {
+  reports: AdminReport[];
+  total: number;
+}
+
+export interface ReportResolution {
+  reportId: string;
+  status: 'pending' | 'reviewed' | 'dismissed' | 'action_taken';
+  note?: string;
+}
+
+export interface SecurityEvent {
+  id: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  admin_username: string | null;
+  created_at: number;
+  metadata: Record<string, unknown>;
+}
+
+export interface PaginatedSecurityEventsResponse {
+  events: SecurityEvent[];
+  total: number;
+}
+
 export interface AdminUserListItem {
   id: number;
   public_id: string;
@@ -276,6 +344,46 @@ class AdminApiService {
     return this.request<AdminStats>('/admin/stats');
   }
 
+  public async getAdminPosts(params: {
+    limit?: number;
+    offset?: number;
+    search?: string;
+    sortBy?: 'created_at' | 'likes_count' | 'replies_count';
+    sortOrder?: 'asc' | 'desc';
+  } = {}): Promise<PaginatedPostsResponse> {
+    const searchParams = new URLSearchParams();
+    if (params.limit) searchParams.set('limit', String(params.limit));
+    if (params.offset) searchParams.set('offset', String(params.offset));
+    if (params.search) searchParams.set('search', params.search);
+    if (params.sortBy) searchParams.set('sortBy', params.sortBy);
+    if (params.sortOrder) searchParams.set('sortOrder', params.sortOrder);
+
+    const query = searchParams.toString();
+    return this.request<PaginatedPostsResponse>(`/admin/posts${query ? `?${query}` : ''}`);
+  }
+
+  public async getSecurityEvents(params: {
+    limit?: number;
+    offset?: number;
+    search?: string;
+    adminId?: string;
+    startDate?: number;
+    endDate?: number;
+    sortOrder?: 'asc' | 'desc';
+  } = {}): Promise<PaginatedSecurityEventsResponse> {
+    const searchParams = new URLSearchParams();
+    if (params.limit) searchParams.set('limit', String(params.limit));
+    if (params.offset) searchParams.set('offset', String(params.offset));
+    if (params.search) searchParams.set('search', params.search);
+    if (params.adminId) searchParams.set('adminId', params.adminId);
+    if (params.startDate !== undefined) searchParams.set('startDate', String(params.startDate));
+    if (params.endDate !== undefined) searchParams.set('endDate', String(params.endDate));
+    if (params.sortOrder) searchParams.set('sortOrder', params.sortOrder);
+
+    const query = searchParams.toString();
+    return this.request<PaginatedSecurityEventsResponse>(`/admin/security-events${query ? `?${query}` : ''}`);
+  }
+
   public async getUsers(params: {
     limit?: number;
     offset?: number;
@@ -302,24 +410,24 @@ class AdminApiService {
     return this.request<AdminUserDetail>(`/admin/users/${encodeURIComponent(publicId)}`);
   }
 
-  public async updateUserRole(publicId: string, adminRole: AdminRole | null): Promise<{ success: boolean; message: string }> {
+  public async updateUserRole(publicId: string, adminRole: AdminRole | null, confirmPassword?: string): Promise<{ success: boolean; message: string }> {
     return this.request<{ success: boolean; message: string }>(`/admin/users/${encodeURIComponent(publicId)}`, {
       method: 'PATCH',
-      body: JSON.stringify({ adminRole }),
+      body: JSON.stringify({ adminRole, confirmPassword }),
     });
   }
 
-  public async suspendUser(publicId: string, reason: string): Promise<{ success: boolean; message: string }> {
+  public async suspendUser(publicId: string, reason: string, confirmPassword?: string): Promise<{ success: boolean; message: string }> {
     return this.request<{ success: boolean; message: string }>(`/admin/users/${encodeURIComponent(publicId)}`, {
       method: 'PATCH',
-      body: JSON.stringify({ action: 'suspend', reason }),
+      body: JSON.stringify({ action: 'suspend', reason, confirmPassword }),
     });
   }
 
-  public async unsuspendUser(publicId: string): Promise<{ success: boolean; message: string }> {
+  public async unsuspendUser(publicId: string, confirmPassword?: string): Promise<{ success: boolean; message: string }> {
     return this.request<{ success: boolean; message: string }>(`/admin/users/${encodeURIComponent(publicId)}`, {
       method: 'PATCH',
-      body: JSON.stringify({ action: 'unsuspend' }),
+      body: JSON.stringify({ action: 'unsuspend', confirmPassword }),
     });
   }
 
@@ -354,10 +462,10 @@ class AdminApiService {
     return data.permissions;
   }
 
-  public async updateRolePermissions(role: AdminRole, permissions: Record<string, unknown>, description: string): Promise<{ success: boolean; message: string }> {
+  public async updateRolePermissions(role: AdminRole, permissions: Record<string, unknown>, description: string, confirmPassword?: string): Promise<{ success: boolean; message: string }> {
     return this.request<{ success: boolean; message: string }>('/admin/roles/permissions', {
       method: 'PATCH',
-      body: JSON.stringify({ role, permissions, description }),
+      body: JSON.stringify({ role, permissions, description, confirmPassword }),
     });
   }
 
@@ -365,17 +473,111 @@ class AdminApiService {
     return this.request<{ sessions: AdminSessionInfo[] }>('/admin/sessions');
   }
 
-  public async revokeSession(sessionId: string): Promise<{ success: boolean; message: string }> {
+  public async revokeSession(sessionId: string, confirmPassword?: string): Promise<{ success: boolean; message: string }> {
     return this.request<{ success: boolean; message: string }>(`/admin/sessions/${encodeURIComponent(sessionId)}`, {
       method: 'DELETE',
+      body: JSON.stringify({ confirmPassword }),
     });
   }
 
-  public async revokeAllUserSessions(userId: string): Promise<{ success: boolean; message: string }> {
+  public async revokeAllUserSessions(userId: string, confirmPassword?: string): Promise<{ success: boolean; message: string }> {
     return this.request<{ success: boolean; message: string }>('/admin/sessions/user', {
       method: 'DELETE',
-      body: JSON.stringify({ userId }),
+      body: JSON.stringify({ userId, confirmPassword }),
     });
+  }
+
+  public async getReports(params: {
+    limit?: number;
+    offset?: number;
+    type?: 'user' | 'post';
+    status?: 'pending' | 'reviewed' | 'dismissed' | 'action_taken';
+    search?: string;
+    sortOrder?: 'asc' | 'desc';
+  } = {}): Promise<PaginatedReportsResponse> {
+    const searchParams = new URLSearchParams();
+    if (params.limit) searchParams.set('limit', String(params.limit));
+    if (params.offset) searchParams.set('offset', String(params.offset));
+    if (params.type) searchParams.set('type', params.type);
+    if (params.status) searchParams.set('status', params.status);
+    if (params.search) searchParams.set('search', params.search);
+    if (params.sortOrder) searchParams.set('sortOrder', params.sortOrder);
+
+    const query = searchParams.toString();
+    return this.request<PaginatedReportsResponse>(`/admin/reports${query ? `?${query}` : ''}`);
+  }
+
+  public async resolveReport(reportId: string, status: 'pending' | 'reviewed' | 'dismissed' | 'action_taken', note?: string): Promise<{ success: boolean; report: AdminReport }> {
+    return this.request<{ success: boolean; report: AdminReport }>('/admin/reports', {
+      method: 'PATCH',
+      body: JSON.stringify({ reportId, status, note }),
+    });
+  }
+
+  public async verifyUser(publicId: string, verified: boolean, confirmPassword?: string): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/admin/users/${encodeURIComponent(publicId)}/verify`, {
+      method: 'PATCH',
+      body: JSON.stringify({ verified, confirmPassword }),
+    });
+  }
+
+  public async updateUserGold(publicId: string, isGold: boolean, confirmPassword?: string): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/admin/users/${encodeURIComponent(publicId)}/gold`, {
+      method: 'PATCH',
+      body: JSON.stringify({ isGold, confirmPassword }),
+    });
+  }
+
+  public async createAdminUser(data: {
+    username: string;
+    email: string;
+    password: string;
+    name?: string;
+    adminRole: AdminRole;
+    confirmPassword: string;
+  }): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>('/admin/users', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  public async exportAuditLog(params: {
+    format?: 'csv' | 'json';
+    adminId?: string;
+    action?: string;
+    targetType?: string;
+    targetId?: string;
+    startDate?: number;
+    endDate?: number;
+    limit?: number;
+    offset?: number;
+    sortOrder?: 'asc' | 'desc';
+    csrfToken: string;
+    confirmPassword?: string;
+  }): Promise<{ contentType: string; filename: string; data: string }> {
+    const searchParams = new URLSearchParams();
+    if (params.format) searchParams.set('format', params.format);
+    if (params.adminId) searchParams.set('adminId', params.adminId);
+    if (params.action) searchParams.set('action', params.action);
+    if (params.targetType) searchParams.set('targetType', params.targetType);
+    if (params.targetId) searchParams.set('targetId', params.targetId);
+    if (params.startDate !== undefined) searchParams.set('startDate', String(params.startDate));
+    if (params.endDate !== undefined) searchParams.set('endDate', String(params.endDate));
+    if (params.limit) searchParams.set('limit', String(params.limit));
+    if (params.offset) searchParams.set('offset', String(params.offset));
+    if (params.sortOrder) searchParams.set('sortOrder', params.sortOrder);
+
+    const headers: Record<string, string> = {};
+    const csrfToken = params.csrfToken || this.csrfToken;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+    if (params.confirmPassword) headers['X-Admin-Confirm-Password'] = params.confirmPassword;
+
+    const query = searchParams.toString();
+    return this.request<{ contentType: string; filename: string; data: string }>(
+      `/admin/audit-log/export${query ? `?${query}` : ''}`,
+      { headers },
+    );
   }
 }
 

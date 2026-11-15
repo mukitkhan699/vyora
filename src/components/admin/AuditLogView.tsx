@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Search,
   Filter,
   ChevronLeft,
   ChevronRight,
@@ -11,10 +10,46 @@ import { adminApi, AdminAuditLogEntry, AdminRole } from '../../services/adminApi
 import { Card } from '../common/Card.tsx';
 import { Badge } from '../common/Badge.tsx';
 import { Button } from '../common/Button.tsx';
+import { Input } from '../common/Input.tsx';
+import { Modal } from '../common/Modal.tsx';
 import { formatRelativeTime } from '../../utils/format.ts';
 
 interface AuditLogViewProps {
   currentUserRole?: AdminRole;
+}
+
+interface AuditLogFilters {
+  adminId: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  startDate: string;
+  endDate: string;
+}
+
+function buildAuditFilterParams(filters: AuditLogFilters): {
+  adminId?: string;
+  action?: string;
+  targetType?: string;
+  targetId?: string;
+  startDate?: number;
+  endDate?: number;
+} {
+  const params: {
+    adminId?: string;
+    action?: string;
+    targetType?: string;
+    targetId?: string;
+    startDate?: number;
+    endDate?: number;
+  } = {};
+  if (filters.adminId) params.adminId = filters.adminId;
+  if (filters.action) params.action = filters.action;
+  if (filters.targetType) params.targetType = filters.targetType;
+  if (filters.targetId) params.targetId = filters.targetId;
+  if (filters.startDate) params.startDate = new Date(filters.startDate).getTime();
+  if (filters.endDate) params.endDate = new Date(filters.endDate).getTime() + 86400000;
+  return params;
 }
 
 export const AuditLogView: React.FC<AuditLogViewProps> = ({ currentUserRole }) => {
@@ -24,7 +59,7 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({ currentUserRole }) =
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
-  const [filters, setFilters] = useState({
+  const [filters, setFilters] = useState<AuditLogFilters>({
     adminId: '',
     action: '',
     targetType: '',
@@ -33,23 +68,22 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({ currentUserRole }) =
     endDate: '',
   });
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [showExportDialog, setShowExportDialog] = useState(false);
+  const [exportPassword, setExportPassword] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   const fetchLogs = async () => {
     try {
       setLoading(true);
       setError(null);
       const offset = (page - 1) * pageSize;
-      const params: any = {
+      const params = {
+        ...buildAuditFilterParams(filters),
         limit: pageSize,
         offset,
         sortOrder,
       };
-      if (filters.adminId) params.adminId = filters.adminId;
-      if (filters.action) params.action = filters.action;
-      if (filters.targetType) params.targetType = filters.targetType;
-      if (filters.targetId) params.targetId = filters.targetId;
-      if (filters.startDate) params.startDate = new Date(filters.startDate).getTime();
-      if (filters.endDate) params.endDate = new Date(filters.endDate).getTime() + 86400000; // end of day
 
       const data = await adminApi.getAuditLog(params);
       setLogs(data.logs);
@@ -80,6 +114,51 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({ currentUserRole }) =
       endDate: '',
     });
     setPage(1);
+  };
+
+  const openExportDialog = () => {
+    setExportError(null);
+    setExportPassword('');
+    setShowExportDialog(true);
+  };
+
+  const closeExportDialog = () => {
+    if (exporting) return;
+    setShowExportDialog(false);
+    setExportPassword('');
+    setExportError(null);
+  };
+
+  const handleExport = async () => {
+    if (!exportPassword.trim() || exporting) return;
+    setExporting(true);
+    setExportError(null);
+    try {
+      const result = await adminApi.exportAuditLog({
+        ...buildAuditFilterParams(filters),
+        format: 'csv',
+        sortOrder,
+        csrfToken: adminApi.getCsrfToken() || '',
+        confirmPassword: exportPassword,
+      });
+      const blob = new Blob([result.data], {
+        type: result.contentType || 'text/csv;charset=utf-8',
+      });
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = result.filename || 'audit-log.csv';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(downloadUrl);
+      setShowExportDialog(false);
+      setExportPassword('');
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Failed to export audit log');
+    } finally {
+      setExporting(false);
+    }
   };
 
   const getActionBadge = (action: string) => {
@@ -147,7 +226,7 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({ currentUserRole }) =
             <RefreshCw className="h-4 w-4 mr-2" />
             Refresh
           </Button>
-          <Button variant="outline" size="sm" onClick={() => {}}>
+          <Button variant="outline" size="sm" onClick={openExportDialog}>
             <Download className="h-4 w-4 mr-2" />
             Export
           </Button>
@@ -311,6 +390,56 @@ export const AuditLogView: React.FC<AuditLogViewProps> = ({ currentUserRole }) =
           </div>
         )}
       </Card>
+
+      <Modal
+        isOpen={showExportDialog}
+        onClose={closeExportDialog}
+        title="Export Audit Log"
+        maxWidth="max-w-md"
+      >
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void handleExport();
+          }}
+        >
+          <p className="text-sm text-neutral-400 mb-4">
+            Exports the current filters as CSV. Enter your current admin password to confirm.
+          </p>
+          <Input
+            label="Current admin password"
+            type="password"
+            value={exportPassword}
+            onChange={(event) => setExportPassword(event.target.value)}
+            placeholder="Your current admin password"
+            autoFocus
+            disabled={exporting}
+          />
+          {exportError && (
+            <p className="mt-3 text-sm text-rose-400" role="alert">
+              {exportError}
+            </p>
+          )}
+          <div className="mt-5 flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={closeExportDialog}
+              disabled={exporting}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              isLoading={exporting}
+              disabled={!exportPassword.trim()}
+            >
+              Export CSV
+            </Button>
+          </div>
+        </form>
+      </Modal>
     </div>
   );
 };

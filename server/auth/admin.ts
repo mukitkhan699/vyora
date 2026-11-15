@@ -25,6 +25,7 @@ export interface AdminSession {
   token: string;
   tokenHash: string;
   userId: number;
+  publicId: string;
   username: string;
   email: string | null;
   adminRole: AdminRole;
@@ -84,6 +85,77 @@ const ROLE_PERMISSIONS: Record<AdminRole, AdminPermissions> = {
     admin_users: { read: false, write: false },
   },
 };
+
+const PERMISSION_CATEGORIES: Record<string, string[]> = {
+  users: ['read', 'write', 'suspend'],
+  posts: ['read', 'delete'],
+  reports: ['read', 'write'],
+  audit: ['read'],
+  badges: ['read', 'write'],
+  stats: ['read'],
+  admin_users: ['read', 'write'],
+};
+
+function validateDbPermissions(permissions: unknown): AdminPermissions {
+  let parsed: unknown;
+  if (typeof permissions === 'string') {
+    try {
+      parsed = JSON.parse(permissions);
+    } catch {
+      throw new HttpError(500, 'Malformed admin role permissions record.', 'MALFORMED_PERMISSIONS');
+    }
+  } else {
+    parsed = permissions;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new HttpError(500, 'Malformed admin role permissions record.', 'MALFORMED_PERMISSIONS');
+  }
+  const obj = parsed as Record<string, unknown>;
+  const result: Record<string, Record<string, boolean>> = {};
+  for (const [category, subKeys] of Object.entries(PERMISSION_CATEGORIES)) {
+    if (!(category in obj)) {
+      throw new HttpError(500, `Missing permissions category: ${category}`, 'MALFORMED_PERMISSIONS');
+    }
+    const categoryValue = obj[category];
+    if (!categoryValue || typeof categoryValue !== 'object' || Array.isArray(categoryValue)) {
+      throw new HttpError(500, `Permissions category ${category} must be an object`, 'MALFORMED_PERMISSIONS');
+    }
+    const cat = categoryValue as Record<string, unknown>;
+    result[category] = {};
+    for (const sub of subKeys) {
+      if (!(sub in cat)) {
+        throw new HttpError(500, `Missing sub-permission: ${sub}`, 'MALFORMED_PERMISSIONS');
+      }
+      if (typeof cat[sub] !== 'boolean') {
+        throw new HttpError(500, `Sub-permission ${sub} must be a boolean`, 'MALFORMED_PERMISSIONS');
+      }
+      result[category][sub] = cat[sub] as boolean;
+    }
+    for (const key of Object.keys(cat)) {
+      if (!subKeys.includes(key)) {
+        throw new HttpError(500, `Unknown sub-permission: ${key}`, 'MALFORMED_PERMISSIONS');
+      }
+    }
+  }
+  for (const key of Object.keys(obj)) {
+    if (!PERMISSION_CATEGORIES[key]) {
+      throw new HttpError(500, `Unknown permissions category: ${key}`, 'MALFORMED_PERMISSIONS');
+    }
+  }
+  return result as unknown as AdminPermissions;
+}
+
+export async function resolveAdminPermissions(role: AdminRole): Promise<AdminPermissions> {
+  const result = await query<{ permissions: unknown }>(
+    'SELECT permissions FROM zunari_admin_role_permissions WHERE role = $1',
+    [role],
+  );
+  const row = result.rows[0];
+  if (!row || row.permissions === undefined || row.permissions === null) {
+    return ROLE_PERMISSIONS[role];
+  }
+  return validateDbPermissions(row.permissions);
+}
 
 export function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
@@ -171,8 +243,9 @@ export async function getAdminSession(req: IncomingMessage): Promise<AdminSessio
     username: string;
     email: string | null;
     admin_role: AdminRole | null;
+    suspended_at: number | null;
   }>(
-    `SELECT id, username, email, admin_role FROM zunari_users WHERE public_id = $1`,
+    `SELECT id, username, email, admin_role, suspended_at FROM zunari_users WHERE public_id = $1`,
     [row.admin_id],
   );
 
@@ -182,8 +255,13 @@ export async function getAdminSession(req: IncomingMessage): Promise<AdminSessio
     return null;
   }
 
+  if (user.suspended_at) {
+    await query('DELETE FROM zunari_admin_sessions WHERE session_token_hash = $1', [tokenHash]);
+    return null;
+  }
+
   const adminRole = user.admin_role as AdminRole;
-  const permissions = ROLE_PERMISSIONS[adminRole];
+  const permissions = await resolveAdminPermissions(adminRole);
 
   await query(
     'UPDATE zunari_admin_sessions SET last_activity_at = $1 WHERE session_token_hash = $2',
@@ -194,6 +272,7 @@ export async function getAdminSession(req: IncomingMessage): Promise<AdminSessio
     token,
     tokenHash,
     userId: user.id,
+    publicId: row.admin_id,
     username: user.username,
     email: user.email,
     adminRole: user.admin_role,
@@ -205,12 +284,12 @@ export async function getAdminSession(req: IncomingMessage): Promise<AdminSessio
 
 export async function createAdminSession(
   userId: number,
+  publicId: string,
   adminRole: AdminRole,
   req: IncomingMessage,
 ): Promise<AdminSession> {
   const token = randomBytes(32).toString('base64url');
-  const csrfToken = randomBytes(32).toString('base64url');
-  const csrfTokenHash = hashToken(csrfToken);
+  const csrfTokenHash = hashToken(randomBytes(32).toString('base64url'));
   const createdAt = Date.now();
   const expiresAt = createdAt + ADMIN_SESSION_TTL_MS;
   const tokenHash = hashToken(token);
@@ -223,7 +302,7 @@ export async function createAdminSession(
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         `adm_sess_${randomBytes(16).toString('hex')}`,
-        `user_auth_${userId}`,
+        publicId,
         tokenHash,
         csrfTokenHash,
         ipAddress,
@@ -235,15 +314,31 @@ export async function createAdminSession(
     );
   });
 
+  try {
+    await logAdminAction(
+      publicId,
+      'admin.session.create',
+      'admin_session',
+      publicId,
+      {},
+      req,
+    );
+  } catch {
+    // Audit write failure must not affect session creation.
+  }
+
+  const permissions = await resolveAdminPermissions(adminRole);
+
   return {
     token,
     tokenHash,
     userId,
+    publicId,
     username: '',
     email: null,
     adminRole,
-    permissions: ROLE_PERMISSIONS[adminRole],
-    csrfToken,
+    permissions,
+    csrfToken: csrfTokenHash,
     expiresAt,
   };
 }

@@ -9,6 +9,7 @@ export default defineConfig(() => {
 
   return {
     root: adminRoot,
+    base: '/admin/',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
@@ -25,7 +26,7 @@ export default defineConfig(() => {
       sourcemap: false,
       rollupOptions: {
         input: {
-          main: path.resolve(repoRoot, 'src/admin/main.tsx'),
+          admin: path.resolve(adminRoot, 'index.html'),
         },
       },
     },

@@ -33,6 +33,7 @@ export const AdminSettingsView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [expandedRoles, setExpandedRoles] = useState<string[]>([]);
+  const [confirmPassword, setConfirmPassword] = useState('');
 
   const fetchPermissions = async () => {
     try {
@@ -69,15 +70,24 @@ export const AdminSettingsView: React.FC = () => {
   };
 
   const handleSavePermissions = async (role: AdminRole) => {
+    if (role === 'super_admin') {
+      setError('Super admin permissions are immutable and cannot be modified.');
+      setConfirmPassword('');
+      return;
+    }
     const rp = rolePermissions.find(rp => rp.role === role);
     if (!rp) return;
-
+    if (!confirmPassword.trim()) {
+      setError('Your current admin password is required to save permission changes.');
+      return;
+    }
     setSaving(true);
     setError(null);
     setSuccess(null);
     try {
-      await adminApi.updateRolePermissions(role, rp.permissions, rp.description);
+      await adminApi.updateRolePermissions(role, rp.permissions, rp.description, confirmPassword);
       setSuccess(`Permissions updated for ${role}`);
+      setConfirmPassword('');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save permissions');
@@ -201,6 +211,18 @@ export const AdminSettingsView: React.FC = () => {
                         </div>
                       </div>
                     ))}
+                    {rp.role !== 'super_admin' && (
+                      <Input
+                        type="password"
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        placeholder="Your current admin password (step-up)"
+                        className="mb-3 w-full max-w-xs"
+                      />
+                    )}
+                    {rp.role === 'super_admin' && (
+                      <p className="text-xs text-neutral-500 mb-3">Super admin permissions are immutable and cannot be modified.</p>
+                    )}
                     <div className="mt-4 flex justify-end">
                       <Button
                         variant="primary"
@@ -251,8 +273,8 @@ export const AdminSettingsView: React.FC = () => {
               </h3>
               <div className="space-y-3 text-sm text-neutral-400">
                 <p>Public: https://zunari.duckdns.org</p>
-                <p>Admin: https://admin-zunari.duckdns.org</p>
-                <p>Socket.IO: Same origins</p>
+                <p>Admin: https://zunari.duckdns.org/admin</p>
+                <p>Socket.IO: Same origin</p>
               </div>
             </div>
 

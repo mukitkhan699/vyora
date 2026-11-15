@@ -180,24 +180,36 @@ const RecentActivity: React.FC<RecentActivityProps> = ({ activities, loading = f
 };
 
 export const AdminDashboard: React.FC = () => {
-  const { adminRole } = useAuth();
+  const { adminRole, adminPermissions } = useAuth();
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [recentActivity, setRecentActivity] = useState<AdminAuditLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const fetchData = async () => {
+    setLoading(true);
+    setError(null);
+    // Audit log is permitted for every admin role; load it independently so a
+    // stats permission denial never breaks the whole dashboard.
     try {
-      setLoading(true);
-      setError(null);
-      const [statsData, activityData] = await Promise.all([
-        adminApi.getStats(),
-        adminApi.getAuditLog({ limit: 20, sortOrder: 'desc' }),
-      ]);
-      setStats(statsData);
+      const activityData = await adminApi.getAuditLog({ limit: 20, sortOrder: 'desc' });
       setRecentActivity(activityData.logs);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load dashboard data');
+    } catch (auditErr) {
+      setError(auditErr instanceof Error ? auditErr.message : 'Failed to load activity');
+    }
+    // Stats is optional per role. Pre-check effective permissions when available;
+    // a permission denial (403) is represented as unavailable, not an error.
+    try {
+      const shouldFetchStats = adminPermissions == null || adminPermissions.stats?.read;
+      if (shouldFetchStats) {
+        const statsData = await adminApi.getStats();
+        setStats(statsData);
+      } else {
+        setStats(null);
+      }
+    } catch (statsErr) {
+      // Stats unavailable (e.g. stats.read denied); represent as empty.
+      setStats(null);
     } finally {
       setLoading(false);
     }
@@ -275,13 +287,13 @@ export const AdminDashboard: React.FC = () => {
           trend={stats ? { value: 0, label: 'vs last week' } : undefined}
         />
         <StatCard
-          title="Active (24h)"
+          title="New Users (24h)"
           value={stats?.active_users_24h.toLocaleString() || '—'}
           icon={<Activity className="h-6 w-6" />}
           color="emerald"
         />
         <StatCard
-          title="Active (7d)"
+          title="New Users (7d)"
           value={stats?.active_users_7d.toLocaleString() || '—'}
           icon={<TrendingUp className="h-6 w-6" />}
           color="violet"
@@ -380,19 +392,24 @@ export const AdminDashboard: React.FC = () => {
             <div className="space-y-3">
               <div className="flex items-center justify-between text-sm">
                 <span className="text-neutral-400">Database</span>
-                <Badge type="emerald" size="xs">Healthy</Badge>
+                <Badge type="gray" size="xs">Not monitored</Badge>
               </div>
               <div className="flex items-center justify-between text-sm">
                 <span className="text-neutral-400">Storage (B2)</span>
-                <Badge type="emerald" size="xs">Connected</Badge>
+                <Badge type="gray" size="xs">Not monitored</Badge>
               </div>
               <div className="flex items-center justify-between text-sm">
                 <span className="text-neutral-400">Realtime</span>
-                <Badge type="emerald" size="xs">Active</Badge>
+                <Badge type="gray" size="xs">Not monitored</Badge>
               </div>
               <div className="flex items-center justify-between text-sm">
                 <span className="text-neutral-400">Admin Sessions</span>
                 <Badge type="cyan" size="xs">{recentActivity.filter(a => a.action.includes('session')).length} recent</Badge>
+              </div>
+              <div className="pt-3 border-t border-white/10">
+                <p className="text-xs text-neutral-500">
+                  Individual dependency health is not monitored on this dashboard. Use the System Health screen for real dependency status.
+                </p>
               </div>
             </div>
           </Card>

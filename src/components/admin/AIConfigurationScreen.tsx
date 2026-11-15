@@ -23,7 +23,7 @@ import { Toggle } from '../common/Toggle.tsx';
 export const AIConfigurationScreen: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [hasChanges, setHasChanges] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Empty AI configuration state - genuinely empty as required
   const aiConfig = {
@@ -52,17 +52,12 @@ export const AIConfigurationScreen: React.FC = () => {
 
   const handleFeatureToggle = (feature: string, value: boolean) => {
     setHasChanges(true);
-    // In real implementation, this would update the config
+    // No backend endpoint exists for AI configuration; toggles are disabled.
   };
 
   const handleSaveConfig = async () => {
-    setIsSaving(true);
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    setIsSaving(false);
-    setHasChanges(false);
+    setError('AI configuration cannot be saved: no backend endpoint exists for AI configuration persistence.');
   };
-
   if (isLoading) {
     return (
       <div className="space-y-6 p-6 animate-pulse">
@@ -219,21 +214,22 @@ export const AIConfigurationScreen: React.FC = () => {
         <Button
           variant="primary"
           onClick={handleSaveConfig}
-          disabled={!hasChanges || isSaving}
+          disabled={!hasChanges}
         >
-          {isSaving ? (
-            <>
-              <Save className="h-4 w-4 mr-2 animate-spin" />
-              Saving...
-            </>
-          ) : (
-            <>
-              <Save className="h-4 w-4 mr-2" />
-              Save Configuration
-            </>
-          )}
+          <>
+            <Save className="h-4 w-4 mr-2" />
+            Save Configuration
+          </>
         </Button>
       </div>
+
+      {/* Error Banner */}
+      {error && (
+        <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-4 text-rose-300 text-sm flex items-center gap-2 mt-4">
+          <AlertTriangle className="h-5 w-5 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
     </div>
   );
 };

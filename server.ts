@@ -5,6 +5,7 @@ import { createServer as createViteServer } from 'vite';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { handleRequest } from './server/index.ts';
+import { applySecurityHeaders } from './server/security-headers.ts';
 import { closeDatabase } from './server/db/pool.ts';
 import { closeStorage } from './server/storage/b2.ts';
 import { attachRealtimeServer, closeRealtimeServer } from './server/realtime.ts';
@@ -33,7 +34,7 @@ async function startDevelopmentServer(): Promise<void> {
     origin: corsOrigins,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'X-CSRF-Token'],
+    allowedHeaders: ['Content-Type', 'X-CSRF-Token', 'X-Admin-Confirm-Password'],
   }));
 
   app.all(
@@ -53,9 +54,39 @@ async function startDevelopmentServer(): Promise<void> {
     });
     app.use(vite.middlewares);
   } else {
+    const adminDistPath = path.resolve(distPath, 'admin');
+    const adminIndexPath = path.resolve(adminDistPath, 'index.html');
+
+    app.use('/admin', (req, res, next) => {
+      applySecurityHeaders(req, res);
+      next();
+    });
+    app.get('/admin', (_req, res) => {
+      res.sendFile(adminIndexPath);
+    });
+    app.use('/admin', express.static(adminDistPath, { redirect: false }));
     app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
+
+    // Client-side routes under /admin/ must serve the admin shell.
+    app.get('/admin/*', (req, res, next) => {
+      if (path.extname(req.path)) {
+        next();
+        return;
+      }
+      res.sendFile(adminIndexPath);
+    });
+
+    // Public SPA fallback must never handle admin paths.
+    app.get('*', (req, res, next) => {
+      if (req.path === '/admin' || req.path.startsWith('/admin/')) {
+        next();
+        return;
+      }
       res.sendFile(path.resolve(distPath, 'index.html'));
+    });
+
+    app.use((_req, res) => {
+      res.status(404).type('text/plain').send('Not found.');
     });
   }
 

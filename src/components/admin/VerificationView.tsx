@@ -28,6 +28,8 @@ const getRoleBadge = (role: AdminRole | null) => {
   return badge ? <Badge type={badge.color} size="xs">{badge.label}</Badge> : null;
 };
 
+type VerifyModalAction = 'verify' | 'unverify' | 'gold' | 'ungold';
+
 export const VerificationView: React.FC = () => {
   const [users, setUsers] = useState<AdminUserListItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -40,7 +42,9 @@ export const VerificationView: React.FC = () => {
   const [goldFilter, setGoldFilter] = useState<'all' | 'gold' | 'none'>('all');
   const [selectedUser, setSelectedUser] = useState<AdminUserListItem | null>(null);
   const [showVerifyModal, setShowVerifyModal] = useState(false);
-  const [verifyAction, setVerifyAction] = useState<'verify' | 'unverify' | 'gold' | 'ungold'>('verify');
+  const [verifyAction, setVerifyAction] = useState<VerifyModalAction>('verify');
+  const [verifyPassword, setVerifyPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   const fetchUsers = async () => {
     try {
@@ -71,24 +75,45 @@ export const VerificationView: React.FC = () => {
     fetchUsers();
   }, [page, pageSize, search, verificationFilter, goldFilter]);
 
-  const handleVerify = async (user: AdminUserListItem, verified: boolean) => {
+  const openVerifyModal = (user: AdminUserListItem, action: VerifyModalAction) => {
+    setSelectedUser(user);
+    setVerifyAction(action);
+    setVerifyPassword('');
+    setShowVerifyModal(true);
+  };
+
+  const handleConfirm = async () => {
+    if (!selectedUser) return;
+    if (!verifyPassword.trim()) {
+      setError('Your current admin password is required.');
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
     try {
-      await adminApi.updateUserRole(user.public_id, user.admin_role);
-      // Note: Verification and Gold status would need separate backend endpoints
-      // For now, we just refresh the list
+      if (verifyAction === 'verify' || verifyAction === 'unverify') {
+        const verified = verifyAction === 'verify';
+        await adminApi.verifyUser(selectedUser.public_id, verified, verifyPassword);
+      } else {
+        const isGold = verifyAction === 'gold';
+        await adminApi.updateUserGold(selectedUser.public_id, isGold, verifyPassword);
+      }
+      setShowVerifyModal(false);
+      setSelectedUser(null);
+      setVerifyPassword('');
+      setSubmitting(false);
       fetchUsers();
     } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to update verification');
+      setSubmitting(false);
+      setError(err instanceof Error ? err.message : 'Operation failed');
     }
   };
 
-  const handleGold = async (user: AdminUserListItem, gold: boolean) => {
-    try {
-      await adminApi.updateUserRole(user.public_id, user.admin_role);
-      fetchUsers();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : 'Failed to update Gold status');
-    }
+  const handleCancel = () => {
+    setShowVerifyModal(false);
+    setSelectedUser(null);
+    setVerifyPassword('');
+    setError(null);
   };
 
   if (loading && users.length === 0) {
@@ -219,14 +244,14 @@ export const VerificationView: React.FC = () => {
                     <td className="px-4 py-3 text-right pr-4">
                       <div className="flex items-center justify-end gap-2">
                         <button
-                          onClick={() => { setSelectedUser(user); setVerifyAction(user.verified ? 'unverify' : 'verify'); setShowVerifyModal(true); }}
+                          onClick={() => openVerifyModal(user, user.verified ? 'unverify' : 'verify')}
                           className="p-2 rounded-lg text-neutral-400 hover:text-white hover:bg-white/10 transition-colors"
                           title={user.verified ? 'Remove Verification' : 'Verify User'}
                         >
                           {user.verified ? <UserX className="h-4 w-4" /> : <UserCheck className="h-4 w-4" />}
                         </button>
                         <button
-                          onClick={() => { setSelectedUser(user); setVerifyAction(user.is_gold ? 'ungold' : 'gold'); setShowVerifyModal(true); }}
+                          onClick={() => openVerifyModal(user, user.is_gold ? 'ungold' : 'gold')}
                           className="p-2 rounded-lg text-neutral-400 hover:text-white hover:bg-white/10 transition-colors"
                           title={user.is_gold ? 'Remove Gold' : 'Grant Gold'}
                         >
@@ -241,6 +266,38 @@ export const VerificationView: React.FC = () => {
           </table>
         </div>
       </Card>
+
+      {/* Verification / Gold Confirmation Dialog */}
+      {showVerifyModal && selectedUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0a0f18]/95 p-6 shadow-2xl animate-in zoom-in-95 duration-200">
+            <h2 className="text-lg font-bold text-white mb-4">
+              {verifyAction === 'verify' ? 'Verify User' : verifyAction === 'unverify' ? 'Remove Verification' : verifyAction === 'gold' ? 'Grant Gold Membership' : 'Remove Gold Membership'}
+            </h2>
+            <p className="text-sm text-neutral-400 mb-6">
+              This action requires step-up authentication. Enter your current admin password to confirm.
+            </p>
+            <Input
+              type="password"
+              value={verifyPassword}
+              onChange={(e) => setVerifyPassword(e.target.value)}
+              placeholder="Your current admin password"
+              className="mb-4"
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={handleCancel} disabled={submitting}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleConfirm}
+                disabled={submitting || !verifyPassword.trim()}
+              >
+                {submitting ? 'Processing...' : 'Confirm'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -53,6 +53,9 @@ export const UsersView: React.FC = () => {
   const [showRoleModal, setShowRoleModal] = useState(false);
   const [showSuspendModal, setShowSuspendModal] = useState(false);
   const [suspendReason, setSuspendReason] = useState('');
+  const [pendingRole, setPendingRole] = useState<AdminRole | null | undefined>(undefined);
+  const [roleConfirmPassword, setRoleConfirmPassword] = useState('');
+  const [suspendConfirmPassword, setSuspendConfirmPassword] = useState('');
 
   const fetchUsers = async () => {
     try {
@@ -80,9 +83,13 @@ export const UsersView: React.FC = () => {
     fetchUsers();
   }, [page, pageSize, search, roleFilter, statusFilter, sortBy, sortOrder]);
 
-  const handleRoleChange = async (user: AdminUserListItem, newRole: AdminRole | null) => {
+  const handleRoleChange = async (user: AdminUserListItem, newRole: AdminRole | null, confirmPassword?: string) => {
     try {
-      await adminApi.updateUserRole(user.public_id, newRole);
+      await adminApi.updateUserRole(user.public_id, newRole, confirmPassword);
+      setShowRoleModal(false);
+      setSelectedUser(null);
+      setPendingRole(undefined);
+      setRoleConfirmPassword('');
       fetchUsers();
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to update role');
@@ -92,9 +99,11 @@ export const UsersView: React.FC = () => {
   const handleSuspend = async (user: AdminUserListItem) => {
     if (!suspendReason.trim()) return;
     try {
-      await adminApi.suspendUser(user.public_id, suspendReason);
+      await adminApi.suspendUser(user.public_id, suspendReason, suspendConfirmPassword);
       setShowSuspendModal(false);
       setSuspendReason('');
+      setSuspendConfirmPassword('');
+      setSelectedUser(null);
       fetchUsers();
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to suspend user');
@@ -103,7 +112,7 @@ export const UsersView: React.FC = () => {
 
   const handleUnsuspend = async (user: AdminUserListItem) => {
     try {
-      await adminApi.unsuspendUser(user.public_id);
+      await adminApi.unsuspendUser(user.public_id, suspendConfirmPassword);
       fetchUsers();
     } catch (err) {
       alert(err instanceof Error ? err.message : 'Failed to unsuspend user');
@@ -324,9 +333,12 @@ export const UsersView: React.FC = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
           <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0a0f18]/95 p-6 shadow-2xl animate-in zoom-in-95 duration-200">
             <h2 className="text-lg font-bold text-white mb-4">Change Role for @{selectedUser.username}</h2>
+            <p className="text-sm text-neutral-400 mb-6">
+              Role changes require step-up authentication. Enter your current admin password to confirm.
+            </p>
             <Select
-              value={selectedUser.admin_role || ''}
-              onChange={(e) => handleRoleChange(selectedUser, (e.target.value || null) as any)}
+              value={pendingRole ?? selectedUser.admin_role ?? ''}
+              onChange={(e) => setPendingRole((e.target.value || null) as AdminRole | null)}
               options={[
                 { value: '', label: 'Remove Admin Role' },
                 { value: 'super_admin', label: 'Super Admin' },
@@ -337,9 +349,21 @@ export const UsersView: React.FC = () => {
               ]}
               className="mb-4"
             />
+            <Input
+              type="password"
+              value={roleConfirmPassword}
+              onChange={(e) => setRoleConfirmPassword(e.target.value)}
+              placeholder="Your current admin password"
+              className="mb-4"
+            />
             <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => { setShowRoleModal(false); setSelectedUser(null); }}>Cancel</Button>
-              <Button onClick={() => { setShowRoleModal(false); setSelectedUser(null); }}>Save</Button>
+              <Button variant="ghost" onClick={() => { setShowRoleModal(false); setSelectedUser(null); setPendingRole(undefined); setRoleConfirmPassword(''); }}>Cancel</Button>
+              <Button
+                onClick={() => handleRoleChange(selectedUser, pendingRole ?? selectedUser.admin_role ?? null, roleConfirmPassword || undefined)}
+                disabled={pendingRole === undefined || pendingRole === selectedUser.admin_role || !roleConfirmPassword.trim()}
+              >
+                Save
+              </Button>
             </div>
           </div>
         </div>
@@ -351,17 +375,24 @@ export const UsersView: React.FC = () => {
           <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0a0f18]/95 p-6 shadow-2xl animate-in zoom-in-95 duration-200">
             <h2 className="text-lg font-bold text-white mb-4">Suspend @{selectedUser.username}</h2>
             <p className="text-neutral-400 mb-4">Please provide a reason for suspension. The user will be notified.</p>
-            <textarea
-              value={suspendReason}
-              onChange={(e) => setSuspendReason(e.target.value)}
-              placeholder="Reason for suspension..."
-              rows={4}
-              className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-xl text-sm text-white outline-none focus:border-cyan-400 placeholder:text-neutral-500 mb-4"
-            />
-            <div className="flex justify-end gap-2">
-              <Button variant="ghost" onClick={() => { setShowSuspendModal(false); setSuspendReason(''); setSelectedUser(null); }}>Cancel</Button>
-              <Button variant="danger" onClick={() => handleSuspend(selectedUser)} disabled={!suspendReason.trim()}>Suspend User</Button>
-            </div>
+              <textarea
+                value={suspendReason}
+                onChange={(e) => setSuspendReason(e.target.value)}
+                placeholder="Reason for suspension..."
+                rows={4}
+                className="w-full px-3 py-2 bg-black/40 border border-white/10 rounded-xl text-sm text-white outline-none focus:border-cyan-400 placeholder:text-neutral-500 mb-4"
+              />
+              <Input
+                type="password"
+                value={suspendConfirmPassword}
+                onChange={(e) => setSuspendConfirmPassword(e.target.value)}
+                placeholder="Your current admin password"
+                className="mb-4"
+              />
+              <div className="flex justify-end gap-2">
+                <Button variant="ghost" onClick={() => { setShowSuspendModal(false); setSuspendReason(''); setSuspendConfirmPassword(''); setSelectedUser(null); }}>Cancel</Button>
+                <Button variant="danger" onClick={() => handleSuspend(selectedUser)} disabled={!suspendReason.trim() || !suspendConfirmPassword.trim()}>Suspend User</Button>
+              </div>
           </div>
         </div>
       )}

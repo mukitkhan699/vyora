@@ -8,7 +8,7 @@ import {
   Loader,
   MoreVertical,
 } from 'lucide-react';
-import { adminApi, AdminAuditLogEntry } from '../../services/adminApi.ts';
+import { adminApi, AdminAuditLogEntry, AdminReport, PaginatedReportsResponse, AdminRole } from '../../services/adminApi.ts';
 import { Card } from '../common/Card.tsx';
 import { Badge } from '../common/Badge.tsx';
 import { Button } from '../common/Button.tsx';
@@ -18,66 +18,6 @@ import { formatRelativeTime } from '../../utils/format.ts';
 
 type ReportType = 'user' | 'post';
 type ReportStatus = 'pending' | 'reviewed' | 'dismissed' | 'action_taken';
-
-interface ReportItem {
-  id: string;
-  type: ReportType;
-  reporter_id: string;
-  reporter_username: string;
-  reported_user_id?: string;
-  reported_username?: string;
-  post_id?: string;
-  post_preview?: string;
-  reason: string;
-  details?: string;
-  status: ReportStatus;
-  reviewed_by?: string;
-  reviewed_at?: number;
-  created_at: number;
-}
-
-const mockReports: ReportItem[] = [
-  {
-    id: 'report_1',
-    type: 'user',
-    reporter_id: 'user_auth_123',
-    reporter_username: 'alice',
-    reported_user_id: 'user_auth_456',
-    reported_username: 'bob_spammer',
-    reason: 'spam',
-    details: 'Posting repetitive promotional content in multiple threads',
-    status: 'pending',
-    created_at: Date.now() - 3600000,
-  },
-  {
-    id: 'report_2',
-    type: 'post',
-    reporter_id: 'user_auth_789',
-    reporter_username: 'charlie',
-    post_id: 'post_123',
-    post_preview: 'This is a hateful message targeting...',
-    reason: 'hate',
-    details: 'Contains hate speech targeting a protected group',
-    status: 'reviewed',
-    reviewed_by: 'admin_john',
-    reviewed_at: Date.now() - 7200000,
-    created_at: Date.now() - 10800000,
-  },
-  {
-    id: 'report_3',
-    type: 'user',
-    reporter_id: 'user_auth_999',
-    reporter_username: 'diana',
-    reported_user_id: 'user_auth_111',
-    reported_username: 'fake_account',
-    reason: 'fake',
-    details: 'Impersonating a verified public figure',
-    status: 'action_taken',
-    reviewed_by: 'admin_jane',
-    reviewed_at: Date.now() - 1800000,
-    created_at: Date.now() - 3600000,
-  },
-];
 
 const getStatusBadge = (status: ReportStatus) => {
   switch (status) {
@@ -89,17 +29,6 @@ const getStatusBadge = (status: ReportStatus) => {
 };
 
 const getReasonBadge = (reason: string) => {
-  const colors: Record<string, 'red' | 'orange' | 'yellow' | 'green' | 'blue' | 'purple' | 'pink'> = {
-    spam: 'orange',
-    harassment: 'red',
-    hate: 'red',
-    violence: 'red',
-    illegal: 'red',
-    misinfo: 'yellow',
-    fake: 'purple',
-    other: 'gray' as any,
-  };
-  // Using available badge types
   const badgeColors: Record<string, 'blue' | 'gold' | 'cyan' | 'gray' | 'violet' | 'amber' | 'emerald' | 'rose'> = {
     spam: 'amber',
     harassment: 'rose',
@@ -114,32 +43,49 @@ const getReasonBadge = (reason: string) => {
 };
 
 export const ReportsView: React.FC = () => {
-  const [reports, setReports] = useState<ReportItem[]>(mockReports);
-  const [loading, setLoading] = useState(false);
+  const [reports, setReports] = useState<AdminReport[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'user' | 'post'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | ReportStatus>('all');
-  const [selectedReport, setSelectedReport] = useState<ReportItem | null>(null);
+  const [selectedReport, setSelectedReport] = useState<AdminReport | null>(null);
   const [showActionModal, setShowActionModal] = useState(false);
   const [actionStatus, setActionStatus] = useState<ReportStatus>('pending');
   const [actionNote, setActionNote] = useState('');
 
   const fetchReports = async () => {
-    setLoading(true);
-    // In production, this would call adminApi.getReports()
-    // For now, use mock data
-    setReports(mockReports);
-    setLoading(false);
+    try {
+      setLoading(true);
+      setError(null);
+
+      const offset = (page - 1) * pageSize;
+      const data: PaginatedReportsResponse = await adminApi.getReports({
+        limit: pageSize,
+        offset,
+        type: typeFilter !== 'all' ? typeFilter : undefined,
+        status: statusFilter !== 'all' ? statusFilter : undefined,
+        search: search || undefined,
+        sortOrder: 'desc',
+      });
+
+      setReports(data.reports);
+      setTotal(data.total);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load reports');
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {
     fetchReports();
-  }, []);
+  }, [search, typeFilter, statusFilter, page, pageSize]);
 
-  const handleAction = async (report: ReportItem, status: ReportStatus) => {
+  const handleAction = (report: AdminReport, status: ReportStatus) => {
     setSelectedReport(report);
     setActionStatus(status);
     setActionNote('');
@@ -149,8 +95,8 @@ export const ReportsView: React.FC = () => {
   const confirmAction = async () => {
     if (!selectedReport) return;
     try {
-      // In production: await adminApi.resolveReport(selectedReport.id, actionStatus, actionNote);
-      setReports(reports.map(r => r.id === selectedReport.id ? { ...r, status: actionStatus, reviewed_by: 'current_admin', reviewed_at: Date.now() } : r));
+      await adminApi.resolveReport(selectedReport.id, actionStatus, actionNote || undefined);
+      setReports(reports.map(r => r.id === selectedReport.id ? { ...r, status: actionStatus, reviewed_at: Date.now() } : r));
       setShowActionModal(false);
       setSelectedReport(null);
     } catch (err) {
@@ -183,29 +129,6 @@ export const ReportsView: React.FC = () => {
     );
   }
 
-  const getStatusBadge = (status: ReportStatus) => {
-    switch (status) {
-      case 'pending': return <Badge type="amber" size="xs">Pending</Badge>;
-      case 'reviewed': return <Badge type="blue" size="xs">Reviewed</Badge>;
-      case 'dismissed': return <Badge type="gray" size="xs">Dismissed</Badge>;
-      case 'action_taken': return <Badge type="emerald" size="xs">Action Taken</Badge>;
-    }
-  };
-
-  const getReasonBadge = (reason: string) => {
-    const badgeColors: Record<string, 'blue' | 'gold' | 'cyan' | 'gray' | 'violet' | 'amber' | 'emerald' | 'rose'> = {
-      spam: 'amber',
-      harassment: 'rose',
-      hate: 'rose',
-      violence: 'rose',
-      illegal: 'violet',
-      misinfo: 'amber',
-      fake: 'violet',
-      other: 'gray' as any,
-    };
-    return <Badge type={badgeColors[reason] || 'gray'} size="xs">{reason}</Badge>;
-  };
-
   return (
     <div className="space-y-6 p-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -215,13 +138,20 @@ export const ReportsView: React.FC = () => {
         </div>
       </div>
 
+      {error && (
+        <div className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-4 text-rose-300 text-sm flex items-center gap-2">
+          <span>{error}</span>
+          <Button variant="ghost" size="sm" className="ml-auto" onClick={fetchReports}>Retry</Button>
+        </div>
+      )}
+
       {/* Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <Card className="p-5">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs font-medium text-neutral-500 uppercase tracking-wide">Total Reports</p>
-              <p className="mt-1 text-3xl font-bold text-white">{mockReports.length}</p>
+              <p className="mt-1 text-3xl font-bold text-white">{total}</p>
             </div>
             <div className="h-10 w-10 rounded-xl bg-cyan-500/10 flex items-center justify-center">
               <Flag className="h-6 w-6 text-cyan-400" />
@@ -232,7 +162,7 @@ export const ReportsView: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs font-medium text-neutral-500 uppercase tracking-wider">Pending Review</p>
-              <p className="mt-1 text-3xl font-bold text-white">{mockReports.filter(r => r.status === 'pending').length}</p>
+              <p className="mt-1 text-3xl font-bold text-white">{reports.filter(r => r.status === 'pending').length}</p>
             </div>
             <div className="h-10 w-10 rounded-xl bg-amber-500/10 flex items-center justify-center">
               <Flag className="h-6 w-6 text-amber-400" />
@@ -243,7 +173,7 @@ export const ReportsView: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs font-medium text-neutral-500 uppercase tracking-wider">Action Taken</p>
-              <p className="mt-1 text-3xl font-bold text-white">{mockReports.filter(r => r.status === 'action_taken').length}</p>
+              <p className="mt-1 text-3xl font-bold text-white">{reports.filter(r => r.status === 'action_taken').length}</p>
             </div>
             <div className="h-10 w-10 rounded-xl bg-emerald-500/10 flex items-center justify-center">
               <Flag className="h-6 w-6 text-emerald-400" />
@@ -254,7 +184,7 @@ export const ReportsView: React.FC = () => {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs font-medium text-neutral-500 uppercase tracking-wider">Dismissed</p>
-              <p className="mt-1 text-3xl font-bold text-white">{mockReports.filter(r => r.status === 'dismissed').length}</p>
+              <p className="mt-1 text-3xl font-bold text-white">{reports.filter(r => r.status === 'dismissed').length}</p>
             </div>
             <div className="h-10 w-10 rounded-xl bg-gray-500/10 flex items-center justify-center">
               <Flag className="h-6 w-6 text-gray-400" />
@@ -269,12 +199,12 @@ export const ReportsView: React.FC = () => {
           <Input
             placeholder="Search reports..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
             className="sm:col-span-2"
           />
           <Select
             value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value as 'all' | 'user' | 'post')}
+            onChange={(e) => { setTypeFilter(e.target.value as 'all' | 'user' | 'post'); setPage(1); }}
             options={[
               { value: 'all', label: 'All Types' },
               { value: 'user', label: 'User Reports' },
@@ -283,7 +213,7 @@ export const ReportsView: React.FC = () => {
           />
           <Select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as 'all' | ReportStatus)}
+            onChange={(e) => { setStatusFilter(e.target.value as 'all' | ReportStatus); setPage(1); }}
             options={[
               { value: 'all', label: 'All Status' },
               { value: 'pending', label: 'Pending' },
@@ -311,21 +241,26 @@ export const ReportsView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {mockReports.map((report) => (
-                <tr key={report.id} className="hover:bg-white/[0.02] transition-colors">
-                  <td className="px-4 py-3">
-                    <Badge type={report.type === 'user' ? 'blue' : 'violet'} size="xs">
-                      {report.type === 'user' ? 'User Report' : 'Post Report'}
-                    </Badge>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <div className="h-6 w-6 rounded-full bg-gradient-to-br from-cyan-500 to-purple-600 flex items-center justify-center">
-                        <span className="font-bold text-white text-xs">{report.reporter_username?.charAt(0).toUpperCase() || 'U'}</span>
+              {reports.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-12 text-center text-neutral-500">No reports found</td>
+                </tr>
+              ) : (
+                reports.map((report) => (
+                  <tr key={report.id} className="hover:bg-white/[0.02] transition-colors">
+                    <td className="px-4 py-3">
+                      <Badge type={report.type === 'user' ? 'blue' : 'violet'} size="xs">
+                        {report.type === 'user' ? 'User Report' : 'Post Report'}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <div className="h-6 w-6 rounded-full bg-gradient-to-br from-cyan-500 to-purple-600 flex items-center justify-center">
+                          <span className="font-bold text-white text-xs">{report.reporter_username?.charAt(0).toUpperCase() || 'U'}</span>
+                        </div>
+                        <span className="font-medium text-white truncate">@{report.reporter_username}</span>
                       </div>
-                      <span className="font-medium text-white truncate">@{report.reporter_username}</span>
-                    </div>
-                  </td>
+                    </td>
                     <td className="px-4 py-3">
                       {report.type === 'user' ? (
                         <span className="font-medium text-white truncate max-w-xs">@{report.reported_username}</span>
@@ -366,11 +301,42 @@ export const ReportsView: React.FC = () => {
                       </div>
                     </td>
                   </tr>
-              ))}
+                ))
+              )}
             </tbody>
           </table>
         </div>
       </Card>
+
+      {/* Action Modal */}
+      {showActionModal && selectedReport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0a0f18]/95 p-6 shadow-2xl">
+            <h2 className="text-lg font-bold text-white mb-4">Resolve Report #{selectedReport.id.slice(-6)}</h2>
+            <p className="text-neutral-400 mb-4 text-sm">{selectedReport.type === 'user' ? `Reported user: @${selectedReport.reported_username}` : `Reported post preview: ${selectedReport.post_preview?.slice(0, 60)}...`}</p>
+            <Select
+              value={actionStatus}
+              onChange={(e) => setActionStatus(e.target.value as ReportStatus)}
+              options={[
+                { value: 'reviewed', label: 'Mark as Reviewed' },
+                { value: 'dismissed', label: 'Dismiss' },
+                { value: 'action_taken', label: 'Action Taken' },
+              ]}
+              className="mb-4"
+            />
+            <Input
+              placeholder="Action notes (optional)"
+              value={actionNote}
+              onChange={(e) => setActionNote(e.target.value)}
+              className="mb-4"
+            />
+            <div className="flex justify-end gap-2">
+              <Button variant="ghost" onClick={() => { setShowActionModal(false); setSelectedReport(null); }}>Cancel</Button>
+              <Button onClick={confirmAction} disabled={loading}>Resolve</Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
