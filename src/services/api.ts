@@ -1,6 +1,7 @@
 import { Post, User, Notification, Message, Conversation, TrendItem, AppConfig, CallSession } from '../types/index.ts';
 import { getBackendApiUrl } from '../config/backendUrl.ts';
-import { queryCache, type QuerySnapshot } from './queryCache.ts';
+import { queryCache, type QueryCache, type QuerySnapshot } from './queryCache.ts';
+import { updateProfileQueries } from './profileCache.ts';
 
 export interface AuthUser extends User {
   email?: string | null;
@@ -379,17 +380,7 @@ class ApiService {
 
     if (endpoint === '/users/profile' && method === 'PUT' && isUser(data)) {
       this.updateCachedPostAuthors(prefix, data);
-      queryCache.updateMatching(prefix, (key, snapshot) => {
-        const resource = key.slice(prefix.length);
-        if (resource === '/users') {
-          const users = Array.isArray(snapshot.data) ? snapshot.data as User[] : [];
-          return { ...snapshot, data: users.map((user) => user.id === data.id ? data : user) };
-        }
-        if (resource === `/users/${encodeURIComponent(data.username)}`) {
-          return { ...snapshot, data };
-        }
-        return null;
-      });
+      updateProfileQueries(queryCache, prefix, data);
       return;
     }
 
@@ -731,9 +722,17 @@ class ApiService {
   }
 
   // Posts
-  public getPosts(feedType: 'for-you' | 'following' = 'for-you', authorId?: string): Promise<Post[]> {
+  public getPosts(
+    feedType: 'for-you' | 'following' = 'for-you',
+    authorId?: string,
+    pagination?: { limit: number; offset: number },
+  ): Promise<Post[]> {
     const params = new URLSearchParams({ feed: feedType });
     if (authorId) params.append('authorId', authorId);
+    if (pagination) {
+      params.set('limit', String(pagination.limit));
+      params.set('offset', String(pagination.offset));
+    }
     return this.request<Post[]>(`/posts?${params.toString()}`);
   }
 

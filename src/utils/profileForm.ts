@@ -25,7 +25,11 @@ export interface EditProfileFieldErrors {
 }
 
 export interface ProfileImageUploader {
-  (file: File, purpose: ProfileImagePurpose): Promise<{ url: string }>;
+  (
+    file: File,
+    purpose: ProfileImagePurpose,
+    onProgress?: (percent: number) => void,
+  ): Promise<{ url: string }>;
 }
 
 export type ProfileImageUploadResult =
@@ -110,12 +114,13 @@ export async function uploadProfileImage(
   file: File,
   purpose: ProfileImagePurpose,
   uploader: ProfileImageUploader,
+  onProgress?: (percent: number) => void,
 ): Promise<ProfileImageUploadResult> {
   const validationError = validateImageFile(file);
   if (validationError) return { ok: false, error: validationError };
 
   try {
-    const response = await uploader(file, purpose);
+    const response = await uploader(file, purpose, onProgress);
     const url = typeof response?.url === 'string' ? response.url.trim() : '';
     if (!url) return { ok: false, error: 'Upload did not return a file reference.' };
     return { ok: true, url };

@@ -310,7 +310,25 @@ export async function handleApiRequest(
       const currentUserId = await getCurrentUserId(req);
       const feedType = (url.searchParams.get('feed') as 'for-you' | 'following') || 'for-you';
       const authorId = url.searchParams.get('authorId') || undefined;
-      sendJson(res, 200, await dbAdapter.getPosts(currentUserId, feedType, authorId));
+      const limitValue = url.searchParams.get('limit');
+      const offsetValue = url.searchParams.get('offset');
+      let pagination: { limit: number; offset: number } | undefined;
+      if (limitValue !== null || offsetValue !== null) {
+        const limit = limitValue === null ? Number.NaN : Number(limitValue);
+        const offset = offsetValue === null ? 0 : Number(offsetValue);
+        if (
+          !Number.isSafeInteger(limit) ||
+          limit < 1 ||
+          limit > 50 ||
+          !Number.isSafeInteger(offset) ||
+          offset < 0
+        ) {
+          sendError(res, 400, 'Post pagination must use a limit from 1 to 50 and a non-negative offset.');
+          return true;
+        }
+        pagination = { limit, offset };
+      }
+      sendJson(res, 200, await dbAdapter.getPosts(currentUserId, feedType, authorId, pagination));
       return true;
     }
 
@@ -414,14 +432,19 @@ export async function handleApiRequest(
 
     const userMatch = /^\/api\/users\/([^/]+)$/.exec(pathname);
     if (userMatch && method === 'GET') {
-      const user = await dbAdapter.getUserByUsername(decodeURIComponent(userMatch[1]));
+      const [user, currentUserId] = await Promise.all([
+        dbAdapter.getUserByUsername(decodeURIComponent(userMatch[1])),
+        getCurrentUserId(req),
+      ]);
       if (!user) {
         sendError(res, 404, 'User not found.');
         return true;
       }
       sendJson(res, 200, {
         ...user,
-        isFollowing: await dbAdapter.isFollowing(await getCurrentUserId(req), user.id),
+        isFollowing: Boolean(
+          currentUserId && await dbAdapter.isFollowing(currentUserId, user.id),
+        ),
       });
       return true;
     }

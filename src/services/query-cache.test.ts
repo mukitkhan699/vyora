@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { QueryCache } from './queryCache.ts';
+import { updateProfileQueries } from './profileCache.ts';
+import type { User } from '../types/index.ts';
 
 test('shares simultaneous requests for the same key', async () => {
   const cache = new QueryCache();
@@ -75,4 +77,81 @@ test('does not repopulate cleared account data from an in-flight request', async
   resolveOld('old account data');
   await Promise.all([oldRequest, newRequest]);
   assert.equal(cache.getSnapshot<string>('account-a:/feed').data, 'new account data');
+});
+
+test('profile navigation reuses cached user data and isolates different users', async () => {
+  const cache = new QueryCache();
+  let aliceRequests = 0;
+  let bobRequests = 0;
+  const alice = { id: 'alice-id', username: 'alice' };
+  const bob = { id: 'bob-id', username: 'bob' };
+
+  await Promise.all([
+    cache.fetch('account-a:/users/alice', 1000, async () => {
+      aliceRequests += 1;
+      return alice;
+    }),
+    cache.fetch('account-a:/users/bob', 1000, async () => {
+      bobRequests += 1;
+      return bob;
+    }),
+  ]);
+  assert.equal((await cache.fetch('account-a:/users/alice', 1000, async () => {
+    aliceRequests += 1;
+    return alice;
+  })).id, 'alice-id');
+  assert.equal(aliceRequests, 1);
+  assert.equal(bobRequests, 1);
+  assert.equal(cache.getSnapshot<typeof alice>('account-a:/users/bob').data?.id, 'bob-id');
+});
+
+test('concurrent requests for the same profile share one network loader', async () => {
+  const cache = new QueryCache();
+  let requests = 0;
+  let resolveProfile!: (profile: { id: string; username: string }) => void;
+  const loader = () => {
+    requests += 1;
+    return new Promise<{ id: string; username: string }>((resolve) => {
+      resolveProfile = resolve;
+    });
+  };
+
+  const first = cache.fetch('account-a:/users/alice', 1000, loader);
+  const second = cache.fetch('account-a:/users/alice', 1000, loader);
+  assert.equal(requests, 1);
+  resolveProfile({ id: 'alice-id', username: 'alice' });
+  assert.deepEqual(await Promise.all([first, second]), [
+    { id: 'alice-id', username: 'alice' },
+    { id: 'alice-id', username: 'alice' },
+  ]);
+});
+
+test('profile updates refresh only the matching account-scoped cached profile', async () => {
+  const cache = new QueryCache();
+  const alice: User & { isFollowing?: boolean } = {
+    id: 'alice-id',
+    username: 'alice',
+    name: 'Alice',
+    avatarUrl: '/avatar.png',
+    bannerUrl: '/old-cover.png',
+    verified: false,
+    followersCount: 2,
+    followingCount: 1,
+    joinedDate: 'Joined 2024',
+    isFollowing: true,
+  };
+  await cache.fetch('account-a:/users/alice', 1000, async () => alice);
+  await cache.fetch('account-b:/users/alice', 1000, async () => ({ ...alice, bannerUrl: '/other.png' }));
+
+  updateProfileQueries(cache, 'account-a:', { ...alice, bannerUrl: '/new-cover.png' });
+
+  assert.equal(
+    cache.getSnapshot<typeof alice>('account-a:/users/alice').data?.bannerUrl,
+    '/new-cover.png',
+  );
+  assert.equal(cache.getSnapshot<typeof alice>('account-a:/users/alice').data?.isFollowing, true);
+  assert.equal(
+    cache.getSnapshot<typeof alice>('account-b:/users/alice').data?.bannerUrl,
+    '/other.png',
+  );
 });

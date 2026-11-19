@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { CdnImage } from '../common/CdnImage.tsx';
 import { ImageLightbox } from './ImageLightbox.tsx';
+import { openImageViewer } from './mediaInteractions.ts';
 
 interface PostImageGalleryProps {
   images: string[];
@@ -13,11 +14,23 @@ export const PostImageGallery: React.FC<PostImageGalleryProps> = ({ images }) =>
   if (validImages.length === 0) return null;
 
   const handleImageClick = (e: React.MouseEvent, index: number) => {
-    e.stopPropagation();
-    setLightboxIndex(index);
+    openImageViewer(e, index, setLightboxIndex);
+  };
+
+  const handleImageKeyDown = (e: React.KeyboardEvent, index: number) => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    openImageViewer(e, index, setLightboxIndex);
   };
 
   const count = validImages.length;
+  const imageInteractionProps = (index: number) => ({
+    role: 'button' as const,
+    tabIndex: 0,
+    'aria-label': `Open image ${index + 1} of ${count}`,
+    onClick: (event: React.MouseEvent<HTMLDivElement>) => handleImageClick(event, index),
+    onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => handleImageKeyDown(event, index),
+  });
 
   return (
     <>
@@ -25,7 +38,7 @@ export const PostImageGallery: React.FC<PostImageGalleryProps> = ({ images }) =>
         {/* 1 Image: Full-width natural height with max-h-96 */}
         {count === 1 && (
           <div
-            onClick={(e) => handleImageClick(e, 0)}
+            {...imageInteractionProps(0)}
             className="w-full max-h-96 bg-neutral-900/60 overflow-hidden cursor-pointer group flex items-center justify-center"
           >
             <CdnImage
@@ -42,7 +55,7 @@ export const PostImageGallery: React.FC<PostImageGalleryProps> = ({ images }) =>
             {validImages.map((url, i) => (
               <div
                 key={i}
-                onClick={(e) => handleImageClick(e, i)}
+                {...imageInteractionProps(i)}
                 className="relative h-full bg-neutral-900/60 overflow-hidden cursor-pointer group"
               >
                 <CdnImage
@@ -59,7 +72,7 @@ export const PostImageGallery: React.FC<PostImageGalleryProps> = ({ images }) =>
         {count === 3 && (
           <div className="grid grid-cols-2 gap-1.5 h-64 sm:h-80">
             <div
-              onClick={(e) => handleImageClick(e, 0)}
+              {...imageInteractionProps(0)}
               className="relative h-full bg-neutral-900/60 overflow-hidden cursor-pointer group"
             >
               <CdnImage
@@ -72,7 +85,7 @@ export const PostImageGallery: React.FC<PostImageGalleryProps> = ({ images }) =>
               {validImages.slice(1, 3).map((url, i) => (
                 <div
                   key={i + 1}
-                  onClick={(e) => handleImageClick(e, i + 1)}
+                  {...imageInteractionProps(i + 1)}
                   className="relative h-full bg-neutral-900/60 overflow-hidden cursor-pointer group"
                 >
                   <CdnImage
@@ -92,7 +105,7 @@ export const PostImageGallery: React.FC<PostImageGalleryProps> = ({ images }) =>
             {validImages.map((url, i) => (
               <div
                 key={i}
-                onClick={(e) => handleImageClick(e, i)}
+                {...imageInteractionProps(i)}
                 className="relative h-32 sm:h-40 bg-neutral-900/60 overflow-hidden cursor-pointer group"
               >
                 <CdnImage
@@ -111,7 +124,7 @@ export const PostImageGallery: React.FC<PostImageGalleryProps> = ({ images }) =>
             {validImages.slice(0, 3).map((url, i) => (
               <div
                 key={i}
-                onClick={(e) => handleImageClick(e, i)}
+                {...imageInteractionProps(i)}
                 className="relative h-32 sm:h-40 bg-neutral-900/60 overflow-hidden cursor-pointer group"
               >
                 <CdnImage
@@ -123,7 +136,7 @@ export const PostImageGallery: React.FC<PostImageGalleryProps> = ({ images }) =>
             ))}
 
             <div
-              onClick={(e) => handleImageClick(e, 3)}
+              {...imageInteractionProps(3)}
               className="relative h-32 sm:h-40 bg-neutral-900/60 overflow-hidden cursor-pointer group"
             >
               <CdnImage

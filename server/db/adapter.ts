@@ -45,8 +45,6 @@ interface PostRow extends QueryResultRow {
   author_public_id: string;
   author_username: string;
   author_name: string;
-  author_email: string | null;
-  author_email_verified: boolean;
   author_created_at: number | string;
   author_joined_date: string | null;
   author_avatar_url: string;
@@ -80,8 +78,6 @@ const postSelect = `
     author.public_id AS author_public_id,
     author.username AS author_username,
     author.name AS author_name,
-    author.email AS author_email,
-    author.email_verified AS author_email_verified,
     author.created_at AS author_created_at,
     author.joined_date AS author_joined_date,
     author.avatar_url AS author_avatar_url,
@@ -151,25 +147,26 @@ function userFromRow(row: UserRow): User {
 }
 
 function postAuthor(row: PostRow): User {
-  return userFromRow({
-    id: 0,
-    public_id: row.author_public_id,
+  return {
+    id: row.author_public_id,
     username: row.author_username,
     name: row.author_name,
-    email: row.author_email,
-    email_verified: row.author_email_verified,
-    created_at: row.author_created_at,
-    joined_date: row.author_joined_date,
-    avatar_url: row.author_avatar_url,
-    banner_url: row.author_banner_url,
-    bio: row.author_bio,
-    location: row.author_location,
-    website: row.author_website,
+    avatarUrl: row.author_avatar_url,
+    bannerUrl: row.author_banner_url || undefined,
+    bio: row.author_bio || undefined,
+    location: row.author_location || undefined,
+    website: row.author_website || undefined,
     verified: row.author_verified,
-    is_gold: row.author_is_gold,
-    followers_count: row.author_followers_count,
-    following_count: row.author_following_count,
-  });
+    isGold: row.author_is_gold,
+    followersCount: Number(row.author_followers_count),
+    followingCount: Number(row.author_following_count),
+    joinedDate:
+      row.author_joined_date ||
+      `Joined ${new Date(Number(row.author_created_at)).toLocaleDateString('en-US', {
+        month: 'long',
+        year: 'numeric',
+      })}`,
+  };
 }
 
 function postFromRow(row: PostRow, currentUserId: string): Post {
@@ -491,6 +488,7 @@ export class DatabaseAdapter {
     currentUserId: string,
     feedType: 'for-you' | 'following' = 'for-you',
     authorId?: string,
+    pagination?: { limit: number; offset: number },
   ): Promise<Post[]> {
     const result = await query<PostRow>(
       `${postSelect}
@@ -499,19 +497,26 @@ export class DatabaseAdapter {
            SELECT 1 FROM zunari_follows follow
            WHERE follow.follower_id = $1 AND follow.following_id = post.author_id
          ))
-       ORDER BY post.created_at DESC`,
-      [currentUserId, authorId || null, feedType === 'following'],
+       ORDER BY post.created_at DESC${pagination ? '\n       LIMIT $4 OFFSET $5' : ''}`,
+      pagination
+        ? [currentUserId, authorId || null, feedType === 'following', pagination.limit, pagination.offset]
+        : [currentUserId, authorId || null, feedType === 'following'],
     );
-    return Promise.all(
-      result.rows.map(async (row) => {
-        const post = postFromRow(row, currentUserId);
-        if (row.quote_post_id) {
-          const quoted = await this.getPostRow(row.quote_post_id, currentUserId);
-          if (quoted) post.quotePost = postFromRow(quoted, currentUserId);
-        }
-        return post;
-      }),
+    const quotedIds = [...new Set(
+      result.rows.map((row) => row.quote_post_id).filter((id): id is string => Boolean(id)),
+    )];
+    const quotedRows = quotedIds.length
+      ? await query<PostRow>(`${postSelect} WHERE post.id = ANY($2::text[])`, [currentUserId, quotedIds])
+      : { rows: [] as PostRow[] };
+    const quotedPosts = new Map(
+      quotedRows.rows.map((row) => [row.id, postFromRow(row, currentUserId)]),
     );
+    return result.rows.map((row) => {
+      const post = postFromRow(row, currentUserId);
+      const quotedPost = row.quote_post_id ? quotedPosts.get(row.quote_post_id) : undefined;
+      if (quotedPost) post.quotePost = quotedPost;
+      return post;
+    });
   }
 
   public async getPostById(

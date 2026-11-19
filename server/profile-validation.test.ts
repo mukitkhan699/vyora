@@ -58,6 +58,13 @@ test('profile updates normalize absolute app media references before persistence
   );
 });
 
+test('cover updates persist the stable file reference used by profile reads', () => {
+  assert.deepEqual(
+    buildProfileUpdates({ bannerUrl: `https://api.example${BANNER_PATH}` }),
+    [['banner_url', BANNER_PATH]],
+  );
+});
+
 test('profile updates still reject malformed website URLs', () => {
   assert.throws(
     () => buildProfileUpdates({ website: 'javascript:alert(1)' }),

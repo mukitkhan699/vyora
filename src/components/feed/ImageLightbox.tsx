@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { X, ChevronLeft, ChevronRight, Download } from 'lucide-react';
+import { handleImageViewerOverlayClick } from './mediaInteractions.ts';
 
 interface ImageLightboxProps {
   images: string[];
@@ -94,7 +95,7 @@ export const ImageLightbox: React.FC<ImageLightboxProps> = ({
       aria-modal="true"
       aria-label="Image viewer"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/95 backdrop-blur-md select-none animate-in fade-in duration-200 z-safe-x"
-      onClick={onClose}
+      onClick={(event) => handleImageViewerOverlayClick(event, onClose)}
     >
       {/* Top Header Bar */}
       <div className="absolute top-0 left-0 right-0 p-4 flex items-center justify-between text-white z-20">

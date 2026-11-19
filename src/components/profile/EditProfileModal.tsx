@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { User } from '../../types/index.ts';
 import { Modal } from '../common/Modal.tsx';
 import { Button } from '../common/Button.tsx';
+import { CdnImage } from '../common/CdnImage.tsx';
 import { api } from '../../services/api.ts';
-import { IMAGE_ACCEPT_ATTRIBUTE } from '../../utils/mediaValidation.ts';
+import { IMAGE_ACCEPT_ATTRIBUTE, validateImageFile } from '../../utils/mediaValidation.ts';
 import {
   uploadProfileImage,
   submitEditProfileForm,
@@ -31,16 +32,24 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
   const [website, setWebsite] = useState(user.website || '');
   const [avatarUrl, setAvatarUrl] = useState(user.avatarUrl || '');
   const [bannerUrl, setBannerUrl] = useState(user.bannerUrl || '');
+  const [bannerPreviewUrl, setBannerPreviewUrl] = useState(user.bannerUrl || '');
   const [avatarRemovalRequested, setAvatarRemovalRequested] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const [uploadingBanner, setUploadingBanner] = useState(false);
+  const [bannerUploadProgress, setBannerUploadProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<EditProfileFieldErrors>({});
   const [avatarPresets, setAvatarPresets] = useState<string[]>([]);
 
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const bannerInputRef = useRef<HTMLInputElement>(null);
+  const bannerPreviewObjectUrls = useRef(new Set<string>());
+
+  useEffect(() => () => {
+    bannerPreviewObjectUrls.current.forEach((url) => URL.revokeObjectURL(url));
+    bannerPreviewObjectUrls.current.clear();
+  }, []);
 
   useEffect(() => {
     api
@@ -89,16 +98,36 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     setErrorMsg(null);
+    const validationError = validateImageFile(file);
+    if (validationError) {
+      setErrorMsg(validationError);
+      if (bannerInputRef.current) bannerInputRef.current.value = '';
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+    bannerPreviewObjectUrls.current.add(previewUrl);
+    setBannerPreviewUrl(previewUrl);
+    setBannerUploadProgress(0);
     try {
       setUploadingBanner(true);
-      const result = await uploadProfileImage(file, 'profile-cover', (selected, purpose) =>
-        api.uploadFile(selected, purpose),
+      const result = await uploadProfileImage(
+        file,
+        'profile-cover',
+        (selected, purpose, onProgress) => api.uploadFile(selected, purpose, { onProgress }),
+        setBannerUploadProgress,
       );
       if (!result.ok) {
         setErrorMsg(result.error);
+        setBannerPreviewUrl(bannerUrl || user.bannerUrl || '');
+        URL.revokeObjectURL(previewUrl);
+        bannerPreviewObjectUrls.current.delete(previewUrl);
         return;
       }
-      setBannerUrl(api.resolveFileUrl(result.url));
+      setBannerUrl(result.url);
+      setBannerPreviewUrl(result.url);
+      bannerPreviewObjectUrls.current.forEach((url) => URL.revokeObjectURL(url));
+      bannerPreviewObjectUrls.current.clear();
       clearFieldError('bannerUrl');
     } finally {
       setUploadingBanner(false);
@@ -297,6 +326,19 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
         <div className="p-3 bg-neutral-900/60 rounded-xl border border-neutral-800">
           <label className="block text-xs font-semibold text-neutral-300 mb-2">Banner Image</label>
           <div className="flex flex-col gap-1.5">
+            <div className="w-full aspect-[3/1] overflow-hidden rounded-lg border border-neutral-800 bg-black">
+              {bannerPreviewUrl ? (
+                <CdnImage
+                  src={bannerPreviewUrl}
+                  alt="Banner preview"
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-xs text-neutral-500">
+                  No banner selected
+                </div>
+              )}
+            </div>
             <input
               type="file"
               ref={bannerInputRef}
@@ -312,14 +354,16 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
                 className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-cyan-950 border border-cyan-800/60 text-cyan-300 text-xs rounded-lg hover:bg-cyan-900 cursor-pointer disabled:opacity-50 shrink-0"
               >
                 <Upload className="w-3.5 h-3.5" />
-                {uploadingBanner ? 'Uploading...' : 'Upload Banner'}
+                {uploadingBanner ? `Uploading ${bannerUploadProgress}%` : 'Upload Banner'}
               </button>
               <input
                 type="text"
                 inputMode="url"
                 value={bannerUrl}
+                disabled={uploadingBanner}
                 onChange={(e) => {
                   setBannerUrl(e.target.value);
+                  setBannerPreviewUrl(e.target.value);
                   clearFieldError('bannerUrl');
                 }}
                 placeholder="Or paste banner image URL..."
@@ -327,6 +371,21 @@ export const EditProfileModal: React.FC<EditProfileModalProps> = ({
                 className="flex-1 bg-black border border-neutral-800 rounded-lg px-2.5 py-1 text-xs text-white outline-none focus:border-cyan-500"
               />
             </div>
+            {uploadingBanner && (
+              <div
+                className="h-1 overflow-hidden rounded-full bg-neutral-800"
+                role="progressbar"
+                aria-label="Banner upload progress"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={bannerUploadProgress}
+              >
+                <div
+                  className="h-full bg-cyan-400 transition-[width]"
+                  style={{ width: `${bannerUploadProgress}%` }}
+                />
+              </div>
+            )}
             {fieldErrors.bannerUrl && (
               <p className="text-[11px] text-red-400">{fieldErrors.bannerUrl}</p>
             )}

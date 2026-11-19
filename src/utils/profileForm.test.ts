@@ -112,6 +112,51 @@ test('uploaded avatar reference is included in the profile save payload', async 
   assert.equal(saved.avatarUrl, AVATAR_PATH);
 });
 
+test('cover upload validates the image, reports progress, and produces a saveable profile URL', async () => {
+  const progress: number[] = [];
+  const upload = await uploadProfileImage(
+    imageFile(),
+    'profile-cover',
+    async (_file, purpose, onProgress) => {
+      assert.equal(purpose, 'profile-cover');
+      onProgress?.(60);
+      return { url: BANNER_PATH };
+    },
+    (percent) => progress.push(percent),
+  );
+  assert.deepEqual(upload, { ok: true, url: BANNER_PATH });
+  assert.deepEqual(progress, [60]);
+
+  const payload = buildProfileUpdatePayload(
+    formValues({ bannerUrl: upload.ok ? upload.url : '', originalBannerUrl: '' }),
+  );
+  assert.equal(payload.bannerUrl, BANNER_PATH);
+});
+
+test('invalid cover images are rejected before the upload request', async () => {
+  const invalidFile = new File([new Uint8Array(1)], 'cover.txt', { type: 'text/plain' });
+  let uploaderCalled = false;
+  const result = await uploadProfileImage(invalidFile, 'profile-cover', async () => {
+    uploaderCalled = true;
+    return { url: BANNER_PATH };
+  });
+
+  assert.deepEqual(result, { ok: false, error: 'Choose a JPEG, PNG, GIF, or WebP image.' });
+  assert.equal(uploaderCalled, false);
+});
+
+test('failed cover upload does not produce a profile update reference', async () => {
+  const upload = await uploadProfileImage(imageFile(), 'profile-cover', async () => {
+    throw new Error('Storage is unavailable.');
+  });
+  assert.deepEqual(upload, { ok: false, error: 'Storage is unavailable.' });
+
+  const payload = buildProfileUpdatePayload(
+    formValues({ bannerUrl: '', originalBannerUrl: BANNER_PATH }),
+  );
+  assert.equal(payload.bannerUrl, undefined);
+});
+
 test('upload failures return a visible error instead of success', async () => {
   const result = await uploadProfileImage(imageFile(), 'profile-avatar', async () => {
     throw new Error('Storage is unavailable.');

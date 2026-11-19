@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, Calendar, MapPin, Link as LinkIcon } from 'lucide-react';
 import { User, Post } from '../../types/index.ts';
 import { api } from '../../services/api.ts';
@@ -15,6 +15,8 @@ import { EmptyState } from '../common/EmptyState.tsx';
 import { Modal } from '../common/Modal.tsx';
 import { UserBadges } from '../common/UserBadges.tsx';
 import { useApiQuery } from '../../hooks/useApiQuery.ts';
+
+const PROFILE_POST_PAGE_SIZE = 20;
 
 interface ProfileViewProps {
   username?: string;
@@ -50,39 +52,98 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const { currentUser, updateCurrentUser } = useAuth();
   const { theme, accentBgClass, accentTextClass } = useTheme();
 
-  const [followingOverride, setFollowingOverride] = useState<boolean>();
+  const [followingOverride, setFollowingOverride] = useState<{ userId: string; value: boolean }>();
   const [activeTab, setActiveTab] = useState<'posts' | 'replies' | 'highlights' | 'media' | 'likes'>('posts');
   const [showEditModal, setShowEditModal] = useState(false);
   const [showVerificationNotice, setShowVerificationNotice] = useState(false);
+  const [additionalPosts, setAdditionalPosts] = useState<{
+    userId: string;
+    posts: Post[];
+    hasMore: boolean;
+  } | null>(null);
+  const [loadingMorePosts, setLoadingMorePosts] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<{ userId: string; message: string } | null>(null);
 
   const targetUsername = username || currentUser?.username || 'mukitk';
   const profileQuery = useApiQuery<User & { isFollowing?: boolean }>(
     `/users/${encodeURIComponent(targetUsername)}`,
     () => api.getUserByUsername(targetUsername),
   );
-  const user = profileQuery.data ?? null;
+  const requestedUsername = targetUsername.replace(/^@/, '').toLowerCase();
+  const user = profileQuery.data?.username.toLowerCase() === requestedUsername
+    ? profileQuery.data
+    : null;
   const postsQuery = useApiQuery<Post[]>(
-    `/posts?feed=for-you&authorId=${encodeURIComponent(user?.id ?? '')}`,
-    () => user ? api.getPosts('for-you', user.id) : Promise.resolve([]),
+    `/posts?feed=for-you&authorId=${encodeURIComponent(user?.id ?? '')}&limit=${PROFILE_POST_PAGE_SIZE + 1}&offset=0`,
+    () => user
+      ? api.getPosts('for-you', user.id, { limit: PROFILE_POST_PAGE_SIZE + 1, offset: 0 })
+      : Promise.resolve([]),
     Boolean(user?.id),
   );
-  const posts = postsQuery.data ?? [];
-  const isFollowing = followingOverride ?? user?.isFollowing ?? false;
-  const loading = profileQuery.isLoading || Boolean(user?.id && postsQuery.isLoading);
+  const currentUserId = user?.id;
+  const profileIdRef = useRef<string | undefined>(currentUserId);
+  profileIdRef.current = currentUserId;
+  const cachedAdditionalPosts = additionalPosts?.userId === currentUserId ? additionalPosts : null;
+  const posts = [
+    ...(postsQuery.data ?? []).slice(0, PROFILE_POST_PAGE_SIZE),
+    ...(cachedAdditionalPosts?.posts ?? []),
+  ];
+  const hasMorePosts = cachedAdditionalPosts
+    ? cachedAdditionalPosts.hasMore
+    : (postsQuery.data?.length ?? 0) > PROFILE_POST_PAGE_SIZE;
+  const isFollowing = followingOverride && user && followingOverride.userId === user.id
+    ? followingOverride.value
+    : user?.isFollowing ?? false;
+  const loading = profileQuery.isLoading;
   const isOwnProfile = currentUser && user && currentUser.id === user.id;
   const websiteUrl = getSafeWebsiteUrl(user?.website);
 
-  useEffect(() => setFollowingOverride(undefined), [targetUsername]);
+  useEffect(() => {
+    setFollowingOverride(undefined);
+    setActiveTab('posts');
+    setAdditionalPosts(null);
+    setLoadingMorePosts(false);
+    setLoadMoreError(null);
+  }, [targetUsername]);
+
+  const handleLoadMorePosts = async () => {
+    if (!user || loadingMorePosts || !hasMorePosts) return;
+    const authorId = user.id;
+    const offset = PROFILE_POST_PAGE_SIZE + (cachedAdditionalPosts?.posts.length ?? 0);
+    setLoadingMorePosts(true);
+    setLoadMoreError(null);
+    try {
+      const page = await api.getPosts('for-you', authorId, {
+        limit: PROFILE_POST_PAGE_SIZE + 1,
+        offset,
+      });
+      if (profileIdRef.current !== authorId) return;
+      setAdditionalPosts({
+        userId: authorId,
+        posts: [...(cachedAdditionalPosts?.posts ?? []), ...page.slice(0, PROFILE_POST_PAGE_SIZE)],
+        hasMore: page.length > PROFILE_POST_PAGE_SIZE,
+      });
+    } catch (error) {
+      if (profileIdRef.current === authorId) {
+        setLoadMoreError({
+          userId: authorId,
+          message: error instanceof Error ? error.message : 'Could not load more posts.',
+        });
+      }
+    } finally {
+      if (profileIdRef.current === authorId) setLoadingMorePosts(false);
+    }
+  };
 
   const handleToggleFollow = async () => {
     if (!user) return;
     const previous = isFollowing;
-    setFollowingOverride(!previous);
+    setFollowingOverride({ userId: user.id, value: !previous });
     try {
       const res = await api.toggleFollow(user.id);
-      setFollowingOverride(res.isFollowing);
+      setFollowingOverride({ userId: user.id, value: res.isFollowing });
     } catch (e) {
-      setFollowingOverride(previous);
+      setFollowingOverride({ userId: user.id, value: previous });
       console.warn(e);
     }
   };
@@ -153,7 +214,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             {user.name}
             <UserBadges verified={user.verified} isGold={user.isGold} size="md" />
           </h2>
-          <span className="text-xs text-neutral-400 font-mono">{posts.length} posts</span>
+          <span className="text-xs text-neutral-400 font-mono">{posts.length} posts loaded</span>
         </div>
       </div>
 
@@ -285,7 +346,19 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
 
       {/* Profile Posts Feed */}
       <div className="divide-y divide-white/[0.06] flex-1">
-        {displayedPosts.length === 0 ? (
+        {postsQuery.isLoading && posts.length === 0 ? (
+          <div className="p-4">
+            <PostSkeleton />
+            <PostSkeleton />
+          </div>
+        ) : postsQuery.error !== undefined && posts.length === 0 ? (
+          <EmptyState
+            title="Could not load posts"
+            description="Please try again."
+            actionLabel="Retry"
+            onAction={postsQuery.refresh}
+          />
+        ) : displayedPosts.length === 0 ? (
           <EmptyState
             title={`No ${activeTab} yet`}
             description={`Posts, replies, and saved media from @${user.username} will appear here.`}
@@ -301,6 +374,22 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               onTagClick={onTagClick}
             />
           ))
+        )}
+        {hasMorePosts && (
+          <div className="p-4 text-center">
+            {loadMoreError?.userId === user.id && (
+              <p role="alert" className="text-xs text-red-400 mb-2">{loadMoreError.message}</p>
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleLoadMorePosts}
+              isLoading={loadingMorePosts}
+              disabled={loadingMorePosts}
+            >
+              {loadMoreError?.userId === user.id ? 'Try again' : 'Load more posts'}
+            </Button>
+          </div>
         )}
       </div>
 
