@@ -20,7 +20,7 @@ import { Badge } from '../common/Badge.tsx';
 import { UserBadges } from '../common/UserBadges.tsx';
 import { Button } from '../common/Button.tsx';
 import { Tooltip } from '../common/Tooltip.tsx';
-import { VyoraIcon } from '../common/VyoraIcon.tsx';
+import { ZunariLogo } from '../common/ZunariLogo.tsx';
 
 interface SidebarProps {
   currentTab: string;
@@ -75,7 +75,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           className={`flex items-center gap-3 p-2.5 rounded-2xl ${hoverBg} cursor-pointer transition-all group w-fit xl:w-full`}
           title={`${brandName} - Global Social Intelligence Network`}
         >
-          <VyoraIcon size="md" glow={true} />
+          <ZunariLogo size="md" glow={true} />
           <div className="hidden xl:flex flex-col leading-tight">
             <div className="flex items-center gap-1.5">
               <span className="font-extrabold text-xl tracking-tight bg-gradient-to-r from-violet-400 via-sky-300 to-cyan-300 bg-clip-text text-transparent">

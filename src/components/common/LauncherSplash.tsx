@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { ShieldCheck } from 'lucide-react';
-import { VyoraIcon } from './VyoraIcon.tsx';
+import { ZunariLogo } from './ZunariLogo.tsx';
 
 interface LauncherSplashProps {
   isLoading: boolean;
@@ -61,7 +61,7 @@ export const LauncherSplash: React.FC<LauncherSplashProps> = ({
           <div className="absolute inset-1 rounded-[24px] border border-cyan-400/10" />
           <div className="absolute -inset-3 rounded-[34px] border border-cyan-400/10 animate-[spin_9s_linear_infinite]" />
           <div className="absolute -inset-3 rounded-[34px] border-t border-cyan-300/50 animate-[spin_2.4s_linear_infinite]" />
-          <VyoraIcon size="xl" glow className="!h-12 !w-12" />
+          <ZunariLogo size="xl" glow className="!h-12 !w-12" />
         </div>
 
         <h1 className="bg-gradient-to-r from-purple-300 via-sky-300 to-cyan-300 bg-clip-text text-3xl font-black tracking-tight text-transparent">

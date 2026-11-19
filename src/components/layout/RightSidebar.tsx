@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Search, Check, UserPlus, TrendingUp, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useTheme } from '../../context/ThemeContext.tsx';
@@ -8,6 +8,7 @@ import { Badge } from '../common/Badge.tsx';
 import { UserBadges } from '../common/UserBadges.tsx';
 import { Button } from '../common/Button.tsx';
 import { TrendItem, User } from '../../types/index.ts';
+import { useApiQuery } from '../../hooks/useApiQuery.ts';
 
 interface RightSidebarProps {
   onSearch?: (query: string) => void;
@@ -23,19 +24,19 @@ export const RightSidebar: React.FC<RightSidebarProps> = ({
   const { currentUser, allUsers } = useAuth();
   const { theme } = useTheme();
 
-  const [trends, setTrends] = useState<TrendItem[]>([]);
   const [searchInput, setSearchInput] = useState('');
   const [followMap, setFollowMap] = useState<Record<string, boolean>>({});
-
-  useEffect(() => {
-    api.getTrends().then(setTrends).catch(console.warn);
-  }, []);
+  const trendsQuery = useApiQuery<TrendItem[]>('/trends', () => api.getTrends());
+  const trends = trendsQuery.data ?? [];
 
   const handleToggleFollow = async (user: User) => {
+    const previous = followMap[user.id] ?? false;
+    setFollowMap((current) => ({ ...current, [user.id]: !previous }));
     try {
       const res = await api.toggleFollow(user.id);
       setFollowMap((prev) => ({ ...prev, [user.id]: res.isFollowing }));
     } catch (e) {
+      setFollowMap((current) => ({ ...current, [user.id]: previous }));
       console.warn('Error following user:', e);
     }
   };

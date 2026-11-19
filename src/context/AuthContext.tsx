@@ -140,13 +140,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           .then((session) => {
             if (session.authenticated && session.user) {
               const user = toUser(session.user);
+              api.setCacheScope(user?.id ?? null);
               setCurrentUser(user);
               return user;
             }
+            api.setCacheScope(null);
             setCurrentUser(null);
             return null;
           })
           .catch(() => {
+            api.setCacheScope(null);
             setCurrentUser(null);
             return null;
           });
@@ -179,6 +182,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const res = await api.login(username, password);
       const user = toUser(res.user);
       if (!user) throw new Error('The server did not return a valid account.');
+      api.setCacheScope(user.id);
+      setAllUsers([]);
+      setDemoAccounts([]);
+      setUnreadNotificationsCount(0);
       setCurrentUser(user);
       setPendingVerificationEmail(null);
       await refreshUsersAndDemos();
@@ -203,6 +210,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (res.authenticated && res.user) {
         const user = toUser(res.user);
         if (user) {
+          api.setCacheScope(user.id);
+          setAllUsers([]);
+          setDemoAccounts([]);
+          setUnreadNotificationsCount(0);
           setCurrentUser(user);
               await refreshUsersAndDemos();
           await refreshNotificationsCount();
@@ -221,6 +232,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const loginRes = await api.login(data.username, data.password);
         const user = toUser(loginRes.user);
         if (user) {
+          api.setCacheScope(user.id);
+          setAllUsers([]);
+          setDemoAccounts([]);
+          setUnreadNotificationsCount(0);
           setCurrentUser(user);
           setPendingVerificationEmail(null);
               await refreshUsersAndDemos();
@@ -256,7 +271,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } catch (e) {
         console.warn('Failed to clear local data on logout:', e);
       }
+      api.setCacheScope(null);
       setCurrentUser(null);
+      setAllUsers([]);
+      setDemoAccounts([]);
       setUnreadNotificationsCount(0);
       setPendingVerificationEmail(null);
     }

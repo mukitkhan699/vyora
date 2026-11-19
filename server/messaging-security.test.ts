@@ -25,6 +25,18 @@ describe('messaging authorization contracts', () => {
     assert.match(messagingDb, /m\.created_at <= p\.left_at[\s\S]{0,120}ORDER BY m\.created_at DESC/);
   });
 
+  test('conversation summaries select one latest message per conversation in SQL', () => {
+    const start = messagingDb.indexOf('private async getLastMessagesForConversations(');
+    const end = messagingDb.indexOf('\n  private async ', start + 1);
+    const method = messagingDb.slice(start, end);
+
+    assert.match(method, /SELECT DISTINCT ON \(m\.conversation_id\) m\.\*/);
+    assert.match(method, /m\.conversation_id = ANY\(\$1::text\[\]\)/);
+    assert.match(method, /m\.created_at <= p\.left_at/);
+    assert.match(method, /ORDER BY m\.conversation_id, m\.created_at DESC/);
+    assert.doesNotMatch(method, /new Map<string, any>|new Date\(row\.created_at\)/);
+  });
+
   test('group deletion waits for every active recipient to receive the message', () => {
     assert.match(messagingDb, /type === 'group'/);
     assert.match(messagingDb, /DELETE_TOO_EARLY/);

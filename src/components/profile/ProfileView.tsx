@@ -14,6 +14,7 @@ import { PostSkeleton } from '../common/LoadingSkeleton.tsx';
 import { EmptyState } from '../common/EmptyState.tsx';
 import { Modal } from '../common/Modal.tsx';
 import { UserBadges } from '../common/UserBadges.tsx';
+import { useApiQuery } from '../../hooks/useApiQuery.ts';
 
 interface ProfileViewProps {
   username?: string;
@@ -49,51 +50,45 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   const { currentUser, updateCurrentUser } = useAuth();
   const { theme, accentBgClass, accentTextClass } = useTheme();
 
-  const [user, setUser] = useState<User | null>(null);
-  const [posts, setPosts] = useState<Post[]>([]);
-  const [isFollowing, setIsFollowing] = useState(false);
+  const [followingOverride, setFollowingOverride] = useState<boolean>();
   const [activeTab, setActiveTab] = useState<'posts' | 'replies' | 'highlights' | 'media' | 'likes'>('posts');
   const [showEditModal, setShowEditModal] = useState(false);
   const [showVerificationNotice, setShowVerificationNotice] = useState(false);
-  const [loading, setLoading] = useState(true);
 
   const targetUsername = username || currentUser?.username || 'mukitk';
+  const profileQuery = useApiQuery<User & { isFollowing?: boolean }>(
+    `/users/${encodeURIComponent(targetUsername)}`,
+    () => api.getUserByUsername(targetUsername),
+  );
+  const user = profileQuery.data ?? null;
+  const postsQuery = useApiQuery<Post[]>(
+    `/posts?feed=for-you&authorId=${encodeURIComponent(user?.id ?? '')}`,
+    () => user ? api.getPosts('for-you', user.id) : Promise.resolve([]),
+    Boolean(user?.id),
+  );
+  const posts = postsQuery.data ?? [];
+  const isFollowing = followingOverride ?? user?.isFollowing ?? false;
+  const loading = profileQuery.isLoading || Boolean(user?.id && postsQuery.isLoading);
   const isOwnProfile = currentUser && user && currentUser.id === user.id;
   const websiteUrl = getSafeWebsiteUrl(user?.website);
 
-  useEffect(() => {
-    fetchProfile();
-  }, [targetUsername]);
-
-  const fetchProfile = async () => {
-    setLoading(true);
-    try {
-      const u = await api.getUserByUsername(targetUsername);
-      setUser(u);
-      setIsFollowing(u.isFollowing ?? false);
-      const userPosts = await api.getPosts('for-you', u.id);
-      setPosts(userPosts);
-    } catch (e) {
-      console.warn('Failed to load profile:', e);
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => setFollowingOverride(undefined), [targetUsername]);
 
   const handleToggleFollow = async () => {
     if (!user) return;
+    const previous = isFollowing;
+    setFollowingOverride(!previous);
     try {
       const res = await api.toggleFollow(user.id);
-      setIsFollowing(res.isFollowing);
-      setUser(res.targetUser);
+      setFollowingOverride(res.isFollowing);
     } catch (e) {
+      setFollowingOverride(previous);
       console.warn(e);
     }
   };
 
   const handleProfileSave = async (data: Partial<User>) => {
-    const updated = await updateCurrentUser(data);
-    setUser(updated);
+    await updateCurrentUser(data);
   };
 
   if (loading) {
@@ -304,9 +299,6 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
               onReplyClick={onReplyClick}
               onUserClick={onUserClick}
               onTagClick={onTagClick}
-              onDeletePost={(deletedId) => {
-                setPosts((prev) => prev.filter((p) => p.id !== deletedId));
-              }}
             />
           ))
         )}

@@ -10,6 +10,7 @@ import { UserBadges } from '../common/UserBadges.tsx';
 import { Button } from '../common/Button.tsx';
 import { PostSkeleton } from '../common/LoadingSkeleton.tsx';
 import { EmptyState } from '../common/EmptyState.tsx';
+import { useApiQuery } from '../../hooks/useApiQuery.ts';
 
 interface ExploreViewProps {
   initialQuery?: string;
@@ -30,34 +31,27 @@ export const ExploreView: React.FC<ExploreViewProps> = ({
 
   const [query, setQuery] = useState(initialQuery);
   const [activeTab, setActiveTab] = useState<'top' | 'latest' | 'people' | 'media'>('top');
-  const [trends, setTrends] = useState<TrendItem[]>([]);
-  const [posts, setPosts] = useState<Post[]>([]);
-  const [users, setUsers] = useState<User[]>([]);
-  const [loading, setLoading] = useState(false);
+  const trendsQuery = useApiQuery<TrendItem[]>('/trends', () => api.getTrends());
+  const postsQuery = useApiQuery<Post[]>(
+    '/posts?feed=for-you',
+    () => api.getPosts('for-you'),
+    activeTab !== 'people',
+  );
+  const usersQuery = useApiQuery<User[]>(
+    '/users',
+    () => api.getUsers(),
+    activeTab === 'people',
+  );
+  const trends = trendsQuery.data ?? [];
+  const posts = postsQuery.data ?? [];
+  const users = usersQuery.data ?? [];
+  const loading = activeTab === 'people' ? usersQuery.isLoading : postsQuery.isLoading;
 
   useEffect(() => {
     if (initialQuery) {
       setQuery(initialQuery);
     }
   }, [initialQuery]);
-
-  useEffect(() => {
-    api.getTrends().then(setTrends).catch(console.warn);
-    api.getUsers().then(setUsers).catch(console.warn);
-    fetchPosts();
-  }, []);
-
-  const fetchPosts = async () => {
-    setLoading(true);
-    try {
-      const allPosts = await api.getPosts('for-you');
-      setPosts(allPosts);
-    } catch (e) {
-      console.warn(e);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const filteredPosts = posts.filter((p) => {
     if (!query.trim()) return true;

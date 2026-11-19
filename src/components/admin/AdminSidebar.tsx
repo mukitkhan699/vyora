@@ -96,7 +96,11 @@ export const AdminSidebar: React.FC<AdminSidebarProps> = ({
         >
           <div className="relative">
             <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-cyan-500 to-purple-600 flex items-center justify-center shadow-lg shadow-cyan-500/25">
-              <Shield className="h-5 w-5 text-white" />
+              <img
+                src={`${import.meta.env.BASE_URL}zunari-logo.jpg`}
+                alt="Zunari"
+                className="h-full w-full rounded-xl object-contain"
+              />
             </div>
             <span className="absolute -bottom-1 -right-1 h-3 w-3 rounded-full bg-emerald-400 border-2 border-[#060910]" />
           </div>

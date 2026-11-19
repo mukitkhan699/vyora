@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Sparkles, RefreshCw, Radio } from 'lucide-react';
 import { Post } from '../../types/index.ts';
 import { api } from '../../services/api.ts';
@@ -7,6 +7,7 @@ import { PostComposer } from './PostComposer.tsx';
 import { PostCard } from './PostCard.tsx';
 import { PostSkeleton } from '../common/LoadingSkeleton.tsx';
 import { EmptyState } from '../common/EmptyState.tsx';
+import { useApiQuery } from '../../hooks/useApiQuery.ts';
 
 interface TimelineProps {
   onPostClick: (post: Post) => void;
@@ -23,32 +24,12 @@ export const Timeline: React.FC<TimelineProps> = ({
 }) => {
   const { theme, accentBgClass } = useTheme();
   const [feedType, setFeedType] = useState<'for-you' | 'following'>('for-you');
-  const [posts, setPosts] = useState<Post[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-
-  const fetchPosts = async () => {
-    try {
-      setIsLoading(true);
-      const data = await api.getPosts(feedType);
-      setPosts(data);
-    } catch (err) {
-      console.warn('Failed to load timeline:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchPosts();
-  }, [feedType]);
-
-  const handlePostCreated = (newPost: Post) => {
-    setPosts((prev) => [newPost, ...prev]);
-  };
-
-  const handleDeletePost = (postId: string) => {
-    setPosts((prev) => prev.filter((p) => p.id !== postId));
-  };
+  const postsQuery = useApiQuery<Post[]>(
+    `/posts?feed=${feedType}`,
+    () => api.getPosts(feedType),
+  );
+  const posts = postsQuery.data ?? [];
+  const isLoading = postsQuery.isLoading;
 
   const headerBg =
     theme === 'dark'
@@ -71,11 +52,11 @@ export const Timeline: React.FC<TimelineProps> = ({
           </div>
           <button
             type="button"
-            onClick={fetchPosts}
+            onClick={postsQuery.refresh}
             className="p-1.5 rounded-xl hover:bg-white/[0.08] text-neutral-400 hover:text-white transition-colors cursor-pointer"
             title="Refresh feed"
           >
-            <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-cyan-400' : ''}`} />
+            <RefreshCw className={`w-4 h-4 ${isLoading || postsQuery.isRefreshing ? 'animate-spin text-cyan-400' : ''}`} />
           </button>
         </div>
 
@@ -114,7 +95,7 @@ export const Timeline: React.FC<TimelineProps> = ({
       </div>
 
       {/* Main Composer */}
-      <PostComposer onPostCreated={handlePostCreated} />
+      <PostComposer />
 
       {/* Posts List */}
       <div className="divide-y divide-white/[0.06] flex-1">
@@ -143,7 +124,6 @@ export const Timeline: React.FC<TimelineProps> = ({
               onReplyClick={onReplyClick}
               onUserClick={onUserClick}
               onTagClick={onTagClick}
-              onDeletePost={handleDeletePost}
             />
           ))
         )}

@@ -1,5 +1,6 @@
 import { Post, User, Notification, Message, Conversation, TrendItem, AppConfig, CallSession } from '../types/index.ts';
 import { getBackendApiUrl } from '../config/backendUrl.ts';
+import { queryCache, type QuerySnapshot } from './queryCache.ts';
 
 export interface AuthUser extends User {
   email?: string | null;
@@ -72,9 +73,47 @@ function describeUploadFailure(status: number, body: string): string {
     : `Media upload failed (${status}).`;
 }
 
+function isPost(value: unknown): value is Post {
+  return typeof value === 'object' && value !== null &&
+    'id' in value && typeof value.id === 'string' &&
+    'authorId' in value && typeof value.authorId === 'string';
+}
+
+function isUser(value: unknown): value is User {
+  return typeof value === 'object' && value !== null &&
+    'id' in value && typeof value.id === 'string' &&
+    'username' in value && typeof value.username === 'string';
+}
+
 class ApiService {
   private csrfToken: string | null = null;
   private refreshing: Promise<AuthResponse> | null = null;
+  private cacheScope = 'anonymous';
+  private cacheGeneration = 0;
+
+  public setCacheScope(userId: string | null): void {
+    const nextScope = userId || 'anonymous';
+    if (nextScope === this.cacheScope) return;
+    this.cacheScope = nextScope;
+    this.cacheGeneration += 1;
+    queryCache.clear();
+  }
+
+  public getCacheKey(endpoint: string): string {
+    return `${this.cacheGeneration}:${this.cacheScope}:${endpoint}`;
+  }
+
+  public getCacheSnapshot<T>(endpoint: string): QuerySnapshot<T> {
+    return queryCache.getSnapshot<T>(this.getCacheKey(endpoint));
+  }
+
+  public subscribeToCache(endpoint: string, listener: () => void): () => void {
+    return queryCache.subscribe(this.getCacheKey(endpoint), listener);
+  }
+
+  public invalidateCache(endpoint: string): void {
+    queryCache.invalidate(this.getCacheKey(endpoint));
+  }
 
   public setCsrfToken(token: string | null) {
     this.csrfToken = token;
@@ -116,6 +155,20 @@ class ApiService {
   }
 
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+    const method = (options.method || 'GET').toUpperCase();
+    const cachePrefix = this.getCachePrefix();
+    const ttl = method === 'GET' ? this.getCacheTtl(endpoint) : 0;
+    const load = async () => {
+      const data = await this.requestFresh<T>(endpoint, options);
+      if (method !== 'GET') this.updateCacheAfterMutation(endpoint, method, data, cachePrefix);
+      return data;
+    };
+
+    if (ttl > 0) return queryCache.fetch(`${cachePrefix}${endpoint}`, ttl, load);
+    return load();
+  }
+
+  private async requestFresh<T>(endpoint: string, options: RequestInit): Promise<T> {
     let result = await this.rawRequest<T>(endpoint, options);
     const errorCode = (result.data as { code?: string } | null)?.code;
 
@@ -137,6 +190,252 @@ class ApiService {
     }
 
     return result.data;
+  }
+
+  private getCachePrefix(): string {
+    return `${this.cacheGeneration}:${this.cacheScope}:`;
+  }
+
+  private getCacheTtl(endpoint: string): number {
+    if (endpoint === '/config') return 5 * 60 * 1000;
+    if (endpoint === '/trends') return 60 * 1000;
+    if (endpoint === '/users') return 60 * 1000;
+    if (/^\/users\/[^/]+$/.test(endpoint)) return 60 * 1000;
+    if (endpoint.startsWith('/posts?feed=')) return 30 * 1000;
+    if (/^\/posts\/[^/]+$/.test(endpoint)) return 30 * 1000;
+    if (endpoint === '/bookmarks') return 20 * 1000;
+    if (endpoint === '/notifications') return 15 * 1000;
+    return 0;
+  }
+
+  private invalidateMatching(
+    prefix: string,
+    matches: (endpoint: string) => boolean,
+  ): void {
+    queryCache.updateMatching(prefix, (key, snapshot) => {
+      const endpoint = key.slice(prefix.length);
+      if (!matches(endpoint)) return null;
+      return {
+        ...snapshot,
+        expiresAt: 0,
+        invalidationVersion: snapshot.invalidationVersion + 1,
+      };
+    });
+  }
+
+  private updateCachedPosts(
+    prefix: string,
+    postId: string,
+    update: (post: Post) => Post | null,
+  ): void {
+    queryCache.updateMatching(prefix, (key, snapshot) => {
+      const endpoint = key.slice(prefix.length);
+      if (Array.isArray(snapshot.data) && (
+        endpoint.startsWith('/posts?feed=') || endpoint === '/bookmarks'
+      )) {
+        const posts = snapshot.data as Post[];
+        return { ...snapshot, data: posts.flatMap((post) => {
+          const next = post.id === postId ? update(post) : post;
+          return next ? [next] : [];
+        }) };
+      }
+
+      if (endpoint.startsWith('/posts/')) {
+        const detail = snapshot.data as { post?: Post; replies?: Post[] } | undefined;
+        if (!detail?.post && !detail?.replies) return null;
+        const post = detail.post
+          ? detail.post.id === postId ? update(detail.post) : detail.post
+          : undefined;
+        const replies = detail.replies?.flatMap((reply) => {
+          const next = reply.id === postId ? update(reply) : reply;
+          return next ? [next] : [];
+        });
+        return {
+          ...snapshot,
+          data: { ...detail, ...(post ? { post } : {}), ...(replies ? { replies } : {}) },
+        };
+      }
+      return null;
+    });
+  }
+
+  private updateCachedPostAuthors(prefix: string, user: User): void {
+    const update = (post: Post): Post => post.authorId === user.id
+      ? { ...post, author: { ...post.author, ...user } }
+      : post;
+    queryCache.updateMatching(prefix, (key, snapshot) => {
+      const endpoint = key.slice(prefix.length);
+      if (Array.isArray(snapshot.data) && (
+        endpoint.startsWith('/posts?feed=') || endpoint === '/bookmarks'
+      )) {
+        return { ...snapshot, data: (snapshot.data as Post[]).map(update) };
+      }
+      if (endpoint.startsWith('/posts/')) {
+        const detail = snapshot.data as { post?: Post; replies?: Post[] } | undefined;
+        if (!detail?.post && !detail?.replies) return null;
+        return {
+          ...snapshot,
+          data: {
+            ...detail,
+            ...(detail.post ? { post: update(detail.post) } : {}),
+            ...(detail.replies ? { replies: detail.replies.map(update) } : {}),
+          },
+        };
+      }
+      return null;
+    });
+  }
+
+  private updateCacheAfterMutation(
+    endpoint: string,
+    method: string,
+    data: unknown,
+    prefix: string,
+  ): void {
+    const postAction = /^\/posts\/([^/]+)\/(like|repost|bookmark|poll\/vote)$/.exec(endpoint);
+    if (postAction && data && typeof data === 'object') {
+      const [, postId, action] = postAction;
+      if (action === 'like') {
+        const result = data as { isLiked?: boolean; likesCount?: number };
+        this.updateCachedPosts(prefix, postId, (post) => ({
+          ...post,
+          ...(typeof result.isLiked === 'boolean' ? { isLiked: result.isLiked } : {}),
+          ...(typeof result.likesCount === 'number' ? { likesCount: result.likesCount } : {}),
+        }));
+      } else if (action === 'repost') {
+        const result = data as { isReposted?: boolean; repostsCount?: number };
+        this.updateCachedPosts(prefix, postId, (post) => ({
+          ...post,
+          ...(typeof result.isReposted === 'boolean' ? { isReposted: result.isReposted } : {}),
+          ...(typeof result.repostsCount === 'number' ? { repostsCount: result.repostsCount } : {}),
+        }));
+      } else if (action === 'bookmark') {
+        const result = data as { isBookmarked?: boolean };
+        if (typeof result.isBookmarked === 'boolean') {
+          this.updateCachedPosts(prefix, postId, (post) => ({
+            ...post,
+            isBookmarked: result.isBookmarked,
+          }));
+          this.invalidateMatching(prefix, (key) => key === '/bookmarks');
+        }
+      } else if (action === 'poll/vote' && isPost(data)) {
+        this.updateCachedPosts(prefix, postId, () => data);
+      }
+      return;
+    }
+
+    if (endpoint === '/posts' && method === 'POST' && isPost(data)) {
+      if (data.replyToId) {
+        this.updateCachedPosts(prefix, data.replyToId, (post) => ({
+          ...post,
+          repliesCount: (post.repliesCount || 0) + 1,
+        }));
+        const parentKey = `${prefix}/posts/${data.replyToId}`;
+        queryCache.updateMatching(parentKey, (key, snapshot) => {
+          if (key !== parentKey) return null;
+          const detail = snapshot.data as { post?: Post; replies?: Post[] } | undefined;
+          if (!detail?.post) return null;
+          const replies = detail.replies ?? [];
+          if (replies.some((reply) => reply.id === data.id)) return null;
+          return { ...snapshot, data: { ...detail, replies: [...replies, data] } };
+        });
+        return;
+      }
+
+      queryCache.updateMatching(prefix, (key, snapshot) => {
+        const resource = key.slice(prefix.length);
+        if (!resource.startsWith('/posts?feed=')) return null;
+        const posts = Array.isArray(snapshot.data) ? snapshot.data as Post[] : [];
+        if (posts.some((post) => post.id === data.id)) return null;
+        return { ...snapshot, data: [data, ...posts] };
+      });
+      return;
+    }
+
+    const deletedPost = /^\/posts\/([^/]+)$/.exec(endpoint);
+    if (deletedPost && method === 'DELETE') {
+      const [, postId] = deletedPost;
+      let parentPostId: string | undefined;
+      queryCache.updateMatching(prefix, (_key, snapshot) => {
+        const data = snapshot.data;
+        if (Array.isArray(data)) {
+          parentPostId = (data as Post[]).find((post) => post.id === postId)?.replyToId;
+        } else if (data && typeof data === 'object' && 'post' in data) {
+          const post = (data as { post?: Post }).post;
+          if (post?.id === postId) parentPostId = post.replyToId;
+        }
+        return null;
+      });
+      this.updateCachedPosts(prefix, postId, () => null);
+      if (parentPostId) {
+        this.updateCachedPosts(prefix, parentPostId, (post) => ({
+          ...post,
+          repliesCount: Math.max(0, (post.repliesCount || 0) - 1),
+        }));
+      }
+      this.invalidateMatching(prefix, (key) => key === endpoint);
+      return;
+    }
+
+    if (endpoint === '/users/profile' && method === 'PUT' && isUser(data)) {
+      this.updateCachedPostAuthors(prefix, data);
+      queryCache.updateMatching(prefix, (key, snapshot) => {
+        const resource = key.slice(prefix.length);
+        if (resource === '/users') {
+          const users = Array.isArray(snapshot.data) ? snapshot.data as User[] : [];
+          return { ...snapshot, data: users.map((user) => user.id === data.id ? data : user) };
+        }
+        if (resource === `/users/${encodeURIComponent(data.username)}`) {
+          return { ...snapshot, data };
+        }
+        return null;
+      });
+      return;
+    }
+
+    const followedUser = /^\/users\/([^/]+)\/follow$/.exec(endpoint);
+    if (followedUser && data && typeof data === 'object') {
+      const result = data as { isFollowing?: boolean; targetUser?: User };
+      if (result.targetUser) {
+        const usernameEndpoint = `/users/${encodeURIComponent(result.targetUser.username)}`;
+        queryCache.updateMatching(prefix, (key, snapshot) => {
+          const resource = key.slice(prefix.length);
+          if (resource === usernameEndpoint) {
+            return { ...snapshot, data: { ...result.targetUser, isFollowing: result.isFollowing } };
+          }
+          if (resource === '/users' && Array.isArray(snapshot.data)) {
+            return {
+              ...snapshot,
+              data: (snapshot.data as User[]).map((user) =>
+                user.id === result.targetUser?.id ? result.targetUser : user,
+              ),
+            };
+          }
+          return null;
+        });
+      }
+      this.invalidateMatching(prefix, (key) => key.startsWith('/posts?feed=following'));
+      return;
+    }
+
+    if (endpoint === '/notifications/read-all') {
+      queryCache.updateMatching(prefix, (key, snapshot) => {
+        if (key.slice(prefix.length) !== '/notifications' || !Array.isArray(snapshot.data)) return null;
+        return {
+          ...snapshot,
+          data: (snapshot.data as Notification[]).map((notification) => ({
+            ...notification,
+            read: true,
+          })),
+        };
+      });
+      return;
+    }
+
+    this.invalidateMatching(prefix, (key) => {
+      if (endpoint.startsWith('/posts/')) return key.startsWith('/posts?feed=');
+      return false;
+    });
   }
 
   private rememberSession<T extends { csrfToken?: string }>(payload: T): T {

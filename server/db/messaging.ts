@@ -1413,7 +1413,7 @@ export class MessagingRepository {
       deleted_at: string | number | null;
       created_at: string | number;
     }>(
-      `SELECT m.* FROM zunari_messages_v2 m
+      `SELECT DISTINCT ON (m.conversation_id) m.* FROM zunari_messages_v2 m
        JOIN zunari_conversation_participants p
          ON p.conversation_id = m.conversation_id AND p.user_id = $2
        WHERE m.conversation_id = ANY($1::text[])
@@ -1422,17 +1422,7 @@ export class MessagingRepository {
       [conversationIds, currentUserId],
     );
 
-    // Build map with the most recent message for each conversation
-    const conversationMap = new Map<string, any>();
     for (const row of res.rows) {
-      const existing = conversationMap.get(row.conversation_id);
-      if (!existing || new Date(row.created_at).getTime() > new Date(existing.created_at).getTime()) {
-        conversationMap.set(row.conversation_id, row);
-      }
-    }
-
-    // Convert rows to MessageRecord
-    for (const [conversationId, row] of conversationMap.entries()) {
       const message: MessageRecord = {
         id: row.id,
         conversationId: row.conversation_id,
@@ -1449,7 +1439,7 @@ export class MessagingRepository {
         reactions: [],
         receipts: [],
       };
-      map.set(conversationId, message);
+      map.set(row.conversation_id, message);
     }
 
     return Promise.resolve(map);

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Heart, Repeat2, UserPlus, MessageCircle, CheckCheck, Bell } from 'lucide-react';
 import { Notification } from '../../types/index.ts';
 import { api } from '../../services/api.ts';
@@ -9,6 +9,7 @@ import { Badge } from '../common/Badge.tsx';
 import { UserBadges } from '../common/UserBadges.tsx';
 import { PostSkeleton } from '../common/LoadingSkeleton.tsx';
 import { EmptyState } from '../common/EmptyState.tsx';
+import { useApiQuery } from '../../hooks/useApiQuery.ts';
 
 interface NotificationsViewProps {
   onPostClick?: (postId: string) => void;
@@ -23,29 +24,16 @@ export const NotificationsView: React.FC<NotificationsViewProps> = ({
   const { theme, accentBgClass } = useTheme();
 
   const [activeTab, setActiveTab] = useState<'all' | 'verified' | 'mentions'>('all');
-  const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchNotifications();
-  }, []);
-
-  const fetchNotifications = async () => {
-    setLoading(true);
-    try {
-      const data = await api.getNotifications();
-      setNotifications(data);
-    } catch (e) {
-      console.warn(e);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const notificationsQuery = useApiQuery<Notification[]>(
+    '/notifications',
+    () => api.getNotifications(),
+  );
+  const notifications = notificationsQuery.data ?? [];
+  const loading = notificationsQuery.isLoading;
 
   const handleMarkAllRead = async () => {
     try {
       await api.markNotificationsRead();
-      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
       refreshNotificationsCount();
     } catch (e) {
       console.warn(e);

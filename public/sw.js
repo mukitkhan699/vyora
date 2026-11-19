@@ -1,170 +1,102 @@
-// Service Worker for background sync and offline support
-const CACHE_NAME = 'zunari-v1';
-const STATIC_ASSETS = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-];
+const CACHE_NAME = 'zunari-static-v2';
+const APP_SHELL = ['/', '/index.html'];
 
-// Install event - cache static assets
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(STATIC_ASSETS);
-    })
+    caches.open(CACHE_NAME)
+      .then((cache) => cache.addAll(APP_SHELL))
+      .then(() => self.skipWaiting())
   );
-  self.skipWaiting();
 });
 
-// Activate event - clean up old caches
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
+    caches.keys()
+      .then((cacheNames) => Promise.all(
         cacheNames
-          .filter((name) => name !== CACHE_NAME)
+          .filter((name) => name === 'zunari-v1' || (
+            name.startsWith('zunari-static-') && name !== CACHE_NAME
+          ))
           .map((name) => caches.delete(name))
-      );
-    })
+      ))
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
-// Fetch event - serve from cache, fallback to network
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Skip non-GET requests
-  if (request.method !== 'GET') return;
+  if (
+    request.method !== 'GET' ||
+    url.origin !== self.location.origin ||
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/socket.io/')
+  ) return;
 
-  // Skip chrome-extension and other non-http(s) requests
-  if (!url.protocol.startsWith('http')) return;
+  const isAppShell = url.pathname === '/' || url.pathname === '/index.html';
+  const isBuildAsset = url.pathname.startsWith('/assets/');
+  if (!isAppShell && !isBuildAsset) return;
 
-  // Network-first for API requests
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/socket.io/')) {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          // Cache successful GET responses
-          if (response.ok) {
-            const responseClone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(request, responseClone);
-            });
-          }
-          return response;
-        })
-        .catch(() => {
-          // Fallback to cache for failed network requests
-          return caches.match(request);
-        })
-    );
-    return;
-  }
-
-  // Cache-first for static assets
-  event.respondWith(
-    caches.match(request).then((cachedResponse) => {
-      if (cachedResponse) {
-        // Serve from cache, update in background
-        event.waitUntil(
-          fetch(request)
-            .then((response) => {
-              if (response.ok) {
-                caches.open(CACHE_NAME).then((cache) => {
-                  cache.put(request, response);
-                });
-              }
-            })
-            .catch(() => {})
-        );
-        return cachedResponse;
+  event.respondWith((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    const cachedResponse = await cache.match(request);
+    const networkResponse = fetch(request).then(async (response) => {
+      if (response.ok && response.type === 'basic') {
+        await cache.put(request, response.clone());
       }
+      return response;
+    });
 
-      // Not in cache, fetch from network
-      return fetch(request)
-        .then((response) => {
-          if (response.ok) {
-            const responseClone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(request, responseClone);
-            });
-          }
-          return response;
-        })
-        .catch(() => {
-          // Return offline page for navigation requests
-          if (request.mode === 'navigate') {
-            return caches.match('/index.html');
-          }
-          throw new Error('Network error');
-        });
-    })
-  );
+    if (cachedResponse) {
+      event.waitUntil(networkResponse.catch((error) => {
+        console.warn('Static asset refresh failed:', error);
+      }));
+      return cachedResponse;
+    }
+
+    try {
+      return await networkResponse;
+    } catch (error) {
+      if (request.mode === 'navigate') {
+        const fallback = await cache.match('/index.html');
+        if (fallback) return fallback;
+      }
+      throw error;
+    }
+  })());
 });
 
-// Background sync for message sending
 self.addEventListener('sync', (event) => {
-  if (event.tag === 'send-messages') {
-    event.waitUntil(syncMessages());
-  }
+  if (event.tag === 'send-messages') event.waitUntil(notifyClients('SYNC_MESSAGES'));
 });
 
-// Periodic background sync (if supported)
 self.addEventListener('periodicsync', (event) => {
   if (event.tag === 'sync-conversations') {
-    event.waitUntil(syncConversations());
+    event.waitUntil(notifyClients('SYNC_CONVERSATIONS'));
   }
 });
 
-async function syncMessages(): Promise<void> {
-  try {
-    // Get all clients and send sync message
-    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    clients.forEach((client) => {
-      client.postMessage({ type: 'SYNC_MESSAGES' });
-    });
-  } catch (error) {
-    console.error('Background sync failed:', error);
-  }
+async function notifyClients(type) {
+  const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  clients.forEach((client) => client.postMessage({ type }));
 }
 
-async function syncConversations(): Promise<void> {
-  try {
-    const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    clients.forEach((client) => {
-      client.postMessage({ type: 'SYNC_CONVERSATIONS' });
-    });
-  } catch (error) {
-    console.error('Periodic sync failed:', error);
-  }
-}
-
-// Handle messages from main thread
 self.addEventListener('message', (event) => {
-  const { type, payload } = event.data;
-
-  switch (type) {
-    case 'REGISTER_SYNC':
-      if ('serviceWorker' in navigator && 'sync' in self.registration) {
-        self.registration.sync.register(payload.tag).catch(console.error);
-      }
-      break;
-    case 'SKIP_WAITING':
-      self.skipWaiting();
-      break;
-    default:
-      break;
+  const { type, payload } = event.data || {};
+  if (type === 'REGISTER_SYNC' && payload?.tag && self.registration.sync) {
+    self.registration.sync.register(payload.tag).catch((error) => {
+      console.error('Background sync registration failed:', error);
+    });
+  } else if (type === 'SKIP_WAITING') {
+    self.skipWaiting();
   }
 });
 
-// Push notification handling (for future use)
 self.addEventListener('push', (event) => {
   if (!event.data) return;
-
   const data = event.data.json();
-  const options: NotificationOptions = {
+  const options = {
     body: data.body,
     icon: data.icon || '/icon-192.png',
     badge: data.badge || '/badge-72.png',
@@ -174,33 +106,28 @@ self.addEventListener('push', (event) => {
     requireInteraction: data.requireInteraction || false,
     silent: data.silent || false,
   };
-
-  event.waitUntil(
-    self.registration.showNotification(data.title, options)
-  );
+  event.waitUntil(self.registration.showNotification(data.title, options));
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-
-  if (event.action) {
-    // Handle action buttons
+  event.waitUntil((async () => {
     const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    clients.forEach((client) => {
-      client.postMessage({ type: 'NOTIFICATION_ACTION', action: event.action, data: event.notification.data });
-    });
-    return;
-  }
+    if (event.action) {
+      clients.forEach((client) => client.postMessage({
+        type: 'NOTIFICATION_ACTION',
+        action: event.action,
+        data: event.notification.data,
+      }));
+      return;
+    }
 
-  // Focus or open the app
-  event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-      for (const client of clients) {
-        if (client.url === '/' && 'focus' in client) {
-          return client.focus();
-        }
+    for (const client of clients) {
+      if (client.url === '/' && 'focus' in client) {
+        await client.focus();
+        return;
       }
-      return self.clients.openWindow('/');
-    })
-  );
+    }
+    await self.clients.openWindow('/');
+  })());
 });

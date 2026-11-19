@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   Heart, 
   Repeat2, 
@@ -53,6 +53,13 @@ export const PostCard: React.FC<PostCardProps> = ({
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  useEffect(() => setIsLiked(post.isLiked ?? false), [post.isLiked]);
+  useEffect(() => setLikesCount(post.likesCount), [post.likesCount]);
+  useEffect(() => setIsReposted(post.isReposted ?? false), [post.isReposted]);
+  useEffect(() => setRepostsCount(post.repostsCount), [post.repostsCount]);
+  useEffect(() => setIsBookmarked(post.isBookmarked ?? false), [post.isBookmarked]);
+  useEffect(() => setPoll(post.poll), [post.poll]);
+
   const isAuthor = currentUser?.id === post.authorId;
 
   const formatTime = (isoString: string) => {
@@ -73,6 +80,8 @@ export const PostCard: React.FC<PostCardProps> = ({
 
   const handleLike = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    const previousLiked = isLiked;
+    const previousCount = likesCount;
     try {
       const nextLiked = !isLiked;
       setIsLiked(nextLiked);
@@ -81,12 +90,16 @@ export const PostCard: React.FC<PostCardProps> = ({
       setIsLiked(res.isLiked);
       setLikesCount(res.likesCount);
     } catch (err) {
+      setIsLiked(previousLiked);
+      setLikesCount(previousCount);
       console.warn('Like toggle failed:', err);
     }
   };
 
   const handleRepost = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    const previousReposted = isReposted;
+    const previousCount = repostsCount;
     try {
       const nextReposted = !isReposted;
       setIsReposted(nextReposted);
@@ -95,17 +108,21 @@ export const PostCard: React.FC<PostCardProps> = ({
       setIsReposted(res.isReposted);
       setRepostsCount(res.repostsCount);
     } catch (err) {
+      setIsReposted(previousReposted);
+      setRepostsCount(previousCount);
       console.warn('Repost toggle failed:', err);
     }
   };
 
   const handleBookmark = async (e: React.MouseEvent) => {
     e.stopPropagation();
+    const previous = isBookmarked;
+    setIsBookmarked(!previous);
     try {
-      setIsBookmarked(!isBookmarked);
       const res = await api.toggleBookmark(post.id);
       setIsBookmarked(res.isBookmarked);
     } catch (err) {
+      setIsBookmarked(previous);
       console.warn('Bookmark toggle failed:', err);
     }
   };

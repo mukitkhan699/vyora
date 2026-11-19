@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { Bookmark, Sparkles } from 'lucide-react';
 import { Post } from '../../types/index.ts';
 import { api } from '../../services/api.ts';
@@ -7,6 +7,7 @@ import { useTheme } from '../../context/ThemeContext.tsx';
 import { PostCard } from '../feed/PostCard.tsx';
 import { PostSkeleton } from '../common/LoadingSkeleton.tsx';
 import { EmptyState } from '../common/EmptyState.tsx';
+import { useApiQuery } from '../../hooks/useApiQuery.ts';
 
 interface BookmarksViewProps {
   onPostClick: (post: Post) => void;
@@ -23,24 +24,9 @@ export const BookmarksView: React.FC<BookmarksViewProps> = ({
 }) => {
   const { currentUser } = useAuth();
   const { theme } = useTheme();
-  const [bookmarks, setBookmarks] = useState<Post[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetchBookmarks();
-  }, []);
-
-  const fetchBookmarks = async () => {
-    setLoading(true);
-    try {
-      const data = await api.getBookmarks();
-      setBookmarks(data);
-    } catch (e) {
-      console.warn(e);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const bookmarksQuery = useApiQuery<Post[]>('/bookmarks', () => api.getBookmarks());
+  const bookmarks = bookmarksQuery.data ?? [];
+  const loading = bookmarksQuery.isLoading;
 
   const headerBg =
     theme === 'dark'
@@ -81,9 +67,6 @@ export const BookmarksView: React.FC<BookmarksViewProps> = ({
               onReplyClick={onReplyClick}
               onUserClick={onUserClick}
               onTagClick={onTagClick}
-              onDeletePost={(id) => {
-                setBookmarks((prev) => prev.filter((p) => p.id !== id));
-              }}
             />
           ))
         )}

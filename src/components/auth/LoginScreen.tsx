@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { api } from '../../services/api.ts';
-import { VyoraIcon } from '../common/VyoraIcon.tsx';
+import { ZunariLogo } from '../common/ZunariLogo.tsx';
 import { Avatar } from '../common/Avatar.tsx';
 import { UserBadges } from '../common/UserBadges.tsx';
 
@@ -131,7 +131,7 @@ export const LoginScreen: React.FC = () => {
         <div className="grid w-full items-center gap-10 lg:grid-cols-[1.05fr_0.95fr] lg:gap-16">
           <section className="hidden lg:block">
             <div className="flex items-center gap-3">
-              <VyoraIcon size="lg" glow />
+              <ZunariLogo size="lg" glow />
               <div>
                 <div className="flex items-center gap-2">
                   <span className="text-3xl font-black tracking-tight bg-gradient-to-r from-purple-300 via-sky-300 to-cyan-300 bg-clip-text text-transparent">
@@ -186,7 +186,7 @@ export const LoginScreen: React.FC = () => {
           <section className="mx-auto w-full max-w-md">
             <div className="rounded-3xl border border-white/[0.09] bg-[#0a0f18]/90 p-6 shadow-[0_30px_80px_-20px_rgba(0,0,0,0.9)] backdrop-blur-xl sm:p-8">
               <div className="mb-6 flex items-center gap-3 lg:hidden">
-                <VyoraIcon size="md" glow />
+                <ZunariLogo size="md" glow />
                 <span className="text-xl font-black tracking-tight bg-gradient-to-r from-purple-300 via-sky-300 to-cyan-300 bg-clip-text text-transparent">
                   {brandName}
                 </span>

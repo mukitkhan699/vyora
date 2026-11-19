@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { Post } from '../../types/index.ts';
 import { api } from '../../services/api.ts';
@@ -6,6 +6,7 @@ import { PostCard } from './PostCard.tsx';
 import { PostComposer } from './PostComposer.tsx';
 import { Modal } from '../common/Modal.tsx';
 import { PostSkeleton } from '../common/LoadingSkeleton.tsx';
+import { useApiQuery } from '../../hooks/useApiQuery.ts';
 
 interface PostDetailModalProps {
   postId: string | null;
@@ -20,42 +21,16 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
   onUserClick,
   onTagClick,
 }) => {
-  const [post, setPost] = useState<Post | null>(null);
-  const [replies, setReplies] = useState<Post[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (!postId) {
-      setPost(null);
-      setReplies([]);
-      return;
-    }
-
-    setLoading(true);
-    api.getPostById(postId)
-      .then((data) => {
-        setPost(data.post);
-        setReplies(data.replies || []);
-      })
-      .catch((err) => {
-        console.warn('Failed to fetch post detail:', err);
-      })
-      .finally(() => {
-        setLoading(false);
-      });
-  }, [postId]);
+  const postQuery = useApiQuery<{ post: Post; replies: Post[] }>(
+    `/posts/${postId ?? ''}`,
+    () => postId ? api.getPostById(postId) : Promise.reject(new Error('A post ID is required.')),
+    Boolean(postId),
+  );
+  const post = postQuery.data?.post ?? null;
+  const replies = postQuery.data?.replies ?? [];
+  const loading = Boolean(postId) && postQuery.isLoading;
 
   if (!postId) return null;
-
-  const handleReplyCreated = (newReply: Post) => {
-    setReplies(prev => [...prev, newReply]);
-    if (post) {
-      setPost({
-        ...post,
-        repliesCount: (post.repliesCount || 0) + 1,
-      });
-    }
-  };
 
   return (
     <Modal isOpen={Boolean(postId)} onClose={onClose} title="Post" maxWidth="max-w-2xl">
@@ -87,7 +62,6 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
               <PostComposer
                 replyToId={post.id}
                 placeholder="Post your reply..."
-                onPostCreated={handleReplyCreated}
               />
             </div>
 
@@ -100,9 +74,6 @@ export const PostDetailModal: React.FC<PostDetailModalProps> = ({
                     post={reply}
                     onUserClick={onUserClick}
                     onTagClick={onTagClick}
-                    onDeletePost={(deletedId) => {
-                      setReplies(prev => prev.filter(r => r.id !== deletedId));
-                    }}
                   />
                 ))}
               </div>

@@ -66,7 +66,11 @@ export const AdminSidebar: React.FC<{
       <div className="zc-shell__sidebar-header">
         <div className="zc-shell__brand">
           <div className="zc-shell__logo">
-            <span className="zc-icon">Z</span>
+            <img
+              src={`${import.meta.env.BASE_URL}zunari-logo.jpg`}
+              alt="Zunari"
+              className="h-full w-full rounded-md object-contain"
+            />
           </div>
           <span className="zc-shell__title">Zunari CC</span>
         </div>
