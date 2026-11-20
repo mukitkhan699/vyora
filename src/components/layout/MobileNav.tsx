@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Home, Hash, Bell, Bookmark, User as UserIcon, Bot, Settings as SettingsIcon, Mail, LogOut, MoreHorizontal } from 'lucide-react';
+import { Home, Hash, Bell, Bookmark, User as UserIcon, Settings as SettingsIcon, Mail, LogOut, MoreHorizontal } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useTheme } from '../../context/ThemeContext.tsx';
 import { useKeyboardOpen } from '../../hooks/useKeyboard.ts';
@@ -20,7 +20,7 @@ export const MobileNav: React.FC<MobileNavProps> = ({ currentTab, onSelectTab })
     { id: 'explore', icon: Hash, label: 'Explore' },
     { id: 'notifications', icon: Bell, label: 'Notifications', badge: unreadNotificationsCount > 0 ? unreadNotificationsCount : null },
     { id: 'bookmarks', icon: Bookmark, label: 'Saved' },
-    { id: 'qelari', icon: Bot, label: 'Qelari' },
+    { id: 'qelari', icon: null, label: 'Qelari' },
     { id: 'profile', icon: UserIcon, label: 'Profile' },
   ];
 
@@ -91,11 +91,22 @@ export const MobileNav: React.FC<MobileNavProps> = ({ currentTab, onSelectTab })
             aria-label={item.label}
             className="relative p-2 rounded-xl cursor-pointer transition-colors active:scale-90"
           >
-            <Icon
-              className={`w-5.5 h-5.5 transition-colors ${
-                isActive ? `stroke-[2.5px] ${accentTextClass}` : 'text-neutral-400'
-              }`}
-            />
+            {item.id === 'qelari' ? (
+              <img
+                src="/qelari_navbar_logo.svg"
+                alt=""
+                aria-hidden="true"
+                className={`w-5.5 h-5.5 object-contain transition-opacity ${
+                  isActive ? '' : 'opacity-75'
+                }`}
+              />
+            ) : Icon ? (
+              <Icon
+                className={`w-5.5 h-5.5 transition-colors ${
+                  isActive ? `stroke-[2.5px] ${accentTextClass}` : 'text-neutral-400'
+                }`}
+              />
+            ) : null}
             {item.badge && (
               <span className="absolute top-1 right-1 bg-cyan-400 text-black text-[10px] font-black rounded-full w-4 h-4 flex items-center justify-center shadow-xs">
                 {item.badge}

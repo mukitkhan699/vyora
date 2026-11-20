@@ -5,7 +5,6 @@ import {
   Bell,
   Mail,
   Bookmark,
-  Bot,
   User as UserIcon,
   Settings as SettingsIcon,
   Radio,
@@ -50,7 +49,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       badge: unreadNotificationsCount > 0 ? unreadNotificationsCount : null,
     },
     { id: 'bookmarks', label: 'Bookmarks', icon: Bookmark },
-    { id: 'qelari', label: 'Qelari', icon: Bot },
+    { id: 'qelari', label: 'Qelari', icon: null },
     { id: 'profile', label: 'Profile', icon: UserIcon },
   ];
 
@@ -108,11 +107,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   }`}
                 >
                   <div className="relative shrink-0 mx-auto xl:mx-0">
-                    <Icon
-                      className={`w-5.5 h-5.5 transition-transform group-hover:scale-105 ${
-                        isActive ? `stroke-[2.5px] ${accentTextClass}` : ''
-                      }`}
-                    />
+                    {item.id === 'qelari' ? (
+                      <img
+                        src="/qelari_navbar_logo.svg"
+                        alt=""
+                        aria-hidden="true"
+                        className={`w-5.5 h-5.5 object-contain transition-transform group-hover:scale-105 ${
+                          isActive ? '' : 'opacity-75'
+                        }`}
+                      />
+                    ) : Icon ? (
+                      <Icon
+                        className={`w-5.5 h-5.5 transition-transform group-hover:scale-105 ${
+                          isActive ? `stroke-[2.5px] ${accentTextClass}` : ''
+                        }`}
+                      />
+                    ) : null}
                     {item.badge && (
                       <span
                         className={`absolute -top-1.5 -right-2 ${accentBgClass} text-black text-[10px] font-black rounded-full w-4.5 h-4.5 flex items-center justify-center shadow-md animate-in zoom-in-75`}

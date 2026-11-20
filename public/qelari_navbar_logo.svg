@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="g" x1="10" y1="8" x2="54" y2="56" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset=".45" stop-color="#DCE3F7"/>
+      <stop offset=".72" stop-color="#8A95B5"/>
+      <stop offset="1" stop-color="#FFFFFF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Compact navigation-bar Q mark -->
+  <path d="M17.2 32
+           C17.2 20.1 27.0 11.6 38.6 12.0
+           C50.0 12.4 56.4 21.0 54.4 32.2
+           C52.7 42.0 45.0 49.5 35.1 51.0
+           C24.2 52.7 17.2 44.5 17.2 32Z"
+        fill="none"
+        stroke="url(#g)"
+        stroke-width="2.8"
+        stroke-linecap="round"/>
+
+  <path d="M17.3 32
+           C22.0 29.9 26.9 30.0 32.1 31.9
+           C38.0 34.1 41.8 38.7 46.5 42.8
+           C50.0 45.9 53.3 47.0 58.0 46.5
+           C53.8 49.1 48.5 50.0 44.2 48.6
+           C38.8 46.8 35.4 41.6 30.0 38.0
+           C24.9 34.6 20.5 32.7 17.3 32Z"
+        fill="url(#g)"/>
+
+  <path d="M17.5 32
+           C22.1 29.9 27.0 30.0 32.1 31.9
+           C38.0 34.1 41.8 38.7 46.5 42.8"
+        fill="none"
+        stroke="#FFFFFF"
+        stroke-width="1.5"
+        stroke-linecap="round"
+        opacity=".9"/>
+</svg>
