@@ -1,5 +1,5 @@
-import React from 'react';
-import { Home, Hash, Bell, Mail, Bookmark, User as UserIcon, Settings as SettingsIcon } from 'lucide-react';
+import React, { useState } from 'react';
+import { Home, Hash, Bell, Bookmark, User as UserIcon, Bot, Settings as SettingsIcon, Mail, LogOut, MoreHorizontal } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useTheme } from '../../context/ThemeContext.tsx';
 import { useKeyboardOpen } from '../../hooks/useKeyboard.ts';
@@ -10,18 +10,18 @@ interface MobileNavProps {
 }
 
 export const MobileNav: React.FC<MobileNavProps> = ({ currentTab, onSelectTab }) => {
-  const { unreadNotificationsCount } = useAuth();
+  const { unreadNotificationsCount, logout } = useAuth();
   const { theme, accentTextClass } = useTheme();
   const keyboardOpen = useKeyboardOpen();
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
 
   const navItems = [
     { id: 'home', icon: Home, label: 'Home' },
     { id: 'explore', icon: Hash, label: 'Explore' },
     { id: 'notifications', icon: Bell, label: 'Notifications', badge: unreadNotificationsCount > 0 ? unreadNotificationsCount : null },
-    { id: 'messages', icon: Mail, label: 'Messages' },
     { id: 'bookmarks', icon: Bookmark, label: 'Saved' },
+    { id: 'qelari', icon: Bot, label: 'Qelari' },
     { id: 'profile', icon: UserIcon, label: 'Profile' },
-    { id: 'settings', icon: SettingsIcon, label: 'Settings' },
   ];
 
   const bg =
@@ -38,6 +38,45 @@ export const MobileNav: React.FC<MobileNavProps> = ({ currentTab, onSelectTab })
       aria-label="Mobile Navigation"
       className={`sm:hidden fixed bottom-0 left-0 right-0 z-40 h-[var(--z-mobile-nav-height)] border-t ${bg} backdrop-blur-xl flex items-center justify-around py-2 px-1 pb-[calc(0.5rem+env(safe-area-inset-bottom,0px))] transition-opacity duration-150`}
     >
+      {accountMenuOpen && (
+        <div className={`absolute bottom-full right-2 mb-2 w-52 rounded-2xl border p-2 shadow-2xl ${
+          theme === 'light' ? 'bg-white border-slate-200' : 'bg-[#10131A] border-white/10'
+        }`}>
+          <button
+            type="button"
+            onClick={() => {
+              setAccountMenuOpen(false);
+              onSelectTab('settings');
+            }}
+            className="w-full flex items-center gap-2 rounded-xl p-2.5 text-left text-sm text-neutral-300 hover:bg-white/[0.06]"
+          >
+            <SettingsIcon className="w-4 h-4 text-violet-400" />
+            Settings
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setAccountMenuOpen(false);
+              onSelectTab('messages');
+            }}
+            className="w-full flex items-center gap-2 rounded-xl p-2.5 text-left text-sm text-neutral-300 hover:bg-white/[0.06]"
+          >
+            <Mail className="w-4 h-4 text-cyan-400" />
+            Messages
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setAccountMenuOpen(false);
+              void logout();
+            }}
+            className="w-full flex items-center gap-2 rounded-xl p-2.5 text-left text-sm text-rose-400 hover:bg-rose-500/10"
+          >
+            <LogOut className="w-4 h-4" />
+            Log out
+          </button>
+        </div>
+      )}
       {navItems.map((item) => {
         const Icon = item.icon;
         const isActive = currentTab === item.id;
@@ -45,7 +84,10 @@ export const MobileNav: React.FC<MobileNavProps> = ({ currentTab, onSelectTab })
           <button
             key={item.id}
             type="button"
-            onClick={() => onSelectTab(item.id)}
+            onClick={() => {
+              setAccountMenuOpen(false);
+              onSelectTab(item.id);
+            }}
             aria-label={item.label}
             className="relative p-2 rounded-xl cursor-pointer transition-colors active:scale-90"
           >
@@ -62,6 +104,16 @@ export const MobileNav: React.FC<MobileNavProps> = ({ currentTab, onSelectTab })
           </button>
         );
       })}
+      <button
+        type="button"
+        onClick={() => setAccountMenuOpen((open) => !open)}
+        aria-label="Account menu"
+        aria-expanded={accountMenuOpen}
+        title="Account menu"
+        className="relative p-2 rounded-xl cursor-pointer transition-colors active:scale-90"
+      >
+        <MoreHorizontal className={`w-5.5 h-5.5 transition-colors ${accountMenuOpen ? `stroke-[2.5px] ${accentTextClass}` : 'text-neutral-400'}`} />
+      </button>
     </nav>
   );
 };

@@ -24,6 +24,7 @@ import {
 } from '../db/admin.ts';
 import { handleMessagingRequest } from './messaging.ts';
 import { handleCallingRequest } from './calling.ts';
+import { handleQelariRequest } from './qelari.ts';
 import { enforceReportRateLimit } from '../rate-limit.ts';
 import { HttpError } from '../errors.ts';
 import { MAX_POST_MEDIA } from '../../src/utils/postMedia.ts';
@@ -122,6 +123,8 @@ export async function handleApiRequest(
     if (await handleAuthRequest(req, res, url)) return true;
 
     if (await handleAdminRequest(req, res, url)) return true;
+
+    if (await handleQelariRequest(req, res, url, { requireUserId, readJson })) return true;
 
     const currentUserIdForMessaging = await getCurrentUserId(req);
     if (await handleMessagingRequest(req, res, url, currentUserIdForMessaging || null, readJson, requireSessionWithCsrf)) {

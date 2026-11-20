@@ -5,6 +5,7 @@ import {
   Bell,
   Mail,
   Bookmark,
+  Bot,
   User as UserIcon,
   Settings as SettingsIcon,
   Radio,
@@ -48,10 +49,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: Bell,
       badge: unreadNotificationsCount > 0 ? unreadNotificationsCount : null,
     },
-    { id: 'messages', label: 'Messages', icon: Mail },
     { id: 'bookmarks', label: 'Bookmarks', icon: Bookmark },
+    { id: 'qelari', label: 'Qelari', icon: Bot },
     { id: 'profile', label: 'Profile', icon: UserIcon },
-    { id: 'settings', label: 'Settings', icon: SettingsIcon },
   ];
 
   const hoverBg = theme === 'light' ? 'hover:bg-slate-100' : 'hover:bg-white/[0.06]';
@@ -168,6 +168,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
               >
                 <UserIcon className="w-3.5 h-3.5 text-cyan-400" />
                 <span>View profile</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  onSelectTab('messages');
+                  setShowUserMenu(false);
+                }}
+                className={`w-full flex items-center gap-2.5 p-2 rounded-xl text-left text-xs font-semibold text-neutral-300 cursor-pointer ${hoverBg}`}
+              >
+                <Mail className="w-3.5 h-3.5 text-cyan-400" />
+                <span>Messages</span>
               </button>
 
               <button

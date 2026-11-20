@@ -17,6 +17,7 @@ import { BookmarksView } from './components/bookmarks/BookmarksView.tsx';
 import { MessagesView } from './components/messages/MessagesView.tsx';
 import { ProfileView } from './components/profile/ProfileView.tsx';
 import { SettingsView } from './components/settings/SettingsView.tsx';
+import { QelariView } from './components/qelari/QelariView.tsx';
 import { LauncherSplash } from './components/common/LauncherSplash.tsx';
 import { LoginScreen } from './components/auth/LoginScreen.tsx';
 import { AdminRoute } from './components/admin/AdminRoute.tsx';
@@ -73,7 +74,7 @@ class ErrorBoundary extends Component<{ children: ReactNode; fallback?: ReactNod
 }
 
 function MainApp() {
-  const { appConfig, isAdmin, adminRole } = useAuth();
+  const { appConfig, isAdmin, adminRole, currentUser } = useAuth();
   useServiceWorker();
 
   const [currentTab, setCurrentTab] = useState<string>('home');
@@ -180,9 +181,9 @@ function MainApp() {
   }
 
   return (
-    <div className={`${currentTab === 'messages' ? 'h-[100dvh] overflow-hidden' : 'min-h-screen'} flex justify-center selection:bg-cyan-500/30 selection:text-white`}>
+    <div className={`${['messages', 'qelari'].includes(currentTab) ? 'h-[100dvh] overflow-hidden' : 'min-h-screen'} flex justify-center selection:bg-cyan-500/30 selection:text-white`}>
       {/* 3-Column Responsive Container */}
-      <div className={`flex w-full max-w-7xl justify-between ${currentTab === 'messages' ? 'h-full min-h-0' : ''}`}>
+      <div className={`flex w-full max-w-7xl justify-between ${['messages', 'qelari'].includes(currentTab) ? 'h-full min-h-0' : ''}`}>
         {/* Left Navigation Sidebar */}
         <Sidebar
           currentTab={currentTab}
@@ -197,7 +198,7 @@ function MainApp() {
         {/* Center Main Social Feed View */}
         <main
           className={`min-w-0 flex-1 border-r border-white/[0.08] w-full ${
-            currentTab === 'messages'
+            ['messages', 'qelari'].includes(currentTab)
               ? 'h-full min-h-0 max-w-none'
               : 'min-h-screen max-w-2xl pb-20 sm:pb-4'
           }`}
@@ -261,10 +262,14 @@ function MainApp() {
           {currentTab === 'settings' && (
             <SettingsView />
           )}
+
+          {currentTab === 'qelari' && currentUser && (
+            <QelariView accountId={currentUser.id} onExit={() => setCurrentTab('home')} />
+          )}
         </main>
 
         {/* Right Sidebar Widgets */}
-        {currentTab !== 'messages' && (
+        {!['messages', 'qelari'].includes(currentTab) && (
           <RightSidebar
             onSearch={handleSearch}
             onSelectTag={handleTagClick}
@@ -277,14 +282,16 @@ function MainApp() {
       <OfflineIndicator position="bottom" compact />
 
       {/* Mobile Bottom Navigation */}
-      <MobileNav
-        currentTab={currentTab}
-        onSelectTab={(tab) => {
-          if (tab === 'profile') setTargetUsername(null);
-          setCurrentTab(tab);
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-      />
+      {currentTab !== 'qelari' && (
+        <MobileNav
+          currentTab={currentTab}
+          onSelectTab={(tab) => {
+            if (tab === 'profile') setTargetUsername(null);
+            setCurrentTab(tab);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+        />
+      )}
 
       {/* Post Detail / Thread Modal */}
       <PostDetailModal

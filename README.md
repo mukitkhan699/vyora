@@ -52,6 +52,22 @@ then asks the backend to verify and register the object. App media references re
 `/api/files/<id>`; the backend checks visibility and returns a short-lived signed download.
 Abandoned or incomplete uploads are cleaned up by the server.
 
+## Qelari AI
+
+Qelari is available to signed-in users from the main navigation. Configure the optional
+server-only `GROQ_API_KEY` (default model: `openai/gpt-oss-120b`) for streaming chat.
+Set `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` to enable FLUX image generation.
+These values must never use `VITE_*` names or be sent to the browser. Missing provider
+configuration disables that feature with an explicit error.
+
+Chat prompts are sent to Groq and image-generation prompts and results pass through the
+server to Cloudflare Workers AI. Conversation history, image bytes, and response preferences
+are stored only in account-scoped browser storage; they are not written to the Zunari database
+or server filesystem. Uploaded chat images are not sent to the text model. The Personalization
+dialog can export or import a versioned JSON archive containing local chats, preferences, and
+image bytes. Archives can only be imported into the same signed-in account on the same origin.
+Back up this data before clearing browser storage or switching devices.
+
 ## Realtime messages
 
 Socket.IO authenticates with the existing session cookie. Message records and their

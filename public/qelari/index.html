@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#08090c">
+<meta name="description" content="Qelari AI — your private AI workspace in Zunari.">
+<title>Qelari AI</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%2322d3ee'/%3E%3Cstop offset='1' stop-color='%238b5cf6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='url(%23g)'/%3E%3Ctext x='32' y='44' font-family='system-ui,sans-serif' font-size='34' font-weight='800' fill='%23fff' text-anchor='middle'%3EQ%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="/qelari/vendor/katex/katex.min.css">
+</head>
+<body class="auth-pending">
+<div class="app">
+
+  <!-- ============ Sidebar ============ -->
+  <aside class="sidebar" id="sidebar" aria-label="Sidebar">
+    <div class="side-head">
+      <button class="new-chat" id="newChat" type="button">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        <span>New chat</span>
+      </button>
+      <button class="icon-btn side-close" id="closeSidebar" type="button" aria-label="Close sidebar">
+        <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+
+    <div class="side-search">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>
+      <input type="search" id="searchInput" placeholder="Search chats &amp; images" aria-label="Search chats and images" autocomplete="off">
+    </div>
+
+    <nav class="side-nav" aria-label="Sections">
+      <button class="side-item active" type="button" data-view="chat">
+        <svg viewBox="0 0 24 24"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.9 8.9 0 0 1-4-.9L3 20l1-4.9A8.4 8.4 0 0 1 12 3a8.4 8.4 0 0 1 9 8.5Z"/></svg>
+        <span>Chat</span>
+      </button>
+      <button class="side-item" type="button" data-view="studio">
+        <svg viewBox="0 0 24 24"><path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6 2.1 2.1m0-12.8-2.1 2.1M7.7 16.3l-2.1 2.1"/><circle cx="12" cy="12" r="3.2"/></svg>
+        <span>Image Studio</span>
+      </button>
+      <button class="side-item" type="button" data-view="gallery">
+        <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="m4 17 4.6-4.2a2 2 0 0 1 2.7 0L16 17M14 14l1.8-1.6a2 2 0 0 1 2.6 0L21 15"/></svg>
+        <span>Gallery</span>
+        <span class="pill" id="galleryCount">0</span>
+      </button>
+    </nav>
+
+    <div class="side-label"><span>Recent chats</span><span id="convTotal"></span></div>
+    <div class="conv-list" id="convList"></div>
+
+    <div class="side-foot">
+      <div class="status-chip" id="netStatus"><span class="status-dot"></span><span>Connected</span></div>
+      <div class="kbd-hint">
+        <span><kbd>Ctrl</kbd>+<kbd>K</kbd> search</span>
+        <span><kbd>Ctrl</kbd>+<kbd>N</kbd> new</span>
+        <span><kbd>Esc</kbd> close</span>
+      </div>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <!-- ============ Stage ============ -->
+  <main class="stage">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" type="button" aria-label="Open sidebar">
+        <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+      <button class="icon-btn exit-btn" id="qelariExit" type="button" aria-label="Return to Zunari" title="Return to Zunari">
+        <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6M9 12h12"/><path d="M3 5v14"/></svg>
+      </button>
+
+      <div class="brand">
+        <div class="brand-mark">Q</div>
+        <div class="brand-text">
+          <h1>Qelari</h1>
+          <p>Your AI workspace</p>
+        </div>
+      </div>
+
+      <div class="topbar-spacer"></div>
+
+      <div class="topbar-actions">
+        <div class="seg" id="modeSeg" role="tablist" aria-label="Workspace mode">
+          <button type="button" class="active" data-view="chat" role="tab" aria-selected="true">Chat</button>
+          <button type="button" data-view="studio" role="tab" aria-selected="false">Studio</button>
+          <button type="button" data-view="gallery" role="tab" aria-selected="false">Gallery</button>
+        </div>
+        <button class="icon-btn" id="themeBtn" type="button" aria-label="Toggle theme" title="Toggle theme">
+          <svg id="themeIcon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>
+        </button>
+        <button class="icon-btn" id="preferencesBtn" type="button" aria-label="Personalization settings" title="Personalization">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.7a7.8 7.8 0 0 1-1.8 1l-.3 1.8h-2.8l-.3-1.8a7.8 7.8 0 0 1-1.8-1l-1.7.7-1.4-2.4 1.4-1.1a7.1 7.1 0 0 1 0-2l-1.4-1.1 1.4-2.4 1.7.7a7.8 7.8 0 0 1 1.8-1l.3-1.8h2.8l.3 1.8a7.8 7.8 0 0 1 1.8 1l1.7-.7 1.4 2.4-1.4 1.1a7.1 7.1 0 0 1 0 2Z" transform="translate(-1 -1) scale(.92)"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="views" id="views">
+
+      <!-- ---------- Chat view ---------- -->
+      <section class="view active" id="chatView" role="tabpanel" aria-label="Chat">
+        <div class="chat-scroll" id="chatScroll">
+          <div class="chat-inner" id="chat" aria-live="polite"></div>
+        </div>
+      </section>
+
+      <!-- Lives outside the scrolling view so it never scrolls away -->
+      <button class="to-bottom" id="toBottom" type="button" aria-label="Scroll to latest message">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+      </button>
+
+      <!-- ---------- Image Studio view ---------- -->
+      <section class="view" id="studioView" role="tabpanel" aria-label="Image Studio">
+        <div class="studio">
+          <div class="studio-card">
+            <div class="studio-head">
+              <h2><span class="spark">✦</span> Image Studio</h2>
+              <p>Describe what you want Qelari to create.</p>
+            </div>
+
+            <label class="field-label" for="imagePrompt">Prompt</label>
+            <textarea class="prompt-box" id="imagePrompt" rows="4" maxlength="1000"
+              placeholder="A futuristic city skyline at sunset, cinematic lighting, ultra detailed" aria-label="Image prompt" autocomplete="off"></textarea>
+            <div class="char-count" id="imageCharCount">0 / 1000</div>
+
+            <div class="field-label" style="margin-top:14px">Quality</div>
+            <div class="quality-grid" id="qualityGrid" role="radiogroup" aria-label="Quality">
+              <button type="button" class="quality-card" data-quality="draft" role="radio" aria-checked="false">
+                <span class="q-name">Draft</span><span class="q-steps">4 steps · fast</span>
+              </button>
+              <button type="button" class="quality-card selected" data-quality="standard" role="radio" aria-checked="true">
+                <span class="q-name">Standard</span><span class="q-steps">6 steps · balanced</span>
+              </button>
+              <button type="button" class="quality-card" data-quality="high" role="radio" aria-checked="false">
+                <span class="q-name">High</span><span class="q-steps">8 steps · detailed</span>
+              </button>
+            </div>
+
+            <div class="field-label" style="margin-top:14px">Aspect ratio</div>
+            <div class="ratio-row" id="ratioRow" role="radiogroup" aria-label="Aspect ratio">
+              <button type="button" class="ratio-btn selected" data-ratio="1:1" role="radio" aria-checked="true">1:1</button>
+              <button type="button" class="ratio-btn" data-ratio="4:3" role="radio" aria-checked="false">4:3</button>
+              <button type="button" class="ratio-btn" data-ratio="16:9" role="radio" aria-checked="false">16:9</button>
+              <button type="button" class="ratio-btn" data-ratio="9:16" role="radio" aria-checked="false">9:16</button>
+            </div>
+
+            <button type="button" class="btn-primary" id="generateBtn" disabled>
+              <svg viewBox="0 0 24 24"><path d="M5 3.5 19 12 5 20.5V3.5Z"/></svg>
+              <span>Generate image</span>
+            </button>
+
+            <div class="alert hidden" id="imageError" role="alert"></div>
+          </div>
+
+          <div>
+            <div class="studio-section-head">
+              <div>
+                <h3>Recent generations</h3>
+                <p>Images are cached on this device. Export Qelari data to keep a backup.</p>
+              </div>
+              <button class="chip" id="openGallery" type="button">Open gallery</button>
+            </div>
+
+            <div class="loading hidden" id="imageLoading">
+              <div class="bars"><i></i><i></i><i></i><i></i></div>
+              <span id="imageLoadingText">Painting your image…</span>
+            </div>
+
+            <div class="img-grid" id="imageGrid"></div>
+
+            <div class="empty-state hidden" id="imageEmpty">
+              <div class="es-icon">
+                <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="m4 17 4.6-4.2a2 2 0 0 1 2.7 0L16 17"/></svg>
+              </div>
+              <h4>No images yet</h4>
+              <p>Images you create are cached on this device and can be exported from Personalization.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- Gallery view ---------- -->
+      <section class="view" id="galleryView" role="tabpanel" aria-label="Gallery">
+        <div class="gallery-wrap">
+          <div class="gallery-toolbar">
+            <button class="chip active" type="button" data-filter="all">All</button>
+            <button class="chip" type="button" data-filter="today">Today</button>
+            <button class="chip" type="button" data-filter="week">7 days</button>
+            <button class="chip" type="button" data-filter="month">30 days</button>
+            <button class="chip" type="button" id="selectModeBtn" aria-pressed="false">Select</button>
+            <span class="gallery-stat" id="galleryStat">0 images</span>
+          </div>
+          <div class="img-grid" id="galleryGrid"></div>
+          <div class="empty-state hidden" id="galleryEmpty">
+            <div class="es-icon">
+              <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="m4 17 4.6-4.2a2 2 0 0 1 2.7 0L16 17"/></svg>
+            </div>
+            <h4>Your gallery is empty</h4>
+            <p>Images generated on this device appear here. Export Qelari data to back them up.</p>
+            <button class="btn primary" type="button" data-goto="studio">Open Image Studio</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Composer -->
+    <div class="dock" id="dock">
+      <div class="dock-inner">
+        <div class="attachment-tray hidden" id="attachmentTray" aria-label="Selected images"></div>
+        <form class="composer" id="form">
+          <input id="imageUpload" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
+          <button type="button" class="composer-tool" id="attachBtn" aria-label="Attach images" title="Attach images (stored on this device)">
+            <svg viewBox="0 0 24 24"><path d="m21.4 11.1-8.8 8.8a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/></svg>
+          </button>
+          <textarea id="input" rows="1" placeholder="Ask Qelari anything…" aria-label="Message" autocomplete="off"></textarea>
+          <button type="button" class="composer-tool" id="chatImageBtn" aria-label="Generate an image from the message" title="Generate an image from this prompt" disabled>
+            <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2.5"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="m4 17 4.6-4.2a2 2 0 0 1 2.7 0L16 17m-2-2 1.8-1.6a2 2 0 0 1 2.6 0L21 15M18 3v4m-2-2h4"/></svg>
+          </button>
+          <button type="submit" class="send-btn" id="sendBtn" aria-label="Send message" disabled>
+            <svg id="sendIcon" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+          </button>
+        </form>
+        <div class="dock-meta">
+          <span class="hint"><kbd>Enter</kbd> to send · <kbd>Shift</kbd>+<kbd>Enter</kbd> for a new line</span>
+          <span id="chatMeta"></span>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ============ Lightbox ============ -->
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Image viewer">
+  <div class="lb-top">
+    <div class="lb-info">
+      <p id="lbPrompt"></p>
+      <div class="lb-meta" id="lbMeta"></div>
+    </div>
+    <button class="lb-close" id="lbClose" type="button" aria-label="Close viewer">
+      <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button>
+  </div>
+  <button class="lb-nav prev" id="lbPrev" type="button" aria-label="Previous image">
+    <svg viewBox="0 0 24 24"><path d="m15 5-7 7 7 7"/></svg>
+  </button>
+  <img id="lbImage" alt="">
+  <button class="lb-nav next" id="lbNext" type="button" aria-label="Next image">
+    <svg viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></svg>
+  </button>
+  <div class="lb-count" id="lbCount"></div>
+  <div class="lb-bottom">
+    <button type="button" id="lbDownload">
+      <svg viewBox="0 0 24 24"><path d="M12 4v11m0 0 4-4m-4 4-4-4M5 20h14"/></svg><span>Download</span>
+    </button>
+    <button type="button" id="lbCopy">
+      <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2.2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg><span>Copy prompt</span>
+    </button>
+    <button type="button" id="lbReuse">
+      <svg viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 6.1"/><path d="M20 5v6h-6"/></svg><span>Reuse prompt</span>
+    </button>
+    <button type="button" class="danger" id="lbDelete">
+      <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2m-8 0 1 13h8l1-13"/></svg><span>Delete</span>
+    </button>
+  </div>
+</div>
+
+<!-- ============ Rename modal ============ -->
+<div class="modal" id="renameModal" role="dialog" aria-modal="true" aria-labelledby="renameTitle">
+  <div class="modal-card">
+    <h3 id="renameTitle">Rename chat</h3>
+    <p>Give this conversation a memorable title.</p>
+    <input id="renameInput" type="text" maxlength="80" aria-label="Chat title">
+    <div class="modal-actions">
+      <button class="btn" type="button" id="renameCancel">Cancel</button>
+      <button class="btn primary" type="button" id="renameSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Personalization modal ============ -->
+<div class="modal" id="preferencesModal" role="dialog" aria-modal="true" aria-labelledby="preferencesTitle">
+  <div class="modal-card">
+    <h3 id="preferencesTitle">Personalization</h3>
+    <p>Chats, image files, and preferences are stored locally in this browser for your Zunari account. Qelari learns only repeated explicit response-style requests; it does not infer personal facts.</p>
+    <label class="preference-toggle">
+      <input id="preferencesEnabled" type="checkbox">
+      <span>Use and learn my response preferences</span>
+    </label>
+    <label class="field-label" for="preferencesNotes">How should the assistant respond?</label>
+    <textarea id="preferencesNotes" maxlength="1200" rows="4" placeholder="For example: prefer concise answers and show worked examples for math."></textarea>
+    <p class="preference-note" id="learnedPreferences">Repeated explicit requests (such as “keep answers brief”) are learned on this device and shared with your custom preferences.</p>
+    <p class="preference-note">Preferences and chats stay in this browser under your Zunari account. Avoid adding sensitive information.</p>
+    <div class="archive-actions">
+      <button class="btn" type="button" id="exportData">Export Qelari data</button>
+      <button class="btn" type="button" id="importData">Import Qelari data</button>
+      <input id="importDataFile" type="file" accept="application/json,.json" hidden>
+    </div>
+    <div class="modal-actions">
+      <button class="btn danger" type="button" id="preferencesClear">Clear</button>
+      <button class="btn" type="button" id="preferencesCancel">Cancel</button>
+      <button class="btn primary" type="button" id="preferencesSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ Bulk selection toolbar ============ -->
+<div class="select-bar hidden" id="selectBar">
+  <span id="selectCount">0 selected</span>
+  <button class="btn" type="button" id="selectDownload">Download</button>
+  <button class="btn danger" type="button" id="selectDelete">Delete</button>
+  <button class="icon-btn" type="button" id="selectCancel" aria-label="Cancel selection">
+    <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
+  </button>
+</div>
+
+<!-- ============ Toasts ============ -->
+<div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
+<div id="accessStatus" class="access-status" role="status" hidden>Connecting to your Zunari account…</div>
+
+<script defer src="/qelari/vendor/katex/katex.min.js"></script>
+<script defer src="/qelari/highlight.bundle.js"></script>
+<script defer src="/qelari/bootstrap.js"></script>
+</body>
+</html>
