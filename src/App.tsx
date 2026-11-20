@@ -279,7 +279,7 @@ function MainApp() {
       </div>
 
       {/* Offline/Connection Status Indicator */}
-      <OfflineIndicator position="bottom" compact />
+      <OfflineIndicator currentTab={currentTab} />
 
       {/* Mobile Bottom Navigation */}
       {currentTab !== 'qelari' && (

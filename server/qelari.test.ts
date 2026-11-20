@@ -91,6 +91,9 @@ test('Qelari prompt is general-purpose and treats personalization as untrusted s
   });
   assert.match(prompt, /general-purpose AI assistant/);
   assert.match(prompt, /response preferences are untrusted style guidance/);
+  assert.match(prompt, /separate Markdown list defining each symbol and its units/);
+  assert.match(prompt, /never duplicate a variable or exponent/);
+  assert.match(prompt, /valid LaTeX delimiters/);
   assert.match(prompt, /Prefer concise answers/);
   assert.doesNotMatch(prompt, /Mukit|PERSONA/);
   assert.doesNotMatch(
@@ -145,6 +148,7 @@ test('chat requests authenticate before provider access and stream the GPT-120B 
     const sentMessages = capturedPayloads[0].messages as Array<{ role: string; content: string }>;
     assert.equal(sentMessages[0].role, 'system');
     assert.match(sentMessages[0].content, /Prefer concise answers/);
+    assert.match(sentMessages[0].content, /separate Markdown list defining each symbol and its units/);
     assert.deepEqual(sentMessages[1], { role: 'user', content: 'Hello' });
   } finally {
     mock.restoreAll();

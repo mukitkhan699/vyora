@@ -166,6 +166,7 @@ export const MessageComposer: React.FC<MessageComposerProps> = ({
 
   return (
     <div
+      data-message-composer
       className="shrink-0 border-t z-border z-surface px-2.5 pt-2 sm:px-4 sm:pt-2.5"
       style={{ backgroundColor: 'var(--z-surface)' }}
     >

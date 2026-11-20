@@ -1,5 +1,12 @@
 import { useState, useEffect } from 'react';
 
+export function getVisualViewportBottomInset(
+  root: Pick<DOMRect, 'bottom'>,
+  viewport: Pick<VisualViewport, 'height' | 'offsetTop'>,
+): number {
+  return Math.max(0, root.bottom - viewport.offsetTop - viewport.height);
+}
+
 export function useKeyboardHeight(): number {
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 

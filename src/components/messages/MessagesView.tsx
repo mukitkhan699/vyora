@@ -23,7 +23,7 @@ import type {
 import { api } from '../../services/api.ts';
 import { useAuth } from '../../context/AuthContext.tsx';
 import { useRealtime } from '../../context/RealtimeContext.tsx';
-import { useKeyboardHeight } from '../../hooks/useKeyboard.ts';
+import { getVisualViewportBottomInset, useKeyboardHeight } from '../../hooks/useKeyboard.ts';
 import {
   useOutboxContext,
   OUTBOX_MESSAGE_SENT_EVENT,
@@ -244,7 +244,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
     }
 
     const updateInset = () => {
-      setKeyboardInset(Math.max(0, root.getBoundingClientRect().height - viewport.height));
+      setKeyboardInset(getVisualViewportBottomInset(root.getBoundingClientRect(), viewport));
     };
 
     updateInset();
@@ -1748,7 +1748,7 @@ export const MessagesView: React.FC<MessagesViewProps> = ({ onOpenProfile, reset
   return (
     <div
       ref={messagesRootRef}
-      className="flex h-full w-full overflow-hidden z-bg"
+      className="flex h-full min-h-0 min-w-0 w-full overflow-hidden z-bg"
       style={{ paddingBottom: bottomInset }}
     >
       <aside

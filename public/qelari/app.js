@@ -515,8 +515,22 @@ function mathify(text) {
   /* 1. Explicit delimiters must be protected before scanning bare commands,
         otherwise a command inside them is replaced with a placeholder that
         KaTeX then receives as if it were part of the TeX source. */
-  s = s.replace(/\$([^$\n]{1,400})\$/g, (m, inner) => put('<span class="math">' + mathHtml(inner) + '</span>'));
-  s = s.replace(/\\\(([^\\)]{1,400})\\\)/g, (m, inner) => put('<span class="math">' + mathHtml(inner) + '</span>'));
+  s = s.replace(/\$([^$\n]{1,4000})\$/g, (m, inner) => put('<span class="math">' + mathHtml(inner) + '</span>'));
+  s = s.replace(/\\\(([\s\S]{1,4000}?)\\\)/g, (m, inner) => put('<span class="math">' + mathHtml(inner) + '</span>'));
+
+  /* Do not run partial streaming expressions through plain-text math heuristics. */
+  const openParen = s.lastIndexOf('\\(');
+  if (openParen >= 0) s = s.slice(0, openParen) + put(s.slice(openParen));
+  const openBracket = s.lastIndexOf('\\[');
+  if (openBracket >= 0) s = s.slice(0, openBracket) + put(s.slice(openBracket));
+  let dollarCount = 0, lastDollar = -1;
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] !== '$') continue;
+    let slashes = 0;
+    for (let j = i - 1; j >= 0 && s[j] === '\\'; j--) slashes++;
+    if (slashes % 2 === 0) { dollarCount++; lastDollar = i; }
+  }
+  if (dollarCount % 2 && lastDollar >= 0) s = s.slice(0, lastDollar) + put(s.slice(lastDollar));
 
   /* 2. unambiguous LaTeX commands (\frac, \sqrt) with balanced braces, so
         nested commands are handled together inside mathHtml. */
@@ -541,8 +555,13 @@ function mathify(text) {
   /* 3. plain notation — x^2, (a+b)^2, x_1 */
   s = s.replace(/(^|[^\w\\])((?:[A-Za-z]|\([^()]{1,24}\)))\s*(\^(?:\{[^{}]*\}|-?\d{1,3}|[A-Za-z]))/g,
     (m, pre, base, sup) => pre + put('<span class="math">' + mathHtml(base + sup) + '</span>'));
-  s = s.replace(/(^|[^\w\\])((?:[A-Za-z]|\([^()]{1,24}\)))\s*(?:_\{([^{}]*)\}|_([A-Za-z0-9]))/g,
-    (m, pre, base, sub, sub2) => pre + put('<span class="math">' + mathHtml(base + '_' + (sub || sub2)) + '</span>'));
+  s = s.replace(/(^|[^\w\\])((?:[A-Za-z]|\([^()]{1,24}\)))\s*(?:_\{([^{}]*)\}|_([A-Za-z][A-Za-z0-9]*|[0-9]+))(?![\w])/g,
+    (m, pre, base, sub, sub2) => {
+      const suffix = sub !== undefined
+        ? '_{' + sub + '}'
+        : /^[A-Za-z]/.test(sub2) ? '_{' + sub2 + '}' : '_' + sub2;
+      return pre + put('<span class="math">' + mathHtml(base + suffix) + '</span>');
+    });
 
   /* 4. bare LaTeX symbols such as \alpha or \sum (grouped into one span) */
   s = s.replace(BARE_COMMAND_RE, (m) => put('<span class="math">' + mathHtml(m) + '</span>'));
@@ -1053,7 +1072,6 @@ function addRow(role, content, ts, index, message) {
   const isUser = role === 'user';
   row.className = 'msg ' + (isUser ? 'user' : 'bot');
   row.dataset.index = index;
-  if (!isUser) row.innerHTML = '<div class="avatar" aria-hidden="true">Q</div>';
   const body = document.createElement('div');
   body.className = 'msg-body';
   if (isUser) {
@@ -1063,7 +1081,7 @@ function addRow(role, content, ts, index, message) {
       (attachments.length ? '<p class="attachment-note">Images stay on this device. This text-only model cannot inspect their pixels.</p>' : '') +
       '</div>' + msgActions('user', index);
   } else {
-    body.innerHTML = '<div class="msg-meta"><span class="who">Qelari</span><span>·</span><span>' + esc(formatTime(ts)) + '</span></div>' +
+    body.innerHTML = '<div class="msg-meta"><span>' + esc(formatTime(ts)) + '</span></div>' +
       '<div class="md">' + content + (message && message.image ? generatedImageMarkup(message.image) : '') +
       '</div>' + msgActions('bot', index);
   }

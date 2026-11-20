@@ -1,121 +1,211 @@
-import React from 'react';
-import { WifiOff, AlertTriangle, Loader2, CheckCircle } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { AlertTriangle, CheckCircle, Loader2, WifiOff } from 'lucide-react';
 import { useNetworkStatus, useConnectionQuality } from '../../hooks/useNetworkStatus.ts';
 import { useSyncStatus } from '../../hooks/useSyncStatus.ts';
+import { getConnectionNoticeTransition, type ConnectionNotice } from './connectionNotice.ts';
 
 interface OfflineIndicatorProps {
-  position?: 'top' | 'bottom';
-  compact?: boolean;
+  currentTab: string;
 }
 
-export const OfflineIndicator: React.FC<OfflineIndicatorProps> = ({
-  position = 'top',
-  compact = false,
-}) => {
-  const { online, wasOffline } = useNetworkStatus();
+const NOTICE_STYLE: Record<ConnectionNotice['kind'], string> = {
+  offline: 'border-red-400/25 text-red-100',
+  reconnecting: 'border-amber-300/25 text-amber-100',
+  syncing: 'border-amber-300/25 text-amber-100',
+  'sync-error': 'border-red-400/25 text-red-100',
+  slow: 'border-amber-300/25 text-amber-100',
+  restored: 'border-emerald-300/25 text-emerald-100',
+};
+
+export const OfflineIndicator: React.FC<OfflineIndicatorProps> = ({ currentTab }) => {
+  const { online } = useNetworkStatus();
   const quality = useConnectionQuality();
-  const { state, error, lastSyncedAt } = useSyncStatus();
+  const { state } = useSyncStatus();
+  const [notice, setNotice] = useState<ConnectionNotice | null>(null);
+  const [composerClearance, setComposerClearance] = useState<number | null>(null);
+  const hadConnectionIssue = useRef(false);
+  const dismissTimer = useRef<number | null>(null);
+  const noticeRef = useRef<ConnectionNotice | null>(null);
 
-  // Don't show anything if we're fully connected and never had issues
-  if (online && quality === 'good' && !wasOffline && state === 'connected' && !error) return null;
-
-  const getStatusContent = () => {
-    switch (state) {
-      case 'offline':
-        return (
-          <>
-            <WifiOff className="w-4 h-4" />
-            <span>You're offline. Changes will sync when reconnected.</span>
-          </>
-        );
-      case 'reconnecting':
-        return (
-          <>
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span>Reconnecting...</span>
-          </>
-        );
-      case 'syncing':
-        return (
-          <>
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span>Syncing messages...</span>
-          </>
-        );
-      case 'sync-error':
-        return (
-          <>
-            <AlertTriangle className="w-4 h-4" />
-            <span>Sync failed: {error || 'Unknown error'}</span>
-          </>
-        );
-      case 'connected':
-        if (wasOffline) {
-          return (
-            <>
-              <CheckCircle className="w-4 h-4" />
-              <span>Reconnected - synced successfully</span>
-            </>
-          );
-        }
-        if (quality === 'poor') {
-          return (
-            <>
-              <AlertTriangle className="w-4 h-4" />
-              <span>Slow connection - messages may take longer to send</span>
-            </>
-          );
-        }
-        return null;
-    }
+  const updateNotice = (next: ConnectionNotice | null) => {
+    setNotice(next);
   };
 
-  const content = getStatusContent();
-  if (!content) return null;
+  useEffect(() => {
+    const clearDismissTimer = () => {
+      if (dismissTimer.current === null) return;
+      window.clearTimeout(dismissTimer.current);
+      dismissTimer.current = null;
+    };
 
-  if (compact) {
-    return (
-      <div
-        className={`fixed ${position === 'top' ? 'top-0' : 'bottom-0'} left-0 right-0 z-50 flex justify-center px-4 py-2 ${
-          state === 'sync-error' ? 'bg-red-600/90 text-white' : 
-          state === 'offline' ? 'bg-red-600/90 text-white' :
-          state === 'reconnecting' || state === 'syncing' ? 'bg-yellow-600/90 text-yellow-50' :
-          'bg-green-600/90 text-white'
-        } backdrop-blur-sm border-b ${
-          state === 'sync-error' ? 'border-red-500' :
-          state === 'offline' ? 'border-red-500' :
-          state === 'reconnecting' || state === 'syncing' ? 'border-yellow-500' :
-          'border-green-500'
-        }`}
-        role="status"
-        aria-live="polite"
-      >
-        <div className="flex items-center gap-1.5 text-sm font-medium">
-          {content}
-        </div>
-      </div>
-    );
-  }
+    const transition = getConnectionNoticeTransition({
+      online,
+      quality,
+      state,
+      hadConnectionIssue: hadConnectionIssue.current,
+    });
+    hadConnectionIssue.current = transition.hadConnectionIssue;
+    const nextNotice = transition.notice;
+    if (!nextNotice) return;
+
+    const sameNotice = noticeRef.current?.kind === nextNotice.kind;
+    if (sameNotice && (nextNotice.dismissAfterMs === undefined || dismissTimer.current !== null)) {
+      return;
+    }
+
+    clearDismissTimer();
+    noticeRef.current = nextNotice;
+    updateNotice(nextNotice);
+    if (nextNotice.dismissAfterMs !== undefined) {
+      dismissTimer.current = window.setTimeout(() => {
+        dismissTimer.current = null;
+        noticeRef.current = null;
+        updateNotice(null);
+      }, nextNotice.dismissAfterMs);
+    }
+  }, [online, quality, state]);
+
+  useEffect(() => () => {
+    if (dismissTimer.current !== null) window.clearTimeout(dismissTimer.current);
+  }, []);
+
+  useEffect(() => {
+    let observedComposer: Element | null = null;
+
+    const getComposer = (): { element: HTMLElement | null; top: number | null } => {
+      if (currentTab === 'messages') {
+        const element = document.querySelector<HTMLElement>('[data-message-composer]');
+        return { element, top: element?.getBoundingClientRect().top ?? null };
+      }
+
+      if (currentTab === 'qelari') {
+        const iframe = document.querySelector<HTMLIFrameElement>(
+          'iframe[title="Qelari AI workspace"]',
+        );
+        const dock = iframe?.contentDocument?.querySelector<HTMLElement>('#dock');
+        if (iframe && dock) {
+          return {
+            element: dock,
+            top: dock.classList.contains('hidden')
+              ? null
+              : iframe.getBoundingClientRect().top + dock.getBoundingClientRect().top,
+          };
+        }
+      }
+
+      return { element: null, top: null };
+    };
+
+    const updateComposerClearance = () => {
+      const viewport = window.visualViewport;
+      const visibleBottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
+      const { element, top: composerTop } = getComposer();
+      if (currentTab === 'qelari') {
+        const iframe = document.querySelector<HTMLIFrameElement>(
+          'iframe[title="Qelari AI workspace"]',
+        );
+        const dock = iframe?.contentDocument?.querySelector<HTMLElement>('#dock') ?? null;
+        if (dock !== observedDock) {
+          dockClassObserver?.disconnect();
+          observedDock = dock;
+          if (observedDock) {
+            dockClassObserver?.observe(observedDock, {
+              attributes: true,
+              attributeFilter: ['class'],
+            });
+          }
+        }
+      }
+      if (element !== observedComposer) {
+        if (observedComposer) resizeObserver?.unobserve(observedComposer);
+        observedComposer = element;
+        if (observedComposer) resizeObserver?.observe(observedComposer);
+      }
+
+      if (composerTop === null) {
+        setComposerClearance(null);
+        return;
+      }
+
+      const clearance = Math.max(12, visibleBottom - composerTop + 12);
+      setComposerClearance((previous) =>
+        previous !== null && Math.abs(previous - clearance) < 1 ? previous : clearance,
+      );
+    };
+
+    const resizeObserver = typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(updateComposerClearance);
+    const dockClassObserver = typeof MutationObserver === 'undefined'
+      ? null
+      : new MutationObserver(updateComposerClearance);
+    let observedDock: Element | null = null;
+    const iframe = currentTab === 'qelari'
+      ? document.querySelector<HTMLIFrameElement>('iframe[title="Qelari AI workspace"]')
+      : null;
+    const conversationMain = currentTab === 'messages'
+      ? document.querySelector<HTMLElement>('main[aria-label="Conversation"]')
+      : null;
+    const childObserver = typeof MutationObserver === 'undefined' || !conversationMain
+      ? null
+      : new MutationObserver(updateComposerClearance);
+    if (conversationMain) childObserver?.observe(conversationMain, { childList: true });
+
+    iframe?.addEventListener('load', updateComposerClearance);
+    window.addEventListener('resize', updateComposerClearance);
+    window.visualViewport?.addEventListener('resize', updateComposerClearance);
+    window.visualViewport?.addEventListener('scroll', updateComposerClearance);
+    updateComposerClearance();
+
+    return () => {
+      resizeObserver?.disconnect();
+      childObserver?.disconnect();
+      dockClassObserver?.disconnect();
+      iframe?.removeEventListener('load', updateComposerClearance);
+      window.removeEventListener('resize', updateComposerClearance);
+      window.visualViewport?.removeEventListener('resize', updateComposerClearance);
+      window.visualViewport?.removeEventListener('scroll', updateComposerClearance);
+    };
+  }, [currentTab]);
+
+  const mobileBottomClass = currentTab === 'qelari'
+    ? 'bottom-20'
+    : 'bottom-[calc(var(--z-mobile-nav-height)+0.75rem)]';
+  const desktopBottomClass = currentTab === 'qelari' ? '' : 'sm:bottom-4';
+  const Icon = notice?.kind === 'offline'
+    ? WifiOff
+    : notice?.kind === 'restored'
+      ? CheckCircle
+      : notice?.kind === 'sync-error' || notice?.kind === 'slow'
+        ? AlertTriangle
+        : Loader2;
 
   return (
     <div
-      className={`fixed ${position === 'top' ? 'top-0' : 'bottom-0'} left-0 right-0 z-50 ${
-        state === 'sync-error' ? 'bg-red-600/95 text-white' : 
-        state === 'offline' ? 'bg-red-600/95 text-white' :
-        state === 'reconnecting' || state === 'syncing' ? 'bg-yellow-600/95 text-yellow-50' :
-        'bg-green-600/95 text-white'
-      } backdrop-blur-sm border-b ${
-        state === 'sync-error' ? 'border-red-500' :
-        state === 'offline' ? 'border-red-500' :
-        state === 'reconnecting' || state === 'syncing' ? 'border-yellow-500' :
-        'border-green-500'
-      } px-4 py-2.5`}
+      className={`pointer-events-none fixed ${mobileBottomClass} right-3 z-[60] transition-[opacity,transform] duration-200 ${desktopBottomClass} sm:right-4 ${
+        notice ? 'translate-y-0 opacity-100' : 'translate-y-2 opacity-0'
+      }`}
+      style={composerClearance === null ? undefined : { bottom: `${composerClearance}px` }}
       role="status"
       aria-live="polite"
+      aria-atomic="true"
+      aria-hidden={!notice}
     >
-      <div className="max-w-4xl mx-auto flex items-center justify-center gap-2 text-sm font-medium">
-        {content}
-      </div>
+      {notice && (
+        <div
+          className={`flex max-w-[calc(100vw-2rem)] items-center gap-2 rounded-full border bg-[#171A1D]/95 px-3.5 py-2 text-xs font-medium shadow-lg shadow-black/20 backdrop-blur-md ${NOTICE_STYLE[notice.kind]}`}
+        >
+          <Icon
+            className={`h-3.5 w-3.5 shrink-0 ${
+              notice.kind === 'reconnecting' || notice.kind === 'syncing'
+                ? 'animate-spin'
+                : ''
+            }`}
+            aria-hidden="true"
+          />
+          <span className="truncate">{notice.message}</span>
+        </div>
+      )}
     </div>
   );
 };
