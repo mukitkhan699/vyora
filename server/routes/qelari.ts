@@ -8,6 +8,8 @@ const IMAGE_TIMEOUT_MS = 120_000;
 const MAX_CHAT_BODY_BYTES = 128 * 1024;
 const MAX_IMAGE_BODY_BYTES = 8 * 1024;
 const MAX_GENERATED_IMAGE_BYTES = 20 * 1024 * 1024;
+const DEFAULT_CHAT_MODEL = 'openai/gpt-oss-120b';
+const MAX_COMPLETION_TOKENS = 8192;
 const IMAGE_QUALITY_PRESETS = { draft: 4, standard: 6, high: 8 } as const;
 const IMAGE_SIZES = {
   '1:1': { width: 1024, height: 1024 },
@@ -21,6 +23,84 @@ const USER_RATE_WINDOW_MS = 60_000;
 const userRateWindows = new Map<string, number[]>();
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string };
+
+type ProviderErrorCode =
+  | 'CONTEXT_LIMIT'
+  | 'RATE_LIMITED'
+  | 'PROVIDER_AUTH'
+  | 'PROVIDER_TIMEOUT'
+  | 'NETWORK_ERROR'
+  | 'PROVIDER_ERROR';
+
+class ContextLimitError extends Error {
+  readonly code = 'CONTEXT_LIMIT';
+
+  constructor() {
+    super('Context is full. Start a new chat to continue.');
+    this.name = 'ContextLimitError';
+  }
+}
+
+type NormalizedProviderError = ContextLimitError | {
+  code: Exclude<ProviderErrorCode, 'CONTEXT_LIMIT'>;
+  message: string;
+};
+
+function getProviderError(value: unknown): NormalizedProviderError | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const payload = value as Record<string, unknown>;
+  const error = payload.error && typeof payload.error === 'object' && !Array.isArray(payload.error)
+    ? payload.error as Record<string, unknown>
+    : payload;
+  const providerCode = typeof error.code === 'string' ? error.code.toLowerCase() : '';
+  const providerType = typeof error.type === 'string' ? error.type.toLowerCase() : '';
+  const providerMessage = typeof error.message === 'string' ? error.message : '';
+  const searchableCode = `${providerCode} ${providerType}`;
+
+  if (
+    /context[_ -]length[_ -]exceeded|context[_ -]window[_ -]exceeded|prompt[_ -]too[_ -]long/.test(searchableCode) ||
+    /maximum context length|context length.{0,40}(?:exceed|limit|maximum|too long)|(?:exceed|maximum|too long).{0,40}context length|context window.{0,80}(?:exceed|limit|maximum|too long)|prompt.{0,40}too long/i.test(providerMessage)
+  ) {
+    return new ContextLimitError();
+  }
+  if (/rate_limit|too_many_requests/.test(searchableCode)) {
+    return { code: 'RATE_LIMITED', message: 'The AI provider is temporarily busy. Please wait a moment before trying again.' };
+  }
+  if (/authentication|invalid_api_key|permission/.test(searchableCode)) {
+    return { code: 'PROVIDER_AUTH', message: 'The AI provider rejected the request. Please try again later.' };
+  }
+  if (/timeout|timed_out/.test(searchableCode)) {
+    return { code: 'PROVIDER_TIMEOUT', message: 'The AI provider timed out. Please try again.' };
+  }
+  return null;
+}
+
+function providerFailure(code: ProviderErrorCode): { status: number; message: string } {
+  switch (code) {
+    case 'CONTEXT_LIMIT':
+      return { status: 413, message: 'Context is full. Start a new chat to continue.' };
+    case 'RATE_LIMITED':
+      return { status: 503, message: 'The AI provider is temporarily busy. Please wait a moment before trying again.' };
+    case 'PROVIDER_AUTH':
+      return { status: 502, message: 'The AI provider rejected the request. Please try again later.' };
+    case 'PROVIDER_TIMEOUT':
+      return { status: 504, message: 'The AI provider timed out. Please try again.' };
+    case 'NETWORK_ERROR':
+      return { status: 502, message: 'Could not reach the AI provider. Check your connection and try again.' };
+    default:
+      return { status: 502, message: 'The AI provider could not complete this request. Please try again later.' };
+  }
+}
+
+function sendProviderFailure(
+  res: ServerResponse,
+  code: ProviderErrorCode,
+): void {
+  const failure = providerFailure(code);
+  sendJson(res, failure.status, code === 'CONTEXT_LIMIT'
+    ? { code }
+    : { code, error: failure.message });
+}
 
 function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   if (res.headersSent || res.destroyed) return;
@@ -133,6 +213,8 @@ async function handleChat(
   const body = await readRequestJson(req, MAX_CHAT_BODY_BYTES);
   const messages = validateChatMessages(body.messages);
   enforceUserRateLimit(userId);
+  const model = process.env.GROQ_MODEL?.trim() || DEFAULT_CHAT_MODEL;
+  const systemPrompt = buildQelariSystemPrompt(body.preferences);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(new Error('Chat provider timed out.')), CHAT_TIMEOUT_MS);
   const abortOnDisconnect = () => {
@@ -147,52 +229,144 @@ async function handleChat(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: process.env.GROQ_MODEL?.trim() || 'openai/gpt-oss-120b',
+        model,
         stream: true,
-        max_completion_tokens: 8192,
+        max_completion_tokens: MAX_COMPLETION_TOKENS,
         messages: [
-          { role: 'system', content: buildQelariSystemPrompt(body.preferences) },
+          { role: 'system', content: systemPrompt },
           ...messages,
         ],
       }),
       signal: controller.signal,
     });
     if (!upstream.ok || !upstream.body) {
-      sendJson(res, upstream.status === 429 ? 503 : 502, {
-        error: upstream.status === 429
-          ? 'The chat provider is temporarily busy. Please try again shortly.'
-          : 'The chat provider could not complete this request.',
-      });
+      let payload: unknown = null;
+      try {
+        payload = await upstream.json();
+      } catch {
+        payload = null;
+      }
+      const providerError = getProviderError(payload);
+      if (providerError) {
+        sendProviderFailure(res, providerError.code);
+      } else if (upstream.status === 429) {
+        sendProviderFailure(res, 'RATE_LIMITED');
+      } else if (upstream.status === 401 || upstream.status === 403) {
+        sendProviderFailure(res, 'PROVIDER_AUTH');
+      } else if (upstream.status === 408 || upstream.status === 504) {
+        sendProviderFailure(res, 'PROVIDER_TIMEOUT');
+      } else {
+        sendProviderFailure(res, 'PROVIDER_ERROR');
+      }
       return;
     }
     res.statusCode = 200;
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    const writeChunk = async (chunk: string) => {
+      if (res.destroyed || res.writableEnded) return;
+      if (!res.write(chunk)) {
+        await new Promise<void>((resolve) => {
+          const resume = () => {
+            res.removeListener('drain', resume);
+            res.removeListener('close', resume);
+            resolve();
+          };
+          res.once('drain', resume);
+          res.once('close', resume);
+        });
+      }
+    };
+    const writeEvent = (payload: unknown) => writeChunk(`data: ${JSON.stringify(payload)}\n\n`);
     const reader = upstream.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let streamFailed = false;
+    const processLine = async (line: string) => {
+      const normalizedLine = line.endsWith('\r') ? line.slice(0, -1) : line;
+      if (!normalizedLine.startsWith('data:')) {
+        if (!normalizedLine.trim()) await writeChunk('\n');
+        return;
+      }
+      const data = normalizedLine.slice(5).trimStart();
+      if (!data || data === '[DONE]') {
+        if (data === '[DONE]') await writeChunk('data: [DONE]\n\n');
+        return;
+      }
+      let payload: unknown;
+      try {
+        payload = JSON.parse(data);
+      } catch {
+        return;
+      }
+      const providerError = getProviderError(payload);
+      if (providerError) {
+        await writeEvent({
+          _error: providerError.code === 'CONTEXT_LIMIT' ? true : providerError.message,
+          _code: providerError.code,
+        });
+        streamFailed = true;
+        controller.abort(new Error('Provider returned an error.'));
+        return;
+      }
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return;
+      const choices = (payload as Record<string, unknown>).choices;
+      if (!Array.isArray(choices)) return;
+      const textChoices = choices.map((choice) => {
+        if (!choice || typeof choice !== 'object' || Array.isArray(choice)) return { delta: {} };
+        const delta = (choice as Record<string, unknown>).delta;
+        if (!delta || typeof delta !== 'object' || Array.isArray(delta)) return { delta: {} };
+        const content = (delta as Record<string, unknown>).content;
+        return { delta: typeof content === 'string' ? { content } : {} };
+      });
+      await writeEvent({ choices: textChoices });
+    };
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done || res.destroyed) break;
-        if (!res.write(Buffer.from(value))) {
-          await new Promise<void>((resolve) => res.once('drain', resolve));
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) {
+          await processLine(line);
+          if (streamFailed) break;
         }
+        if (streamFailed) break;
       }
+      buffer += decoder.decode();
+      if (buffer && !streamFailed && !res.destroyed) await processLine(buffer);
       if (!res.destroyed && !res.writableEnded) res.end();
+    } catch (error) {
+      if (!res.destroyed && !res.writableEnded) {
+        const code = controller.signal.aborted
+          ? 'PROVIDER_TIMEOUT'
+          : 'NETWORK_ERROR';
+        const failure = providerFailure(code);
+        await writeEvent({ _error: failure.message, _code: code });
+        res.end();
+      } else if (!res.destroyed) {
+        res.destroy(error instanceof Error ? error : undefined);
+      }
     } finally {
       reader.releaseLock();
     }
   } catch (error) {
     if (res.destroyed || controller.signal.reason?.message === 'Client disconnected.') return;
     if (res.headersSent) {
-      res.destroy(error instanceof Error ? error : undefined);
+      if (!res.writableEnded) {
+        const code = controller.signal.aborted ? 'PROVIDER_TIMEOUT' : 'NETWORK_ERROR';
+        const failure = providerFailure(code);
+        res.write(`data: ${JSON.stringify({ _error: failure.message, _code: code })}\n\n`);
+        res.end();
+      }
       return;
     }
-    sendJson(res, controller.signal.aborted ? 504 : 502, {
-      error: controller.signal.aborted
-        ? 'The chat request timed out. Please try again.'
-        : 'Could not reach the chat provider. Please try again.',
-    });
+    sendProviderFailure(
+      res,
+      controller.signal.aborted ? 'PROVIDER_TIMEOUT' : 'NETWORK_ERROR',
+    );
   } finally {
     clearTimeout(timeout);
     res.removeListener('close', abortOnDisconnect);

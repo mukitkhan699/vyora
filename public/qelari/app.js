@@ -712,6 +712,14 @@ const state = {
 };
 
 if (!Array.isArray(state.conversations)) state.conversations = [];
+let removedContextUsage = false;
+state.conversations.forEach((conversation) => {
+  if (conversation && typeof conversation === 'object' && 'contextUsage' in conversation) {
+    delete conversation.contextUsage;
+    removedContextUsage = true;
+  }
+});
+if (removedContextUsage) writeStore(STORE.conversations, state.conversations.slice(0, 80));
 if (!Array.isArray(state.images)) state.images = [];
 if (!state.preferences || typeof state.preferences !== 'object' || Array.isArray(state.preferences)) {
   state.preferences = { enabled: true, notes: '' };
@@ -1026,6 +1034,33 @@ function showWelcome() {
     '</div></div>';
 }
 
+const CHAT_ERROR_MESSAGES = {
+  CONTEXT_LIMIT: 'Context is full. Start a new chat to continue.',
+  RATE_LIMITED: 'The AI provider is temporarily busy. Please wait a moment before trying again.',
+  PROVIDER_AUTH: 'The AI provider rejected the request. Please try again later.',
+  PROVIDER_TIMEOUT: 'The AI provider timed out. Please try again.',
+  NETWORK_ERROR: 'Could not reach the AI provider. Check your connection and try again.',
+  PROVIDER_ERROR: 'The AI provider could not complete this request. Please try again later.',
+};
+
+function renderChatError(target, code) {
+  target.replaceChildren();
+  target.closest('.msg')?.querySelector('.msg-actions')?.remove();
+  const container = document.createElement('div');
+  container.className = 'chat-error';
+  const text = document.createElement('p');
+  text.textContent = CHAT_ERROR_MESSAGES[code] || CHAT_ERROR_MESSAGES.PROVIDER_ERROR;
+  container.appendChild(text);
+  if (code === 'CONTEXT_LIMIT') {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.startNewChat = 'true';
+    button.textContent = 'Start New Chat';
+    container.appendChild(button);
+  }
+  target.appendChild(container);
+}
+
 function formatTime(ts) {
   const d = new Date(ts);
   const today = new Date();
@@ -1247,6 +1282,10 @@ attachmentTray.addEventListener('click', async (event) => {
 });
 
 chatImageBtn.addEventListener('click', generateChatImage);
+const handleStartNewChatAction = (event) => {
+  if (event.target.closest('[data-start-new-chat]')) newChat();
+};
+chat.addEventListener('click', handleStartNewChatAction);
 
 async function send(text, attachments) {
   if (state.imageGenerating) return;
@@ -1277,20 +1316,30 @@ async function send(text, attachments) {
   let reply = '';
   let failed = false;
   let stopped = false;
+  let providerError = null;
 
   const controller = new AbortController();
   state.controller = controller;
 
   const handle = (line) => {
+    if (providerError) return;
     if (!line.startsWith('data: ')) return;
     const payload = line.slice(6);
     if (payload === '[DONE]') return;
     let data;
     try { data = JSON.parse(payload); } catch (e) { return; }
     if (data._status) { bot.querySelector('.md').innerHTML = statusHTML(data._status); reply = ''; scheduleRender(); }
-    if (data._error) { failed = true; bot.querySelector('.md').innerHTML = '<p class="error">' + esc(data._error) + '</p>'; }
+    if (data._error) {
+      failed = true;
+      providerError = {
+        code: typeof data._code === 'string' ? data._code : 'PROVIDER_ERROR',
+      };
+      if (state.pendingRender) cancelAnimationFrame(state.pendingRender);
+      state.pendingRender = null;
+      renderChatError(bot.querySelector('.md'), providerError.code);
+    }
     const piece = data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content;
-    if (piece) { reply += piece; scheduleRender(); }
+    if (piece && !providerError) { reply += piece; scheduleRender(); }
   };
 
   const scheduleRender = () => {
@@ -1323,13 +1372,16 @@ async function send(text, attachments) {
     });
     if (!res.ok || !res.body) {
       let detail = 'The chat request could not be completed.';
+      let code = '';
       try {
         const error = await res.json();
-        if (typeof error?.error === 'string') detail = error.error;
+        if (typeof error?.code === 'string') code = error.code;
       } catch {
         // The provider may return a non-JSON error response.
       }
-      throw new Error(detail);
+      const requestError = new Error(detail);
+      requestError.code = code;
+      throw requestError;
     }
 
     const reader = res.body.getReader();
@@ -1342,18 +1394,25 @@ async function send(text, attachments) {
       const lines = buffer.split('\n');
       buffer = lines.pop();
       lines.forEach(handle);
+      if (providerError) {
+        await reader.cancel();
+        break;
+      }
     }
-    if (buffer) handle(buffer);
+    if (buffer && !providerError) handle(buffer);
 
-    if (failed) throw new Error('failed');
-    if (!reply) throw new Error('Empty reply');
-    conv.messages.push({ role: 'assistant', content: reply, ts: Date.now() });
-    touchConv(conv);
-    persistConversations();
+    if (!failed) {
+      if (!reply) throw new Error('Empty reply');
+      conv.messages.push({ role: 'assistant', content: reply, ts: Date.now() });
+      touchConv(conv);
+      persistConversations();
+    }
   } catch (err) {
     stopped = err && err.name === 'AbortError';
     if (!failed && !stopped) {
-      bot.querySelector('.md').innerHTML = '<p class="error">Connection error. Please try again.</p>';
+      const code = typeof err?.code === 'string' && err.code ? err.code : 'NETWORK_ERROR';
+      const normalizedCode = err instanceof TypeError ? 'NETWORK_ERROR' : code;
+      renderChatError(bot.querySelector('.md'), normalizedCode);
     } else if (stopped && reply) {
       conv.messages.push({ role: 'assistant', content: reply, ts: Date.now() });
     }

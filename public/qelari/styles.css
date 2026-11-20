@@ -698,6 +698,17 @@ html[data-theme="light"] .hljs-attr, html[data-theme="light"] .hljs-attribute, h
   40% { opacity: 1; }
 }
 .error { color: var(--danger); }
+.chat-error { display: grid; justify-items: start; gap: 10px; color: var(--danger); }
+.chat-error p { margin: 0; }
+.chat-error button {
+  padding: 7px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-full);
+  color: var(--text);
+  font-size: 0.8rem;
+  transition: background var(--fast), border-color var(--fast);
+}
+.chat-error button:hover { background: var(--panel-2); border-color: var(--line); }
 
 /* Empty / welcome */
 .welcome {

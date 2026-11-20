@@ -144,6 +144,7 @@ test('chat requests authenticate before provider access and stream the GPT-120B 
     assert.equal(fetchCalls, 1);
     assert.equal(capturedPayloads[0].model, 'openai/gpt-oss-120b');
     assert.equal(capturedPayloads[0].stream, true);
+    assert.equal('stream_options' in capturedPayloads[0], false);
     assert.equal(capturedPayloads[0].max_completion_tokens, 8192);
     const sentMessages = capturedPayloads[0].messages as Array<{ role: string; content: string }>;
     assert.equal(sentMessages[0].role, 'system');
@@ -156,6 +157,206 @@ test('chat requests authenticate before provider access and stream the GPT-120B 
     else process.env.GROQ_API_KEY = oldKey;
     if (oldModel === undefined) delete process.env.GROQ_MODEL;
     else process.env.GROQ_MODEL = oldModel;
+  }
+});
+
+test('provider context-limit errors are normalized without retrying the oversized request', async () => {
+  const oldKey = process.env.GROQ_API_KEY;
+  process.env.GROQ_API_KEY = 'test-groq-key';
+  let fetchCalls = 0;
+  mock.method(globalThis, 'fetch', async () => {
+    fetchCalls += 1;
+    return Response.json({
+      error: {
+        message: 'This request exceeds the maximum context length.',
+        type: 'invalid_request_error',
+        code: 'context_length_exceeded',
+      },
+    }, { status: 400 });
+  });
+  try {
+    const response = new TestResponse();
+    await handleQelariRequest(
+      request(),
+      response as unknown as ServerResponse,
+      new URL('http://localhost/api/qelari/chat'),
+      dependencies({ messages: [{ role: 'user', content: 'Keep my history intact.' }] }, 'context-limit-test-user'),
+    );
+    assert.equal(response.statusCode, 413);
+    const body = JSON.parse(response.body().toString());
+    assert.deepEqual(body, { code: 'CONTEXT_LIMIT' });
+    assert.doesNotMatch(response.body().toString(), /maximum context length|token|provider|model/i);
+    assert.equal(fetchCalls, 1);
+  } finally {
+    mock.restoreAll();
+    if (oldKey === undefined) delete process.env.GROQ_API_KEY;
+    else process.env.GROQ_API_KEY = oldKey;
+  }
+});
+
+test('streaming context-limit errors stop cleanly and emit only normalized metadata', async () => {
+  const oldKey = process.env.GROQ_API_KEY;
+  process.env.GROQ_API_KEY = 'test-groq-key';
+  let fetchCalls = 0;
+  mock.method(globalThis, 'fetch', async () => {
+    fetchCalls += 1;
+    return new Response(
+      'data: {"choices":[{"delta":{"content":"partial answer"}}]}\n\n' +
+      'data: {"error":{"message":"maximum context length exceeded","type":"invalid_request_error","code":"context_length_exceeded"}}\n\n',
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    );
+  });
+  try {
+    const response = new TestResponse();
+    await handleQelariRequest(
+      request(),
+      response as unknown as ServerResponse,
+      new URL('http://localhost/api/qelari/chat'),
+      dependencies({ messages: [{ role: 'user', content: 'Do not delete this message.' }] }, 'stream-context-test-user'),
+    );
+    const result = response.body().toString();
+    const events = result.split('\n')
+      .filter((line) => line.startsWith('data: {'))
+      .map((line) => JSON.parse(line.slice(6)));
+    assert.deepEqual(events.at(-1), { _error: true, _code: 'CONTEXT_LIMIT' });
+    assert.equal(events.some((event) => '_context' in event || 'usage' in event), false);
+    assert.doesNotMatch(result, /maximum context length exceeded/);
+    assert.equal(response.writableEnded, true);
+    assert.equal(fetchCalls, 1);
+  } finally {
+    mock.restoreAll();
+    if (oldKey === undefined) delete process.env.GROQ_API_KEY;
+    else process.env.GROQ_API_KEY = oldKey;
+  }
+});
+
+test('successful streaming responses do not emit token usage or context metadata', async () => {
+  const oldKey = process.env.GROQ_API_KEY;
+  process.env.GROQ_API_KEY = 'test-groq-key';
+  mock.method(globalThis, 'fetch', async () => new Response([
+    'data: {"choices":[{"delta":{"content":"Hello"}}]}',
+    '',
+    'data: {"choices":[],"usage":{"prompt_tokens":120,"completion_tokens":8,"total_tokens":128}}',
+    '',
+    'data: [DONE]',
+    '',
+  ].join('\n'), { headers: { 'Content-Type': 'text/event-stream' } }));
+  try {
+    const response = new TestResponse();
+    await handleQelariRequest(
+      request(),
+      response as unknown as ServerResponse,
+      new URL('http://localhost/api/qelari/chat'),
+      dependencies({ messages: [{ role: 'user', content: 'Hello' }] }, 'usage-test-user'),
+    );
+    const events = response.body().toString().split('\n')
+      .filter((line) => line.startsWith('data: {'))
+      .map((line) => JSON.parse(line.slice(6)));
+    assert.equal(events.some((event) => '_context' in event || 'usage' in event), false);
+    assert.deepEqual(events, [
+      { choices: [{ delta: { content: 'Hello' } }] },
+      { choices: [] },
+    ]);
+    assert.doesNotMatch(response.body().toString(), /prompt_tokens|completion_tokens|total_tokens/);
+    assert.doesNotMatch(response.body().toString(), /"model"|chat\.completion/);
+  } finally {
+    mock.restoreAll();
+    if (oldKey === undefined) delete process.env.GROQ_API_KEY;
+    else process.env.GROQ_API_KEY = oldKey;
+  }
+});
+
+test('network failures after streaming starts emit a distinct SSE error event', async () => {
+  const oldKey = process.env.GROQ_API_KEY;
+  process.env.GROQ_API_KEY = 'test-groq-key';
+  mock.method(globalThis, 'fetch', async () => {
+    let sent = false;
+    return new Response(new ReadableStream({
+    pull(controller) {
+      if (!sent) {
+        sent = true;
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'));
+      } else {
+        controller.error(new TypeError('provider stream interrupted'));
+      }
+    },
+    }), { headers: { 'Content-Type': 'text/event-stream' } });
+  });
+  try {
+    const response = new TestResponse();
+    await handleQelariRequest(
+      request(),
+      response as unknown as ServerResponse,
+      new URL('http://localhost/api/qelari/chat'),
+      dependencies({ messages: [{ role: 'user', content: 'Keep history' }] }, 'stream-network-test-user'),
+    );
+    const result = response.body().toString();
+    assert.match(result, /partial/);
+    assert.match(result, /"_code":"NETWORK_ERROR"/);
+    assert.match(result, /Could not reach the AI provider/);
+    assert.equal(response.writableEnded, true);
+  } finally {
+    mock.restoreAll();
+    if (oldKey === undefined) delete process.env.GROQ_API_KEY;
+    else process.env.GROQ_API_KEY = oldKey;
+  }
+});
+
+test('network failures and provider rate limits remain distinct and are not retried', async () => {
+  const oldKey = process.env.GROQ_API_KEY;
+  process.env.GROQ_API_KEY = 'test-groq-key';
+  try {
+    for (const scenario of [
+      {
+        userId: 'network-failure-test-user',
+        fetch: async (): Promise<Response> => { throw new TypeError('fetch failed'); },
+        status: 502,
+        code: 'NETWORK_ERROR',
+      },
+      {
+        userId: 'rate-limit-test-user',
+        fetch: async (): Promise<Response> => Response.json({
+          error: { message: 'Rate limited', type: 'rate_limit_error', code: 'rate_limit_exceeded' },
+        }, { status: 429 }),
+        status: 503,
+        code: 'RATE_LIMITED',
+      },
+      {
+        userId: 'provider-auth-test-user',
+        fetch: async (): Promise<Response> => Response.json({ error: 'unauthorized' }, { status: 401 }),
+        status: 502,
+        code: 'PROVIDER_AUTH',
+      },
+      {
+        userId: 'provider-timeout-test-user',
+        fetch: async (): Promise<Response> => Response.json({ error: 'upstream timeout' }, { status: 504 }),
+        status: 504,
+        code: 'PROVIDER_TIMEOUT',
+      },
+    ]) {
+      let fetchCalls = 0;
+      mock.method(globalThis, 'fetch', async () => {
+        fetchCalls += 1;
+        return scenario.fetch();
+      });
+      try {
+        const response = new TestResponse();
+        await handleQelariRequest(
+          request(),
+          response as unknown as ServerResponse,
+          new URL('http://localhost/api/qelari/chat'),
+          dependencies({ messages: [{ role: 'user', content: 'hello' }] }, scenario.userId),
+        );
+        assert.equal(response.statusCode, scenario.status);
+        assert.equal(JSON.parse(response.body().toString()).code, scenario.code);
+        assert.equal(fetchCalls, 1);
+      } finally {
+        mock.restoreAll();
+      }
+    }
+  } finally {
+    if (oldKey === undefined) delete process.env.GROQ_API_KEY;
+    else process.env.GROQ_API_KEY = oldKey;
   }
 });
 
