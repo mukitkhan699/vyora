@@ -19,6 +19,7 @@ import { Badge } from '../common/Badge.tsx';
 import { UserBadges } from '../common/UserBadges.tsx';
 import { CdnImage } from '../common/CdnImage.tsx';
 import { PostImageGallery } from './PostImageGallery.tsx';
+import { ExpandablePostText } from './ExpandablePostText.tsx';
 import { DropdownMenu } from '../common/DropdownMenu.tsx';
 import { ConfirmationDialog } from '../common/ConfirmationDialog.tsx';
 import { api } from '../../services/api.ts';
@@ -284,9 +285,12 @@ export const PostCard: React.FC<PostCardProps> = ({
             )}
 
             {/* Post Text Content */}
-            <div className="text-[15px] leading-relaxed whitespace-pre-wrap break-words text-neutral-100 mb-2.5 font-normal">
+            <ExpandablePostText
+              text={post.content}
+              className="text-[15px] leading-relaxed text-neutral-100 mb-2.5 font-normal"
+            >
               {renderFormattedContent(post.content)}
-            </div>
+            </ExpandablePostText>
 
             {/* Post Media Gallery */}
             {post.mediaUrls && post.mediaUrls.filter((u) => u && u.trim()).length > 0 && (
@@ -366,7 +370,13 @@ export const PostCard: React.FC<PostCardProps> = ({
                     @{post.quotePost.author.username}
                   </span>
                 </div>
-                <p className="text-xs text-neutral-300 line-clamp-3">{post.quotePost.content}</p>
+                <ExpandablePostText
+                  text={post.quotePost.content}
+                  lineCount={3}
+                  className="text-xs text-neutral-300"
+                >
+                  {renderFormattedContent(post.quotePost.content)}
+                </ExpandablePostText>
               </div>
             )}
 

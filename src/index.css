@@ -1,6 +1,25 @@
 @import "tailwindcss";
 @source "./**/*.{ts,tsx}";
 
+@layer components {
+  .post-text-preview {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+
+  .post-text-preview.is-collapsed {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 5;
+  }
+
+  .post-text-preview.is-collapsed[data-preview-lines="3"] {
+    -webkit-line-clamp: 3;
+  }
+}
+
 @layer base {
   :root, .theme-dark {
     --bg-primary: #090B10;
