@@ -18,6 +18,8 @@ import {
 } from './auth.ts';
 import { formatStartupError } from './errors.ts';
 import { applySecurityHeaders } from './security-headers.ts';
+import { handleSeoRequest } from './seo/handler.ts';
+import { getHttpsRedirectUrl } from './seo/site.ts';
 
 const parentDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const distDir = path.basename(parentDir) === 'dist' ? parentDir : path.join(parentDir, 'dist');
@@ -119,13 +121,27 @@ export async function handleRequest(req: IncomingMessage, res: ServerResponse): 
   const pathname = url.pathname;
 
   try {
+    if (pathname !== '/health' && (method === 'GET' || method === 'HEAD')) {
+      const httpsRedirect = getHttpsRedirectUrl(req, url);
+      if (httpsRedirect) {
+        res.statusCode = 301;
+        res.setHeader('Location', httpsRedirect);
+        res.setHeader('Content-Length', '0');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        res.end();
+        return;
+      }
+    }
+
     if (pathname === '/verify-email' && method === 'GET') {
+      res.setHeader('X-Robots-Tag', 'noindex, nofollow');
       const page = renderEmailVerificationPage(url.searchParams.get('token') || '');
       sendHtml(res, page.status, withNonce(page.html, nonce));
       return;
     }
 
     if (pathname === '/reset-password' && method === 'GET') {
+      res.setHeader('X-Robots-Tag', 'noindex, nofollow');
       const page = renderPasswordResetPage(url.searchParams.get('token') || '');
       sendHtml(res, page.status, withNonce(page.html, nonce));
       return;
@@ -150,6 +166,8 @@ export async function handleRequest(req: IncomingMessage, res: ServerResponse): 
       return;
     }
 
+    if (await handleSeoRequest(req, res)) return;
+
     const staticPath = resolveStaticPath(pathname);
     if (staticPath && serveFile(req, res, staticPath)) return;
 
@@ -158,6 +176,7 @@ export async function handleRequest(req: IncomingMessage, res: ServerResponse): 
       return;
     }
 
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
     const indexPath = path.join(distDir, 'index.html');
     if (serveFile(req, res, indexPath)) return;
 

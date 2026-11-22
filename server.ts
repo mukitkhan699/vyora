@@ -13,6 +13,8 @@ import { initializeBackend } from './server/bootstrap.ts';
 import { startRealtimeOutboxDispatcher } from './server/realtime-outbox.ts';
 import { config } from './server/config.ts';
 import { formatStartupError } from './server/errors.ts';
+import { handleSeoRequest } from './server/seo/handler.ts';
+import { getHttpsRedirectUrl } from './server/seo/site.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,6 +28,30 @@ async function startDevelopmentServer(): Promise<void> {
   const stopCleanup = await initializeBackend();
 
   const app = express();
+
+  app.use((req, res, next) => {
+    const method = (req.method || 'GET').toUpperCase();
+    if (req.path !== '/health' && (method === 'GET' || method === 'HEAD')) {
+      const httpsRedirect = getHttpsRedirectUrl(req);
+      if (httpsRedirect) {
+        res.redirect(301, httpsRedirect);
+        return;
+      }
+    }
+    next();
+  });
+
+  app.use((req, res, next) => {
+    if (
+      req.path === '/login' ||
+      req.path === '/index.html' ||
+      req.path === '/admin' ||
+      req.path.startsWith('/admin/')
+    ) {
+      res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    }
+    next();
+  });
 
   // CORS middleware for cross-origin requests (admin frontend)
   const corsOrigins = ['https://zunari.duckdns.org'];
@@ -45,6 +71,20 @@ async function startDevelopmentServer(): Promise<void> {
       });
     },
   );
+
+  app.use((req, res, next) => {
+    void handleSeoRequest(req, res)
+      .then((handled) => {
+        if (!handled) next();
+      })
+      .catch(() => {
+        if (!res.headersSent) {
+          res.status(503).type('text/plain').send('Service temporarily unavailable.');
+        } else {
+          res.destroy();
+        }
+      });
+  });
 
   // Forward API, health, and auth callback routes to the backend request router
   if (!isProduction) {
@@ -82,6 +122,7 @@ async function startDevelopmentServer(): Promise<void> {
         next();
         return;
       }
+      res.setHeader('X-Robots-Tag', 'noindex, nofollow');
       res.sendFile(path.resolve(distPath, 'index.html'));
     });
 

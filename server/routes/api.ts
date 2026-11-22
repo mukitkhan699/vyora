@@ -110,6 +110,7 @@ export async function handleApiRequest(
 ): Promise<boolean> {
   const pathname = url.pathname;
   const method = (req.method || 'GET').toUpperCase();
+  res.setHeader('X-Robots-Tag', 'noindex, nofollow');
 
   try {
     if (
