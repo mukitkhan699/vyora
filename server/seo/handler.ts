@@ -105,7 +105,6 @@ function sendHtml(
 function sendXml(req: IncomingMessage, res: ServerResponse, status: number, xml: string): void {
   send(req, res, status, 'application/xml; charset=utf-8', xml, {
     cacheControl: SITEMAP_CACHE,
-    robots: 'noindex',
   });
 }
 

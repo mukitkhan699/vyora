@@ -468,3 +468,87 @@ test('SEO routes reject unsupported methods and support HEAD', async () => {
   assert.equal(headResponse.body(), '');
   assert.ok(Number(headResponse.getHeader('content-length')) > 0);
 });
+
+test('sitemap responses do not carry X-Robots-Tag: noindex', async () => {
+  const handler = createSeoHandler({
+    dataSource: dataSource({
+      getSitemapCounts: async () => ({
+        profiles: 1,
+        posts: 1,
+        latestPostAt: Date.parse('2024-05-01T12:00:00.000Z'),
+      }),
+      getSitemapProfiles: async () => [{ username: 'alice', suspendedAt: null }],
+      getSitemapPosts: async () => [
+        { id: 'post_1', createdAt: Date.parse('2024-05-01T12:00:00.000Z'), authorSuspendedAt: null },
+      ],
+    }),
+    isAuthenticated: async () => false,
+  });
+
+  const sitemap = response();
+  assert.equal(await handler(request('/sitemap.xml'), sitemap as unknown as ServerResponse), true);
+  assert.equal(sitemap.statusCode, 200);
+  assert.equal(sitemap.getHeader('content-type'), 'application/xml; charset=utf-8');
+  assert.equal(sitemap.getHeader('x-robots-tag'), undefined);
+  assert.match(sitemap.body(), /<urlset/);
+
+  const profileChunk = response();
+  assert.equal(
+    await handler(request('/sitemaps/profiles-1.xml'), profileChunk as unknown as ServerResponse),
+    true,
+  );
+  assert.equal(profileChunk.statusCode, 200);
+  assert.equal(profileChunk.getHeader('x-robots-tag'), undefined);
+  assert.match(profileChunk.body(), /<urlset/);
+
+  const postChunk = response();
+  assert.equal(
+    await handler(request('/sitemaps/posts-1.xml'), postChunk as unknown as ServerResponse),
+    true,
+  );
+  assert.equal(postChunk.statusCode, 200);
+  assert.equal(postChunk.getHeader('x-robots-tag'), undefined);
+  assert.match(postChunk.body(), /<urlset/);
+
+  const staticChunk = response();
+  assert.equal(
+    await handler(request('/sitemaps/static-1.xml'), staticChunk as unknown as ServerResponse),
+    true,
+  );
+  assert.equal(staticChunk.statusCode, 200);
+  assert.equal(staticChunk.getHeader('x-robots-tag'), undefined);
+  assert.match(staticChunk.body(), /<urlset/);
+});
+
+test('sitemap error responses retain noindex directives', async () => {
+  const handler = createSeoHandler({
+    dataSource: dataSource(),
+    isAuthenticated: async () => false,
+  });
+
+  const invalidChunk = response();
+  assert.equal(
+    await handler(request('/sitemaps/profiles-0.xml'), invalidChunk as unknown as ServerResponse),
+    true,
+  );
+  assert.equal(invalidChunk.statusCode, 404);
+  assert.equal(invalidChunk.getHeader('x-robots-tag'), 'noindex, nofollow');
+
+  const failing = createSeoHandler({
+    dataSource: dataSource({
+      getSitemapCounts: async () => {
+        throw new Error('database unavailable');
+      },
+    }),
+    isAuthenticated: async () => false,
+  });
+  const unavailable = response();
+  assert.equal(
+    await failing(request('/sitemap.xml'), unavailable as unknown as ServerResponse),
+    true,
+  );
+  assert.equal(unavailable.statusCode, 503);
+  assert.equal(unavailable.getHeader('x-robots-tag'), 'noindex, nofollow');
+  assert.equal(unavailable.getHeader('retry-after'), '60');
+  assert.doesNotMatch(unavailable.body(), /database|password/i);
+});
